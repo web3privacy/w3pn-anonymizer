@@ -1,6 +1,18 @@
 import type { AnonymizeEffectId, ColorAdjustments, EffectDefinition, GlitchSubEffect } from '../types'
 
-export const EMOJI_POOL = ['🙂', '😶', '🤖', '😎', '🙈', '🫥', '🛰️', '👾']
+export const EMOJI_POOL = [
+  // Cats
+  '🐱','🐈','🐈‍⬛','😺','😸','😹','😻','😼','😽','🙀','😿','😾',
+  // Animals
+  '🐶','🐕','🦊','🐻','🐼','🐨','🐯','🦁','🐮','🐷','🐸','🐵',
+  '🐔','🐧','🐦','🦆','🦅','🦉','🦇','🐺','🐗','🐴','🦄','🐝',
+  '🐛','🦋','🐌','🐞','🐙','🦑','🐠','🐟','🐡','🐬','🐳','🦈',
+  // Faces & characters
+  '🙂','😶','🤖','😎','🙈','🫥','👾','🥸','🤡','👽','💀','🎃',
+  '😈','🤠','🥷','🦸','🧛','🧟','🧞','🧑‍🚀',
+  // Objects
+  '🛰️','🎭','🎪','🔮','🪬','🗿','🎯','🧩',
+]
 
 export const EFFECTS: EffectDefinition[] = [
   { id: 'blur',       label: 'Blur',        description: 'Gaussian blur',                         icon: 'blur_on' },
@@ -295,6 +307,19 @@ const drawEmojiBlock = (
 
 export const pickRandomEmoji = () =>
   EMOJI_POOL[Math.floor(Math.random() * EMOJI_POOL.length)]
+
+/**
+ * Returns N unique emoji from the pool (no repeats until pool is exhausted).
+ * Falls back to random picks if N > pool size.
+ */
+export const pickUniqueEmojis = (count: number): string[] => {
+  const shuffled = [...EMOJI_POOL].sort(() => Math.random() - 0.5)
+  const result: string[] = []
+  for (let i = 0; i < count; i++) {
+    result.push(i < shuffled.length ? shuffled[i] : pickRandomEmoji())
+  }
+  return result
+}
 
 // ── Silueta ──────────────────────────────────────────────────────
 const applySilhouetteRect = (

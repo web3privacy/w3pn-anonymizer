@@ -8,6 +8,7 @@ import type {
   NormalizeSettings,
   PhotoItem,
 } from '../types'
+import { canvasToBmpBlob, canvasToGifBlob, canvasToTiffBlob } from './image-encoders'
 
 const pica = picaFactory({
   tile: 1024,
@@ -18,6 +19,9 @@ const EXTENSION_MAP: Record<NormalizeFormat, string> = {
   'image/jpeg': 'jpg',
   'image/png': 'png',
   'image/webp': 'webp',
+  'image/bmp': 'bmp',
+  'image/gif': 'gif',
+  'image/tiff': 'tiff',
 }
 
 const QUALITY_ENABLED_FORMATS = new Set<NormalizeFormat>(['image/jpeg', 'image/webp'])
@@ -35,14 +39,18 @@ interface PixelRect {
   height: number
 }
 
-const WORKER_CODEC_LIB_URL = '/vendor/browser-image-compression.js'
+const WORKER_CODEC_LIB_URL = './vendor/browser-image-compression.js'
 
 const toBlob = (
   canvas: HTMLCanvasElement,
   format: NormalizeFormat,
   quality: number,
-): Promise<Blob> =>
-  new Promise((resolve, reject) => {
+): Promise<Blob> => {
+  if (format === 'image/bmp') return Promise.resolve(canvasToBmpBlob(canvas))
+  if (format === 'image/tiff') return Promise.resolve(canvasToTiffBlob(canvas))
+  if (format === 'image/gif') return canvasToGifBlob(canvas)
+
+  return new Promise((resolve, reject) => {
     const useQuality = QUALITY_ENABLED_FORMATS.has(format) ? quality : undefined
     canvas.toBlob(
       (blob) => {
@@ -56,6 +64,7 @@ const toBlob = (
       useQuality,
     )
   })
+}
 
 const createOutputName = (inputName: string, outputFormat: NormalizeFormat) => {
   const normalized = inputName.replace(/^\/+/, '')

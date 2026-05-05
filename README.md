@@ -1,99 +1,110 @@
 # W3PN Anonymizer
 
-> **Local-first photo anonymization — 100% private, runs entirely on your machine.**
+> **Privacy-first photo & video anonymization — 100% local, zero data collection.**
 
-A privacy tool by the [Web3Privacy Now](https://www.web3privacy.info) community.  
-Source: [github.com/web3privacy/w3pn-anonymizer](https://github.com/web3privacy/w3pn-anonymizer)
+A free, open-source tool by [Web3Privacy Now](https://www.web3privacy.info) for anonymizing faces and sensitive regions in images and videos. Everything runs in your browser — no uploads, no servers, no tracking.
+
+**[Try it online](https://anonymizer.web3privacy.info)** · [Download desktop app](#desktop-app) · [Roadmap](./ROADMAP.md) · [Report a bug](https://github.com/web3privacy/w3pn-anonymizer/issues)
 
 ---
 
-## What it does
+## Features
 
-- 🎭 **Anonymize faces** — blur, pixelate, blackout, emoji, glitch, thermal, halftone, and more
-- ✏️ **Brush & zone tools** — paint or draw rectangles over any region
-- 🤖 **Auto face detection** — browser-side AI (face-api.js / TensorFlow.js) + optional local Python backend (OpenCV YuNet) for higher accuracy
-- 🎨 **Color adjustments** — brightness, contrast, saturation, shadows, highlights + presets
-- 🌀 **Transform effects** — halftone, glitch, pixel shift (wave/zoom/shear/ripple/mirror), color shift
-- 📐 **Batch processing** — resize, crop, format conversion, color grading, transforms, auto-anonymize — across hundreds of photos
-- 📦 **ZIP export** — download all processed photos at once
-- 🌙 **100% local** — no photo ever leaves your device, no cloud, no telemetry, no tracking
-- 🌐 **Online mode** — works as a pure web app with file upload + download (no write access to disk)
+### Anonymization
+- **14+ effects** — blur, heavy blur, pixelate, blackout, whiteout, emoji, silhouette, glitch, thermal, noise, swirl, contour, diamond, halftone
+- **Auto face detection** — browser-side AI (face-api.js / TensorFlow.js) detects faces automatically
+- **Zone editing** — draw rectangles or paint with a brush over any region
+- **Brush tool** — variable-size brush with real-time preview
+
+### Image editing
+- **Color adjustments** — brightness, contrast, saturation, shadows, highlights, temperature + presets
+- **Transform effects** — halftone, glitch, pixel shift (wave/zoom/shear/ripple/mirror), color shift
+- **Snapshot system** — save intermediate versions as new images in the explorer
+
+### Video anonymization
+- **Frame-by-frame processing** — fully local video anonymization using Canvas API + MediaRecorder
+- **Supported formats** — MP4, WebM, MOV, AVI, MKV, M4V, OGV
+- **Manual frame fixes** — capture the current timeline frame, retouch it as an image, then bake it back into the next video render
+- **No server needed** — all processing happens in the browser
+
+### Export & batch
+- **6 image formats** — JPEG, PNG, WebP, BMP, GIF, TIFF
+- **SVG vectorization** — convert images to SVG using imagetracer.js with 8 presets and custom parameters (live preview)
+- **Batch processing** — resize, crop, format conversion, color grading, transforms, auto-anonymize across hundreds of photos
+- **ZIP export** — download all processed photos at once
+
+### Privacy & security
+- **100% local processing** — images and videos never leave your device
+- **No analytics, no cookies, no tracking** — zero external requests
+- **Self-hosted fonts** — Material Symbols served locally (no Google Fonts CDN)
+- **Processing mode switch** — toggle between local-only and optional server-assisted detection
+- **CPU timing proof** — shows processing time to verify local execution
+- **Optional Python backend** — runs on localhost only, never exposes data to the internet
+
+### Desktop app
+- **macOS** — .dmg installer (Apple Silicon + Intel)
+- **Windows** — .exe installer + portable
+- **Linux** — AppImage + .deb package
+- Built with Electron, ships the complete app offline
 
 ---
 
 ## Quick start
 
-### Option A — one command (recommended)
+### Web app (no install needed)
+
+Visit **[anonymizer.web3privacy.info](https://anonymizer.web3privacy.info)** — everything runs in your browser.
+
+### Run locally
 
 ```bash
-./start.sh
-```
-
-Installs Python dependencies, starts the detection backend on `http://127.0.0.1:7865`, and starts the Vite frontend on `http://localhost:5173`.
-
-### Option B — manual
-
-**1. Frontend** (requires Node.js ≥ 18)
-
-```bash
+# Clone and start
+git clone https://github.com/web3privacy/w3pn-anonymizer.git
+cd w3pn-anonymizer
 npm install
 npm run dev
 # → http://localhost:5173
 ```
 
-**2. Python detection backend** (optional, in a separate terminal)
+### With Python backend (optional, higher accuracy)
 
 ```bash
-cd server
-pip install -r requirements.txt
-python main.py
-# → http://127.0.0.1:7865
+./start.sh
 ```
 
-The app works fully without the Python backend — it uses the browser-side face-api.js detector. The Python backend (OpenCV YuNet) provides higher detection accuracy for batch jobs and difficult images.
+This installs Python dependencies, starts the detection backend on `http://127.0.0.1:7865`, and launches the Vite dev server.
 
 ---
 
-## Installation prerequisites
+## Desktop app
 
-### Node.js (frontend)
+Download the latest release for your platform:
 
-- **Node.js** ≥ 18 — [nodejs.org](https://nodejs.org)
-- **npm** ≥ 9 (bundled with Node.js)
+| Platform | Download | Format |
+|----------|----------|--------|
+| **macOS** | [W3PN-Anonymizer.dmg](https://github.com/web3privacy/w3pn-anonymizer/releases/latest/download/W3PN-Anonymizer.dmg) | .dmg installer |
+| **Windows** | [W3PN-Anonymizer-Setup.exe](https://github.com/web3privacy/w3pn-anonymizer/releases/latest/download/W3PN-Anonymizer-Setup.exe) | .exe installer |
+| **Linux** | [W3PN-Anonymizer.AppImage](https://github.com/web3privacy/w3pn-anonymizer/releases/latest/download/W3PN-Anonymizer.AppImage) | AppImage |
 
-```bash
-node --version   # should print v18.x or higher
-npm --version
-npm install      # installs all frontend dependencies
-```
+Or browse [all releases](https://github.com/web3privacy/w3pn-anonymizer/releases).
 
-### Python (optional backend)
-
-- **Python** ≥ 3.10 — [python.org](https://python.org)
-- **pip** (bundled with Python)
+### Build desktop app from source
 
 ```bash
-python3 --version   # should print 3.10 or higher
-cd server
-pip install -r requirements.txt
+# macOS
+npm run electron:build
+
+# Windows
+npm run electron:build:win
+
+# Linux
+npm run electron:build:linux
+
+# All platforms
+npm run electron:build:all
 ```
 
-Dependencies installed:
-
-| Package | Purpose |
-|---|---|
-| `fastapi` | HTTP API server |
-| `uvicorn` | ASGI server |
-| `opencv-contrib-python` | YuNet face detection |
-| `pillow` | Image decode/encode |
-| `numpy` | Array operations |
-| `python-multipart` | File upload parsing |
-
-The YuNet ONNX model (`face_detection_yunet_2023mar.onnx`) is downloaded automatically from the [OpenCV Zoo](https://github.com/opencv/opencv_zoo) on first startup.
-
-### Face detection model (browser)
-
-The browser-side TensorFlow.js / face-api.js weights are loaded at runtime from the `public/` folder (or CDN). No manual download needed.
+Output goes to the `release/` directory.
 
 ---
 
@@ -102,25 +113,34 @@ The browser-side TensorFlow.js / face-api.js weights are loaded at runtime from 
 ```
 w3pn-anonymizer/
 ├── src/
-│   ├── App.tsx           # Main React application (~3300 lines)
-│   ├── App.css           # All component styles
-│   ├── index.css         # CSS variables / themes (dark + light)
-│   ├── main.tsx          # React entry point
-│   ├── types.ts          # Shared TypeScript types
+│   ├── App.tsx              # Main React application
+│   ├── App.css              # Component styles
+│   ├── index.css            # CSS variables (dark + light themes)
+│   ├── main.tsx             # React entry point
+│   ├── types.ts             # Shared TypeScript types
 │   └── lib/
-│       ├── effects.ts    # All image effects (blur, pixelate, glitch, halftone…)
-│       ├── detector.ts   # Face detection (face-api.js + backend API)
-│       └── normalize.ts  # Batch processing engine
+│       ├── detector.ts      # Face detection (face-api.js + backend)
+│       ├── effects.ts       # Image effects engine (blur, pixelate, glitch…)
+│       ├── normalize.ts     # Batch processing engine
+│       ├── video.ts         # Video frame-by-frame processing
+│       ├── vectorize.ts     # SVG vectorization (imagetracer.js)
+│       └── image-encoders.ts # BMP, GIF, TIFF encoders
 ├── server/
-│   ├── main.py           # FastAPI backend (YuNet + Haar fallback)
+│   ├── main.py              # FastAPI backend (OpenCV YuNet)
 │   ├── requirements.txt
-│   └── models/           # Auto-downloaded ONNX models
-├── public/               # Static assets (favicon, etc.)
+│   └── models/              # Auto-downloaded ONNX models
+├── electron/
+│   └── main.cjs             # Electron main process
+├── public/
+│   ├── models/              # TensorFlow.js face detection weights
+│   ├── fonts/               # Self-hosted Material Symbols
+│   ├── vendor/              # Browser image compression lib
+│   └── demo/                # Demo images
 ├── index.html
 ├── package.json
 ├── vite.config.ts
 ├── tsconfig.json
-└── start.sh              # One-command start script
+└── start.sh                 # One-command start script
 ```
 
 ---
@@ -129,100 +149,64 @@ w3pn-anonymizer/
 
 ```bash
 npm run build
-# Output: dist/
+# Output → dist/
 ```
 
-The `dist/` folder is a static single-page app that can be served from any web server or CDN (Vercel, Netlify, nginx, etc.).
+The `dist/` folder is a static SPA deployable to any web server or CDN (Vercel, Netlify, nginx, Caddy, etc.).
 
-For the Python backend in production, run it behind a reverse proxy (nginx/Caddy) that exposes `/api/*` to the frontend.
+For the Python backend in production, run it behind a reverse proxy that routes `/api/*` to the backend on port 7865.
+
+---
+
+## Prerequisites
+
+### Frontend
+- **Node.js** ≥ 18 — [nodejs.org](https://nodejs.org)
+- **npm** ≥ 9 (bundled with Node.js)
+
+### Python backend (optional)
+- **Python** ≥ 3.10 — [python.org](https://python.org)
+
+| Package | Purpose |
+|---------|---------|
+| `fastapi` | HTTP API server |
+| `uvicorn` | ASGI server |
+| `opencv-contrib-python` | YuNet face detection |
+| `pillow` | Image decode/encode |
+| `numpy` | Array operations |
+| `python-multipart` | File upload parsing |
+
+The YuNet ONNX model is downloaded automatically from [OpenCV Zoo](https://github.com/opencv/opencv_zoo) on first startup.
 
 ---
 
 ## Security & privacy
 
-- **No data leaves the device.** All image processing runs locally: Canvas 2D API, WebGL (TensorFlow.js), and the optional localhost Python backend.
-- **No server storage.** The Python backend does not write uploaded images to disk. It decodes the image in memory, runs detection, and returns JSON. Images are discarded immediately after the response.
-- **No sessions, no cookies, no tracking.** The frontend is a pure SPA with no analytics, no remote logging, and no external API calls (except loading open-source model weights on first use).
-- **CORS** on the backend is permissive by default (`allow_origins=["*"]`) because it only listens on `127.0.0.1`. Never expose the Python backend to the internet.
-- **Online mode** (when served from a web server): users upload photos which live only in browser memory. Each browser session is isolated. No temp files are written. Navigating away clears all data from memory.
-- **Model weights** — face-api.js weights are fetched once and cached by the browser. The YuNet model is downloaded from the official OpenCV Zoo repository over HTTPS.
+- **No data leaves the device.** All image processing runs locally via Canvas 2D API, WebGL (TensorFlow.js), and the optional localhost Python backend.
+- **No server storage.** The Python backend processes images in memory only. Nothing is written to disk.
+- **No sessions, cookies, or tracking.** Pure SPA with no analytics, no remote logging, no external API calls.
+- **Self-hosted assets.** Fonts and model weights are bundled — no CDN requests at runtime.
+- **CORS** on the backend is restricted to `127.0.0.1`. Never expose the Python backend to the internet.
+- **Processing proof.** The app displays CPU timing after each detection to verify local execution.
 
 ---
 
-## Open-source dependencies
+## Tech stack
 
 | Library | License | Purpose |
-|---|---|---|
-| [vladmandic/face-api](https://github.com/vladmandic/face-api) | MIT | Browser-side face detection (TensorFlow.js) |
-| [opencv/opencv YuNet](https://github.com/opencv/opencv) | Apache 2.0 | Server-side face detection |
+|---------|---------|---------|
+| [React 18](https://react.dev) | MIT | UI framework |
+| [Vite 5](https://vitejs.dev) | MIT | Build tool |
+| [TypeScript](https://typescriptlang.org) | Apache 2.0 | Type safety |
+| [vladmandic/face-api](https://github.com/vladmandic/face-api) | MIT | Browser face detection (TensorFlow.js) |
+| [OpenCV YuNet](https://github.com/opencv/opencv) | Apache 2.0 | Server face detection |
+| [imagetracer.js](https://github.com/nicholasgasior/imagetracerjs) | MIT | Raster → SVG vectorization |
 | [nodeca/pica](https://github.com/nodeca/pica) | MIT | High-quality image resizing |
-| [Donaldcwl/browser-image-compression](https://github.com/Donaldcwl/browser-image-compression) | MIT | Batch image compression |
-| [jwagner/smartcrop.js](https://github.com/jwagner/smartcrop.js) | MIT | Content-aware crop |
-| [9am/img-halftone](https://github.com/9am/img-halftone) | MIT | Halftone canvas effect |
-| [Stuk/jszip](https://github.com/Stuk/jszip) | MIT/GPL | ZIP archive creation |
-| [eligrey/FileSaver.js](https://github.com/eligrey/FileSaver.js) | MIT | File download trigger |
-| React 18 | MIT | UI framework |
-| Vite 5 | MIT | Build tool |
-
----
-
-## Desktop app packaging (macOS / Windows / Linux)
-
-The app can be packaged as a self-contained native desktop application using [Tauri](https://tauri.app) (recommended — small bundle, Rust core) or [Electron](https://www.electronjs.org) (larger bundle, broader compatibility).
-
-### Option A — Tauri (recommended)
-
-Tauri bundles the Vite frontend into a native WebView. Bundle size ~5–15 MB.
-
-```bash
-# Prerequisites
-cargo --version   # Rust toolchain — https://rustup.rs
-npm install
-
-# Add Tauri to the project
-npm create tauri-app@latest -- --template vite-react-ts
-# or, if adding to existing project:
-npm install --save-dev @tauri-apps/cli
-npx tauri init
-
-# Development
-npx tauri dev
-
-# Build native installer
-npx tauri build
-# Output: src-tauri/target/release/bundle/
-#   macOS  → .dmg / .app
-#   Windows → .msi / .exe
-#   Linux  → .deb / .AppImage
-```
-
-To include the Python backend, add it as a sidecar binary in `tauri.conf.json` (`"externalBin"`) or start it from a Tauri command at launch. Alternatively, replace the Python backend with a Rust-based implementation.
-
-### Option B — Electron
-
-```bash
-npm install --save-dev electron electron-builder
-
-# Add a main.js entry point for Electron
-# Build
-npx electron-builder --mac --win --linux
-# Output: dist/ with platform-specific installers
-```
-
-Bundle size is typically 80–150 MB because Electron ships Chromium.
-
-### Bundling the Python backend
-
-For a truly self-contained app, use [PyInstaller](https://pyinstaller.org) to bundle `server/main.py` into a standalone binary:
-
-```bash
-cd server
-pip install pyinstaller
-pyinstaller --onefile main.py --add-data "models/:models/"
-# Output: dist/main (or dist/main.exe on Windows)
-```
-
-Then ship this binary alongside the Tauri/Electron app and spawn it at startup.
+| [smartcrop.js](https://github.com/jwagner/smartcrop.js) | MIT | Content-aware crop |
+| [img-halftone](https://github.com/9am/img-halftone) | MIT | Halftone canvas effect |
+| [JSZip](https://github.com/Stuk/jszip) | MIT/GPL | ZIP archive creation |
+| [FileSaver.js](https://github.com/eligrey/FileSaver.js) | MIT | File download trigger |
+| [Electron](https://electronjs.org) | MIT | Desktop app shell |
 
 ---
 
@@ -230,4 +214,10 @@ Then ship this binary alongside the Tauri/Electron app and spawn it at startup.
 
 Pull requests welcome! Please open an issue first for larger changes.
 
-This project is part of the [Web3Privacy Now](https://www.web3privacy.info) initiative — building privacy tools that anyone can use and verify.
+This project is part of [Web3Privacy Now](https://www.web3privacy.info) — building privacy tools that anyone can use and verify.
+
+---
+
+## License
+
+MIT

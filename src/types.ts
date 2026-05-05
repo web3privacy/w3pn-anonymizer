@@ -51,14 +51,21 @@ export interface PhotoItem {
   source: SourceType
   edited: boolean
   fileHandle?: FileSystemFileHandle
+  isVideo?: boolean
+  videoDuration?: number
+  videoWidth?: number
+  videoHeight?: number
+  videoFps?: number
+  derivedFromVideoId?: string
+  derivedFromVideoTime?: number
 }
 
 export interface DetectorStatus {
-  mode: 'backend' | 'native' | 'face-api' | 'unavailable'
+  mode: 'backend' | 'yunet-wasm' | 'mediapipe' | 'native' | 'face-api' | 'unavailable'
   message: string
 }
 
-export type NormalizeFormat = 'image/jpeg' | 'image/png' | 'image/webp'
+export type NormalizeFormat = 'image/jpeg' | 'image/png' | 'image/webp' | 'image/bmp' | 'image/gif' | 'image/tiff'
 export type NormalizeResizeMode = 'keep' | 'max-bound' | 'exact'
 export type NormalizeCodecEngine = 'canvas' | 'worker-codec'
 export type NormalizeCropMode =

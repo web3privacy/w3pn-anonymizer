@@ -11,10 +11,13 @@ import { createPortal } from 'react-dom'
 import JSZip from 'jszip'
 import { saveAs } from 'file-saver'
 import './App.css'
-import { detectFaces, initializeDetector, getDetectorStatus, checkDeps, triggerInstall } from './lib/detector'
+import { detectFaces, initializeDetector, resetDetectorStatus, getDetectorStatus, checkDeps, triggerInstall, setForceLocal, setDetectionProgressCallback, getFaceApiBackendName } from './lib/detector'
 import type { DepsStatus, InstallResult } from './lib/detector'
-import { EFFECTS, applyColorAdjustments, applyEffectBrush, applyEffectRect, applyGlitchEffect, pickRandomEmoji, previewEffectBrush } from './lib/effects'
+import { EFFECTS, applyColorAdjustments, applyEffectBrush, applyEffectRect, applyGlitchEffect, pickRandomEmoji, pickUniqueEmojis, previewEffectBrush } from './lib/effects'
 import type { PixelShiftType } from './lib/effects'
+import { canvasToBmpBlob, canvasToGifBlob, canvasToTiffBlob, FORMAT_EXT, isLosslessFormat } from './lib/image-encoders'
+import { canvasToSvg, canvasToSvgBlob, VECTORIZE_PRESETS, DEFAULT_VECTORIZE_PARAMS, type VectorizeParams, type VectorizePreset } from './lib/vectorize'
+import { extractPosterFrame, getSupportedVideoExportOptions, getVideoMetadata, getVideoPipelineCapabilities, mimeTypeToVideoExtension, processVideo, type VideoExportFormatId, type VideoFrameOverride, type VideoProcessingPhase, type VideoTimedZone } from './lib/video'
 import {
   detectFrameCropFromBlob,
   getCropRectNormalized,
@@ -35,6 +38,7 @@ import type {
   NormalizeResult,
   NormalizeSettings,
   PhotoItem,
+  SourceType,
   ThemeMode,
   ToolMode,
   Zone,
@@ -93,22 +97,24 @@ const DEFAULT_TRANSFORM: DrawTransform = {
 }
 
 const DEMO_IMAGES = [
-  '/demo/demo-1.webp',
-  '/demo/demo-2.webp',
-  '/demo/demo-3.jpg',
-  '/demo/demo-4.png',
-  '/demo/demo-5.png',
+  './demo/demo-1.webp',
+  './demo/demo-2.webp',
+  './demo/demo-3.jpg',
+  './demo/demo-4.png',
+  './demo/demo-5.png',
 ]
 
 const OPEN_SOURCE_CANDIDATES = [
   { name: 'vladmandic/face-api', url: 'https://github.com/vladmandic/face-api', note: 'Local Tiny Face Detector running entirely in the browser via TensorFlow.js/WebGL.' },
   { name: 'opencv/opencv (YuNet)', url: 'https://github.com/opencv/opencv', note: 'High-accuracy face detection via the optional local Python backend (FastAPI).' },
+  { name: 'imagetracer.js', url: 'https://github.com/nicholasgasior/imagetracerjs', note: 'Raster-to-SVG vectorization with configurable presets — fully browser-based.' },
   { name: 'nodeca/pica', url: 'https://github.com/nodeca/pica', note: 'High-quality in-browser image resizing (Lanczos filter, Web Workers).' },
   { name: 'Donaldcwl/browser-image-compression', url: 'https://github.com/Donaldcwl/browser-image-compression', note: 'Worker-based JPEG/WebP compression in batch mode.' },
   { name: 'jwagner/smartcrop.js', url: 'https://github.com/jwagner/smartcrop.js', note: 'Content-aware smart crop suggestion.' },
   { name: '9am/img-halftone', url: 'https://github.com/9am/img-halftone', note: 'Canvas-based halftone pattern effect.' },
   { name: 'Stuk/jszip', url: 'https://github.com/Stuk/jszip', note: 'Client-side ZIP archive creation for batch export.' },
   { name: 'eligrey/FileSaver.js', url: 'https://github.com/eligrey/FileSaver.js', note: 'File download trigger for browsers.' },
+  { name: 'Electron', url: 'https://www.electronjs.org', note: 'Desktop app shell for macOS, Windows, and Linux builds.' },
 ]
 
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v))
@@ -255,6 +261,22 @@ function quantizeCanvasToBlob(canvas: HTMLCanvasElement, depth: PngDepth): Promi
   return canvasToBlob(tmp, 'image/png')
 }
 
+/** Export canvas to blob, handling all supported formats. */
+async function exportCanvasToBlob(
+  canvas: HTMLCanvasElement,
+  format: NormalizeFormat,
+  quality: number,
+  pngDepth: PngDepth,
+): Promise<Blob> {
+  switch (format) {
+    case 'image/png': return quantizeCanvasToBlob(canvas, pngDepth)
+    case 'image/bmp': return canvasToBmpBlob(canvas)
+    case 'image/gif': return canvasToGifBlob(canvas)
+    case 'image/tiff': return canvasToTiffBlob(canvas)
+    default: return canvasToBlob(canvas, format, quality / 100)
+  }
+}
+
 /**
  * Re-encode a blob through a canvas to strip all embedded metadata
  * (EXIF, GPS coordinates, camera info, timestamps, ICC profiles, etc.).
@@ -286,19 +308,48 @@ const makeZipSafeName = (name: string, existing: Map<string, number>) => {
 
 const waitForUi = () => new Promise<void>((resolve) => window.setTimeout(resolve, 0))
 
+const formatVideoTime = (sec: number) => {
+  const safe = Math.max(0, Number.isFinite(sec) ? sec : 0)
+  const minutes = Math.floor(safe / 60)
+  const seconds = Math.floor(safe % 60)
+  return `${minutes}:${String(seconds).padStart(2, '0')}`
+}
+
 const IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'tiff', 'tif', 'avif', 'heic', 'heif'])
-const MAX_FILE_SIZE = 50 * 1024 * 1024 // 50 MB per file
+const VIDEO_EXTENSIONS_SET = new Set(['mp4', 'webm', 'mov', 'avi', 'mkv', 'm4v', 'ogv'])
+const MAX_FILE_SIZE = 50 * 1024 * 1024 // 50 MB per image
+const MAX_VIDEO_FILE_SIZE = 500 * 1024 * 1024 // 500 MB per video
 const MAX_TOTAL_PHOTOS = 2000
-const isImageFile = (f: File) => {
+const isMediaFile = (f: File) => {
+  if (f.size === 0) return false
+  const ext = f.name.split('.').pop()?.toLowerCase() ?? ''
+  if (f.type?.startsWith('video/') || VIDEO_EXTENSIONS_SET.has(ext)) {
+    return f.size <= MAX_VIDEO_FILE_SIZE
+  }
   if (f.size > MAX_FILE_SIZE) return false
   if (f.type && f.type.startsWith('image/')) return true
-  const ext = f.name.split('.').pop()?.toLowerCase() ?? ''
   return IMAGE_EXTENSIONS.has(ext)
+}
+const isVideoFileCheck = (f: File) => {
+  if (f.type?.startsWith('video/')) return true
+  const ext = f.name.split('.').pop()?.toLowerCase() ?? ''
+  return VIDEO_EXTENSIONS_SET.has(ext)
 }
 
 const fmtBytes = (b: number) => {
   if (b < 1024 * 100) return `${(b / 1024).toFixed(0)} KB`
   return `${(b / (1024 * 1024)).toFixed(1)} MB`
+}
+
+// Live elapsed timer — renders seconds since mount
+const ElapsedTimer = () => {
+  const [sec, setSec] = useState(0)
+  useEffect(() => {
+    const t0 = Date.now()
+    const iv = setInterval(() => setSec(Math.floor((Date.now() - t0) / 1000)), 500)
+    return () => clearInterval(iv)
+  }, [])
+  return <span style={{ fontSize: '0.55rem', color: 'var(--text-muted)', fontVariantNumeric: 'tabular-nums' }}>{sec}s elapsed</span>
 }
 
 // Closed-eye SVG icon for brand
@@ -327,7 +378,14 @@ function App() {
   const [depsStatus, setDepsStatus] = useState<DepsStatus | null>(null)
   const [depsInstalling, setDepsInstalling] = useState(false)
   const [installResult, setInstallResult] = useState<InstallResult | null>(null)
+  const [showInstallScript, setShowInstallScript] = useState(false)
   const [autoDetect, setAutoDetect] = useState(true)   // auto-detect faces on photo open
+  const [processingLocal, setProcessingLocal] = useState(() => {
+    const saved = localStorage.getItem('anonymizer-processing-local')
+    const val = saved === null ? true : saved === 'true'
+    if (val) setForceLocal(true)
+    return val
+  })
   const [showBoxes, setShowBoxes] = useState(true)     // show/hide zone outlines
   const [exportFormat, setExportFormat] = useState<NormalizeFormat>('image/jpeg')
   const [exportQuality, setExportQuality] = useState(92)
@@ -340,7 +398,10 @@ function App() {
   const [resEditH, setResEditH] = useState(0)
   const [isBusy, setIsBusy] = useState(false)
   const [isDetecting, setIsDetecting] = useState(false)
+  const [detectionStep, setDetectionStep] = useState('')
   const [isExporting, setIsExporting] = useState(false)
+  const [localProcessingMs, setLocalProcessingMs] = useState<number | null>(null)
+  const [lastDetectFailed, setLastDetectFailed] = useState(false)
   const [isNormalizing, setIsNormalizing] = useState(false)
   const [notice, setNotice] = useState('Load photos to get started.')
   void notice // kept for setNotice side-effects (error messages, etc.) — not displayed in toolbar
@@ -366,6 +427,10 @@ function App() {
   const [photoListLimit, setPhotoListLimit] = useState(240)
   const [batchPanelOpen, setBatchPanelOpen] = useState(false)   // replaces normPanelOpen
   const [aboutOpen, setAboutOpen] = useState(false)
+  const [feedbackOpen, setFeedbackOpen] = useState(false)
+  const [feedbackMsg, setFeedbackMsg] = useState('')
+  const [downloadMenuOpen, setDownloadMenuOpen] = useState(false)
+  const downloadMenuRef = useRef<HTMLDivElement>(null)
   const [isDragOver, setIsDragOver] = useState(false)
   const [folderScanState, setFolderScanState] = useState<{ found: number } | null>(null)
   const [colorAdj, setColorAdj] = useState<ColorAdjustments>(DEFAULT_COLOR_ADJUSTMENTS)
@@ -379,6 +444,20 @@ function App() {
   const [selectedForBatch, setSelectedForBatch] = useState<Set<string>>(new Set())
   // Track whether the photo has had zones applied (for Anonymize/Reset button)
   const [appliedByPhoto, setAppliedByPhoto] = useState<Record<string, boolean>>({})
+  // Video processing state
+  const [videoProcessing, setVideoProcessing] = useState(false)
+  const [videoProgress, setVideoProgress] = useState<{ current: number; total: number; phase: VideoProcessingPhase } | null>(null)
+  const videoAbortRef = useRef<AbortController | null>(null)
+  const videoExportOptions = useMemo(() => getSupportedVideoExportOptions(), [])
+  const videoPipelineCapabilities = useMemo(() => getVideoPipelineCapabilities(), [])
+  const [videoExportFormat, setVideoExportFormat] = useState<VideoExportFormatId>('webm')
+  const [videoFrameOverridesByPhoto, setVideoFrameOverridesByPhoto] = useState<Record<string, VideoFrameOverride[]>>({})
+  const [videoTimedZonesByPhoto, setVideoTimedZonesByPhoto] = useState<Record<string, VideoTimedZone[]>>({})
+  const [videoMaskDrawActive, setVideoMaskDrawActive] = useState(false)
+  const [videoMaskRangeSec, setVideoMaskRangeSec] = useState(3)
+  const [activeVideoTime, setActiveVideoTime] = useState(0)
+  const [videoDraftZone, setVideoDraftZone] = useState<Zone | null>(null)
+  const videoMaskPointerStartRef = useRef<{ x: number; y: number } | null>(null)
 
   // New UI state
   const [effectFlyoutOpen, setEffectFlyoutOpen] = useState(false)
@@ -389,10 +468,13 @@ function App() {
   const [currentFolderPrefix, setCurrentFolderPrefix] = useState('')
   // Refs for flyout anchor buttons (to compute fixed position)
   const adjFlyoutBtnRef = useRef<HTMLButtonElement>(null)
+  const transformFlyoutBtnRef = useRef<HTMLButtonElement>(null)
   const effectFlyoutBtnRef = useRef<HTMLButtonElement>(null)
   const filenameTipRef = useRef<HTMLSpanElement>(null)
   const [filenameTipPos, setFilenameTipPos] = useState<{ top: number; left: number } | null>(null)
   const [adjFlyoutAnchor, setAdjFlyoutAnchor] = useState<{ top: number; left: number } | null>(null)
+  const [transformFlyoutOpen, setTransformFlyoutOpen] = useState(false)
+  const [transformFlyoutAnchor, setTransformFlyoutAnchor] = useState<{ top: number; left: number } | null>(null)
   const [effectFlyoutAnchor, setEffectFlyoutAnchor] = useState<{ top: number; left: number } | null>(null)
   const [adjTransform, setAdjTransform] = useState<string>('none')   // none | glitch | halftone | pixel-shift | color-shift
   const [adjTransformStrength, setAdjTransformStrength] = useState(35)
@@ -418,21 +500,32 @@ function App() {
 
   // Close flyouts on outside click
   useEffect(() => {
-    if (!adjFlyoutOpen && !effectFlyoutOpen) return
+    if (!adjFlyoutOpen && !effectFlyoutOpen && !transformFlyoutOpen) return
     const handler = (e: MouseEvent) => {
       const target = e.target as Node
-      // Close if click is outside a flyout portal div
       const flyouts = document.querySelectorAll('.ts-flyout-portal')
       for (const f of flyouts) { if (f.contains(target)) return }
-      // Also don't close if click was on the toggle button itself
       if (adjFlyoutBtnRef.current?.contains(target)) return
       if (effectFlyoutBtnRef.current?.contains(target)) return
+      if (transformFlyoutBtnRef.current?.contains(target)) return
       setAdjFlyoutOpen(false)
       setEffectFlyoutOpen(false)
+      setTransformFlyoutOpen(false)
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
-  }, [adjFlyoutOpen, effectFlyoutOpen])
+  }, [adjFlyoutOpen, effectFlyoutOpen, transformFlyoutOpen])
+  // Close download menu on outside click
+  useEffect(() => {
+    if (!downloadMenuOpen) return
+    const handler = (e: MouseEvent) => {
+      if (downloadMenuRef.current?.contains(e.target as Node)) return
+      setDownloadMenuOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [downloadMenuOpen])
+
   const [activeBatchTasks, setActiveBatchTasks] = useState<Set<BatchTaskId>>(new Set(['format']))
   const [expandedBatchTasks, setExpandedBatchTasks] = useState<Set<BatchTaskId>>(new Set(['format']))
   const [zonesAnonymized, setZonesAnonymized] = useState(false)
@@ -457,6 +550,7 @@ function App() {
   const brushRafRef = useRef<number | null>(null)
   const brushActiveRef = useRef(false)
   const brushLastApplyRef = useRef(0)
+  const brushEmojiRef = useRef('')
   const photosRef = useRef<PhotoItem[]>([])
   const normalizeCancelRef = useRef(false)
   const dragCounterRef = useRef(0)
@@ -471,9 +565,46 @@ function App() {
   const transformPreviewCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const transformPreviewDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const transformPreviewGenRef = useRef(0)   // increments each call; used to discard stale async results
+  const activeVideoRef = useRef<HTMLVideoElement | null>(null)
 
   const activePhoto = useMemo(() => photos.find((p) => p.id === activePhotoId) ?? null, [photos, activePhotoId])
+  const sourceVideoPhoto = useMemo(
+    () => activePhoto?.derivedFromVideoId ? (photos.find((p) => p.id === activePhoto.derivedFromVideoId) ?? null) : null,
+    [activePhoto, photos],
+  )
+
+  // Stable blob URL for video playback — avoids leak from inline createObjectURL in render
+  const activeVideoUrl = useMemo(() => {
+    if (!activePhoto?.isVideo) return null
+    return URL.createObjectURL(activePhoto.blob)
+  }, [activePhoto?.blob, activePhoto?.isVideo])
+  useEffect(() => { return () => { if (activeVideoUrl) URL.revokeObjectURL(activeVideoUrl) } }, [activeVideoUrl])
+  useEffect(() => {
+    if (videoExportOptions.some((opt) => opt.id === videoExportFormat && opt.supported)) return
+    const fallback = videoExportOptions.find((opt) => opt.supported)
+    if (fallback) setVideoExportFormat(fallback.id)
+  }, [videoExportFormat, videoExportOptions])
+  useEffect(() => {
+    setVideoMaskDrawActive(false)
+    setVideoDraftZone(null)
+    setActiveVideoTime(0)
+    videoMaskPointerStartRef.current = null
+  }, [activePhotoId])
+
   const activeZones = useMemo(() => (activePhotoId ? zonesByPhoto[activePhotoId] ?? [] : []), [zonesByPhoto, activePhotoId])
+  const activeVideoTimedZones = useMemo(
+    () => activePhotoId ? (videoTimedZonesByPhoto[activePhotoId] ?? []) : [],
+    [activePhotoId, videoTimedZonesByPhoto],
+  )
+  const activeVideoFrameOverrides = useMemo(
+    () => activePhotoId ? (videoFrameOverridesByPhoto[activePhotoId] ?? []) : [],
+    [activePhotoId, videoFrameOverridesByPhoto],
+  )
+  const visibleVideoTimedZones = useMemo(
+    () => activeVideoTimedZones.filter((item) => activeVideoTime >= item.startSec && activeVideoTime <= item.endSec),
+    [activeVideoTime, activeVideoTimedZones],
+  )
+  const hasPendingVideoEdits = activeVideoTimedZones.length > 0 || activeVideoFrameOverrides.length > 0
   const normalizePreviewPhotos = useMemo(
     () => normalizePreviewIds.map((id) => photos.find((p) => p.id === id)).filter(Boolean) as PhotoItem[],
     [normalizePreviewIds, photos],
@@ -616,14 +747,14 @@ function App() {
     if (bc && bc.width > 0 && batchPanelOpen) {
       drawSource = bc
     } else {
-      // Transform preview (halftone/glitch etc.) from adj flyout
+      // Transform preview (halftone/glitch etc.) from adj or transform flyout
       const tc = transformPreviewCanvasRef.current
-      if (tc && tc.width > 0 && adjFlyoutOpen) {
+      if (tc && tc.width > 0 && (adjFlyoutOpen || transformFlyoutOpen)) {
         drawSource = tc
       // Quality preview shows compressed visual
       } else {
         const qc = qualityPreviewCanvasRef.current
-        if (qc && qc.width > 0 && exportFormat !== 'image/png') {
+        if (qc && qc.width > 0 && !isLosslessFormat(exportFormat)) {
           drawSource = qc
         }
       }
@@ -654,8 +785,9 @@ function App() {
     transformRef.current = { drawX, drawY, drawWidth, drawHeight, imageWidth: source.width, imageHeight: source.height, scale }
     ctx.drawImage(drawSource, drawX, drawY, drawWidth, drawHeight)
 
-    // Draw zone outlines (if visible)
-    if (showBoxes) {
+    // Draw zone outlines (if visible) — hide during color/transform preview to reduce clutter
+    const previewing = ((adjFlyoutOpen || transformFlyoutOpen) && adjTransform !== 'none') || (!isColorNoop && colorPanelOpen)
+    if (showBoxes && !previewing) {
       activeZones.forEach((zone) => drawZoneOutline(ctx, zone, transformRef.current, zone.id === selectedZoneId))
       if (draftZone) drawZoneOutline(ctx, draftZone, transformRef.current, true)
     }
@@ -668,8 +800,8 @@ function App() {
       }
     }
   }, [
-    activePhoto, activeNormalizeCrop, activeZones, adjFlyoutOpen, batchPanelOpen,
-    colorAdj, colorPanelOpen, draftZone, exportFormat, isNormalizeCropPicking,
+    activePhoto, activeNormalizeCrop, activeZones, adjFlyoutOpen, adjTransform, batchPanelOpen,
+    colorAdj, colorPanelOpen, draftZone, exportFormat, isNormalizeCropPicking, transformFlyoutOpen,
     normalizeCropDraft, normalizeSettings.cropMode, selectedZoneId, showBoxes, theme,
   ])
 
@@ -693,7 +825,7 @@ function App() {
     const t = transformRef.current
     if (t.scale <= 0) return
     const radius = Math.max(4, brushSizeRef.current / t.scale)
-    applyEffectBrush(ctx, selectedEffect, pointer.imageX, pointer.imageY, radius, brushStrength, pickRandomEmoji())
+    applyEffectBrush(ctx, selectedEffect, pointer.imageX, pointer.imageY, radius, brushStrength, brushEmojiRef.current)
     setActiveDirty(true)
     renderCanvasRef.current()
   }, [activePhoto, brushStrength, getWorkCtx, selectedEffect, setActiveDirty])
@@ -721,7 +853,7 @@ function App() {
       pointer.canvasX, pointer.canvasY,
       sz,
       brushStrength,
-      pickRandomEmoji(),
+      brushEmojiRef.current,
       t.scale, t.drawX, t.drawY,
     )
 
@@ -776,21 +908,44 @@ function App() {
   }, [])
 
   const addRecords = useCallback((records: InputRecord[]) => {
-    const valid = records.filter((r) => isImageFile(r.file))
-    if (valid.length === 0) { setNotice('No supported images found (check file types and size limit of 50 MB).'); return }
+    const valid = records.filter((r) => isMediaFile(r.file))
+    if (valid.length === 0) { setNotice('No supported media found (check file types and size limits).'); return }
     // Prevent excessive photo count
     const currentCount = photosRef.current.length
     const remaining = Math.max(0, MAX_TOTAL_PHOTOS - currentCount)
     if (remaining === 0) { setNotice(`Maximum ${MAX_TOTAL_PHOTOS} photos reached.`); return }
-    if (valid.length > remaining) { valid.length = remaining; setNotice(`Added ${remaining} photos (max ${MAX_TOTAL_PHOTOS}).`) }
-    const incoming: PhotoItem[] = valid.map((r) => ({
-      id: createId(), name: r.name, mimeType: r.file.type || 'image/jpeg',
-      blob: r.file, previewUrl: URL.createObjectURL(r.file),
-      source: r.source, edited: false, fileHandle: r.handle,
-    }))
+    if (valid.length > remaining) { valid.length = remaining; setNotice(`Added ${remaining} media files (max ${MAX_TOTAL_PHOTOS}).`) }
+    const incoming: PhotoItem[] = valid.map((r) => {
+      const isVideo = isVideoFileCheck(r.file)
+      return {
+        id: createId(), name: r.name, mimeType: r.file.type || (isVideo ? 'video/mp4' : 'image/jpeg'),
+        blob: r.file, previewUrl: URL.createObjectURL(r.file),
+        source: r.source, edited: false, fileHandle: r.handle,
+        isVideo,
+      }
+    })
     const originals: Record<string, Blob> = {}
     incoming.forEach((p) => { originals[p.id] = p.blob })
     setOriginalBlobByPhoto((cur) => ({ ...cur, ...originals }))
+    // For video files, extract poster frames in the background
+    for (const p of incoming) {
+      if (p.isVideo) {
+        extractPosterFrame(p.blob).then(({ blob: posterBlob, width, height }) => {
+          const posterUrl = URL.createObjectURL(posterBlob)
+          setPhotos((cur) => cur.map((ph) => {
+            if (ph.id !== p.id) return ph
+            URL.revokeObjectURL(ph.previewUrl)
+            return { ...ph, previewUrl: posterUrl, videoWidth: width, videoHeight: height }
+          }))
+        }).catch(() => { /* poster extraction failed — keep video blob URL as preview */ })
+        getVideoMetadata(p.blob).then((meta) => {
+          setPhotos((cur) => cur.map((ph) => {
+            if (ph.id !== p.id) return ph
+            return { ...ph, videoDuration: meta.duration, videoWidth: meta.width, videoHeight: meta.height, videoFps: meta.fps }
+          }))
+        }).catch(() => {})
+      }
+    }
     setPhotos((cur) => {
       const next = [...cur, ...incoming]
       if (!activePhotoId && incoming.length > 0) setActivePhotoId(incoming[0].id)
@@ -841,7 +996,7 @@ function App() {
       const files: File[] = []
       await Promise.all(entries.map((en) =>
         new Promise<void>((res) => {
-          (en as FileSystemFileEntry).file((f) => { if (isImageFile(f)) files.push(f); res() }, () => res())
+          (en as FileSystemFileEntry).file((f) => { if (isMediaFile(f)) files.push(f); res() }, () => res())
         })
       ))
       if (files.length === 0) { setNotice('No images found in dropped files.'); return }
@@ -861,7 +1016,7 @@ function App() {
         for (const entry of batch) {
           if (entry.isFile) {
             const file = await new Promise<File>((res, rej) => (entry as FileSystemFileEntry).file(res, rej))
-            if (isImageFile(file)) {
+            if (isMediaFile(file)) {
               records.push({ file, name: `${prefix}${entry.name}`, source: 'upload' as const })
               setFolderScanState({ found: records.length })
             }
@@ -878,7 +1033,7 @@ function App() {
           await readDir(entry as FileSystemDirectoryEntry)
         } else if (entry.isFile) {
           const file = await new Promise<File>((res, rej) => (entry as FileSystemFileEntry).file(res, rej))
-          if (isImageFile(file)) {
+          if (isMediaFile(file)) {
             records.push({ file, name: entry.name, source: 'upload' as const })
             setFolderScanState({ found: records.length })
           }
@@ -944,14 +1099,17 @@ function App() {
     setUndoCount(0)
     setZonesAnonymized(false)
     setEffectFlyoutOpen(false)
+    setLocalProcessingMs(null)
+    setLastDetectFailed(false)
     setAdjFlyoutOpen(false)
+    setTransformFlyoutOpen(false)
     const saved = colorAdjByPhoto[photoId]
     setColorAdj(saved ? { ...saved } : DEFAULT_COLOR_ADJUSTMENTS)
     // Reset export format to photo's native format
     const photo = photos.find((p) => p.id === photoId)
     if (photo) {
       const fmt = photo.mimeType as NormalizeFormat
-      if (['image/jpeg', 'image/png', 'image/webp'].includes(fmt)) setExportFormat(fmt)
+      if (['image/jpeg', 'image/png', 'image/webp', 'image/bmp', 'image/gif', 'image/tiff'].includes(fmt)) setExportFormat(fmt)
     }
   }, [activePhotoId, colorAdjByPhoto, commitWorkCanvasToBlob, dirtyByPhoto, photos, setActiveDirty])
 
@@ -978,7 +1136,7 @@ function App() {
             const handle = async (entry: FileSystemFileHandle | FileSystemDirectoryHandle) => {
               if (entry.kind === 'file') {
                 const f = await entry.getFile()
-                if (!isImageFile(f)) return
+                if (!isMediaFile(f)) return
                 records.push({ file: f, name: `${prefix}${entry.name}`, source: 'local-folder', handle: entry })
               } else if (entry.kind === 'directory') {
                 await walk(entry, `${prefix}${entry.name}/`)
@@ -1000,11 +1158,11 @@ function App() {
       // Use modern file picker
       try {
         const picker = (window as Window & { showOpenFilePicker?: (o: object) => Promise<FileSystemFileHandle[]> }).showOpenFilePicker!
-        const handles = await picker({ multiple: true, types: [{ description: 'Images', accept: { 'image/*': ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tiff', '.avif'] } }] })
+        const handles = await picker({ multiple: true, types: [{ description: 'Images & Videos', accept: { 'image/*': ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tiff', '.avif'], 'video/*': ['.mp4', '.webm', '.mov', '.avi', '.mkv', '.m4v', '.ogv'] } }] })
         const records: InputRecord[] = []
         for (const handle of handles) {
           const f = await handle.getFile()
-          if (isImageFile(f)) records.push({ file: f, name: f.name, source: 'local-folder', handle })
+          if (isMediaFile(f)) records.push({ file: f, name: f.name, source: 'local-folder', handle })
         }
         addRecords(records)
       } catch { /* cancelled */ }
@@ -1030,41 +1188,69 @@ function App() {
     e.target.value = ''
   }, [addRecords])
 
+  const detectingRef = useRef(false)
   const detectFacesOnActiveImage = useCallback(async (robust = false) => {
     if (!activePhoto) return
+    if (detectingRef.current) return
     const workCanvas = workCanvasRef.current
     if (!workCanvas || workCanvas.width === 0) return
+    detectingRef.current = true
     setIsDetecting(true)
+    setLocalProcessingMs(null)
+    setDetectionStep('Preparing…')
     setNotice(robust ? 'Running thorough detection…' : 'Detecting faces…')
+    setDetectionProgressCallback((step) => setDetectionStep(step))
+    const t0 = performance.now()
     try {
       const boxes = await detectFaces(workCanvas, robust)
+      const elapsed = Math.round(performance.now() - t0)
+      setLocalProcessingMs(elapsed)
       if (boxes.length === 0) {
-        setNotice('No faces detected.')
+        setLastDetectFailed(true)
+        setNotice(`No faces detected. (${elapsed} ms locally)`)
         return
       }
-      const zones: Zone[] = boxes.map((b) => ({
+      setLastDetectFailed(false)
+      const emojis = pickUniqueEmojis(boxes.length)
+      const zones: Zone[] = boxes.map((b, i) => ({
         id: createId(),
         x: clamp(b.x / workCanvas.width, 0, 1),
         y: clamp(b.y / workCanvas.height, 0, 1),
         width: clamp(b.width / workCanvas.width, 0.02, 1),
         height: clamp(b.height / workCanvas.height, 0.02, 1),
         effect: selectedEffect,
-        emoji: pickRandomEmoji(),
+        emoji: emojis[i],
       }))
       setActiveZones(() => zones)
       setSelectedZoneId(zones[0]?.id ?? null)
       const src = getDetectorStatus()
-      const detSrc = src?.mode === 'backend' ? `(${(src as { backendDetector?: string }).backendDetector ?? 'backend'})` : src?.mode ?? ''
-      setNotice(`Detected ${zones.length} face${zones.length === 1 ? '' : 's'} ${detSrc}.`)
+      const detSrc = src?.mode === 'backend'
+        ? `via ${(src as { backendDetector?: string }).backendDetector ?? 'backend'}`
+        : src?.mode === 'face-api'
+          ? `via face-api.js (${getFaceApiBackendName() || 'local'})`
+          : src?.mode ?? ''
+      setNotice(`Detected ${zones.length} face${zones.length === 1 ? '' : 's'} ${detSrc} — ${elapsed} ms locally.`)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       setNotice(`Detection error: ${msg}`)
+      setDetectionStep(`Error: ${msg}`)
       console.error('Face detection error:', err)
     } finally {
+      detectingRef.current = false
       setIsDetecting(false)
+      setDetectionStep('')
+      setDetectionProgressCallback(null)
       renderCanvas()
     }
   }, [activePhoto, renderCanvas, selectedEffect, setActiveZones])
+
+  const cancelDetection = useCallback(() => {
+    detectingRef.current = false
+    setIsDetecting(false)
+    setDetectionStep('')
+    setDetectionProgressCallback(null)
+    setNotice('Detection cancelled.')
+  }, [])
 
   const applyZones = useCallback(() => {
     if (!activePhoto || activeZones.length === 0) return
@@ -1148,6 +1334,33 @@ function App() {
     if (!orig) { setNotice('No original backup for this photo.'); return }
     setIsBusy(true)
     try {
+      if (activePhoto.isVideo) {
+        const [poster, meta] = await Promise.all([
+          extractPosterFrame(orig).catch(() => null),
+          getVideoMetadata(orig).catch(() => null),
+        ])
+        const nextUrl = poster ? URL.createObjectURL(poster.blob) : activePhoto.previewUrl
+        setPhotos((cur) => cur.map((p) => {
+          if (p.id !== activePhoto.id) return p
+          if (nextUrl !== p.previewUrl) window.setTimeout(() => URL.revokeObjectURL(p.previewUrl), 0)
+          return {
+            ...p,
+            blob: orig,
+            previewUrl: nextUrl,
+            edited: false,
+            mimeType: orig.type || p.mimeType,
+            videoDuration: meta?.duration ?? p.videoDuration,
+            videoWidth: meta?.width ?? poster?.width ?? p.videoWidth,
+            videoHeight: meta?.height ?? poster?.height ?? p.videoHeight,
+            videoFps: meta?.fps ?? p.videoFps,
+          }
+        }))
+        setVideoFrameOverridesByPhoto((cur) => { const next = { ...cur }; delete next[activePhoto.id]; return next })
+        setActiveDirty(false)
+        undoStackRef.current = []; setUndoCount(0)
+        setNotice('Reset video to original.')
+        return
+      }
       // Reload work canvas directly from original blob
       const bmp = await createImageBitmap(orig)
       const origW = bmp.width, origH = bmp.height
@@ -1185,17 +1398,395 @@ function App() {
     if (!workCanvas || workCanvas.width === 0) return
     setIsBusy(true)
     try {
-      const blob = exportFormat === 'image/png'
-        ? await quantizeCanvasToBlob(workCanvas, exportPngDepth)
-        : await canvasToBlob(workCanvas, exportFormat, exportQuality / 100)
+      const blob = await exportCanvasToBlob(workCanvas, exportFormat, exportQuality, exportPngDepth)
       const baseName = activePhoto.name.split('/').pop() ?? activePhoto.name
-      const ext = exportFormat === 'image/jpeg' ? 'jpg' : exportFormat === 'image/webp' ? 'webp' : 'png'
+      const ext = FORMAT_EXT[exportFormat] ?? 'png'
       const outName = baseName.replace(/\.[^.]+$/, '') + `-anon.${ext}`
       saveAs(blob, outName)
       setNotice(`Exported: ${outName}`)
     } catch { setNotice('Export failed.') }
     finally { setIsBusy(false) }
   }, [activePhoto, exportFormat, exportQuality, exportPngDepth])
+
+  const [snapshotCount, setSnapshotCount] = useState(0)
+  const saveSnapshot = useCallback(async () => {
+    if (!activePhoto) return
+    const wc = workCanvasRef.current
+    if (!wc || wc.width === 0) return
+    setIsBusy(true)
+    try {
+      const blob = await canvasToBlob(wc, 'image/png')
+      const baseName = activePhoto.name.replace(/\.[^.]+$/, '')
+      const num = snapshotCount + 1
+      setSnapshotCount(num)
+      const snapName = `${baseName}_snapshot_${num}.png`
+      const previewUrl = URL.createObjectURL(blob)
+      const newPhoto: PhotoItem = {
+        id: createId(), name: snapName, mimeType: 'image/png',
+        blob, previewUrl, source: 'upload' satisfies SourceType, edited: false,
+      }
+      setPhotos((cur) => [...cur, newPhoto])
+      setOriginalBlobByPhoto((cur) => ({ ...cur, [newPhoto.id]: blob }))
+      setNotice(`Snapshot saved: ${snapName}`)
+    } catch { setNotice('Snapshot failed.') }
+    finally { setIsBusy(false) }
+  }, [activePhoto, snapshotCount])
+
+  const applySnapshotToSourceVideo = useCallback(async () => {
+    if (!activePhoto || activePhoto.isVideo || !activePhoto.derivedFromVideoId || activePhoto.derivedFromVideoTime == null) return
+    const wc = workCanvasRef.current
+    if (!wc || wc.width === 0) {
+      setNotice('Edited snapshot is not ready.')
+      return
+    }
+    setIsBusy(true)
+    try {
+      const blob = await canvasToBlob(wc, 'image/png')
+      const nextUrl = URL.createObjectURL(blob)
+      setPhotos((cur) => cur.map((p) => {
+        if (p.id !== activePhoto.id) return p
+        window.setTimeout(() => URL.revokeObjectURL(p.previewUrl), 0)
+        return { ...p, blob, previewUrl: nextUrl, edited: true }
+      }))
+      setVideoFrameOverridesByPhoto((cur) => {
+        const sourceId = activePhoto.derivedFromVideoId!
+        const current = cur[sourceId] ?? []
+        const tolerance = 1 / 30
+        const next = current.filter((item) => Math.abs(item.timeSec - activePhoto.derivedFromVideoTime!) > tolerance)
+        next.push({ timeSec: activePhoto.derivedFromVideoTime!, frameBlob: blob })
+        next.sort((a, b) => a.timeSec - b.timeSec)
+        return { ...cur, [sourceId]: next }
+      })
+      setActiveDirty(false)
+      setNotice('Snapshot attached to source video. Re-run video anonymization to bake it into the render.')
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      setNotice(`Could not attach snapshot to source video: ${msg}`)
+    } finally {
+      setIsBusy(false)
+    }
+  }, [activePhoto])
+
+  const jumpToSourceVideoFromSnapshot = useCallback(() => {
+    if (!sourceVideoPhoto) return
+    void selectPhoto(sourceVideoPhoto.id)
+    setNotice(`Returned to source video: ${sourceVideoPhoto.name.split('/').pop()}`)
+  }, [selectPhoto, sourceVideoPhoto])
+
+  const mapPointerToVideo = useCallback((event: ReactPointerEvent<HTMLElement>) => {
+    const video = activeVideoRef.current
+    if (!video) return null
+    const bounds = video.getBoundingClientRect()
+    if (bounds.width <= 0 || bounds.height <= 0) return null
+    return {
+      x: clamp((event.clientX - bounds.left) / bounds.width, 0, 1),
+      y: clamp((event.clientY - bounds.top) / bounds.height, 0, 1),
+    }
+  }, [])
+
+  const clearVideoTimedZones = useCallback(() => {
+    if (!activePhoto?.isVideo) return
+    setVideoTimedZonesByPhoto((cur) => {
+      const next = { ...cur }
+      delete next[activePhoto.id]
+      return next
+    })
+    setVideoDraftZone(null)
+    setVideoMaskDrawActive(false)
+    setNotice('Timeline masks cleared for this video.')
+  }, [activePhoto])
+
+  const handleVideoMaskPointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!videoMaskDrawActive || !activePhoto?.isVideo) return
+    const mapped = mapPointerToVideo(event)
+    if (!mapped) return
+    event.currentTarget.setPointerCapture(event.pointerId)
+    videoMaskPointerStartRef.current = mapped
+    setVideoDraftZone({
+      id: 'draft-video-mask',
+      x: mapped.x,
+      y: mapped.y,
+      width: 0.001,
+      height: 0.001,
+      effect: selectedEffect,
+      emoji: pickRandomEmoji(),
+    })
+  }, [activePhoto, mapPointerToVideo, selectedEffect, videoMaskDrawActive])
+
+  const handleVideoMaskPointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!videoMaskPointerStartRef.current || !videoMaskDrawActive) return
+    const mapped = mapPointerToVideo(event)
+    if (!mapped) return
+    const start = videoMaskPointerStartRef.current
+    setVideoDraftZone((cur) => cur ? {
+      ...cur,
+      x: Math.min(start.x, mapped.x),
+      y: Math.min(start.y, mapped.y),
+      width: Math.abs(mapped.x - start.x),
+      height: Math.abs(mapped.y - start.y),
+    } : null)
+  }, [mapPointerToVideo, videoMaskDrawActive])
+
+  const handleVideoMaskPointerUp = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!activePhoto?.isVideo) return
+    if (videoMaskPointerStartRef.current) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+    videoMaskPointerStartRef.current = null
+    const zone = videoDraftZone
+    if (!zone || zone.width < 0.01 || zone.height < 0.01) {
+      setVideoDraftZone(null)
+      if (videoMaskDrawActive) setNotice('Timeline mask was too small — drag a larger rectangle over the video.')
+      return
+    }
+
+    const video = activeVideoRef.current
+    const duration = video?.duration || activePhoto.videoDuration || 0
+    const center = video?.currentTime ?? activeVideoTime
+    const halfRange = Math.max(0.1, videoMaskRangeSec / 2)
+    const startSec = Math.max(0, center - halfRange)
+    const endSec = duration > 0 ? Math.min(duration, center + halfRange) : center + halfRange
+    const id = createId()
+    const timedZone: VideoTimedZone = {
+      id,
+      startSec,
+      endSec: Math.max(startSec + 0.05, endSec),
+      zone: { ...zone, id, effect: selectedEffect, emoji: zone.emoji || pickRandomEmoji() },
+    }
+
+    setVideoTimedZonesByPhoto((cur) => ({
+      ...cur,
+      [activePhoto.id]: [...(cur[activePhoto.id] ?? []), timedZone].sort((a, b) => a.startSec - b.startSec),
+    }))
+    setVideoDraftZone(null)
+    setVideoMaskDrawActive(false)
+    setNotice(`Timeline mask added for ${formatVideoTime(timedZone.startSec)}–${formatVideoTime(timedZone.endSec)}. Re-run video anonymization to bake it in.`)
+  }, [activePhoto, activeVideoTime, selectedEffect, videoDraftZone, videoMaskDrawActive, videoMaskRangeSec])
+
+  const processActiveVideo = useCallback(async () => {
+    if (!activePhoto?.isVideo) return
+    const selectedContainer = videoExportOptions.find((opt) => opt.id === videoExportFormat)
+    if (!selectedContainer?.supported) {
+      setNotice(`Video format ${videoExportFormat.toUpperCase()} is not supported in this browser.`)
+      return
+    }
+    const abort = new AbortController()
+    videoAbortRef.current = abort
+    setVideoProcessing(true)
+    setVideoProgress({ current: 0, total: 1, phase: 'analyzing' })
+    try {
+      const sourceVideoBlob = originalBlobByPhoto[activePhoto.id] ?? activePhoto.blob
+      const manualOverrides = videoFrameOverridesByPhoto[activePhoto.id] ?? []
+      const timedZones = videoTimedZonesByPhoto[activePhoto.id] ?? []
+      const resultBlob = await processVideo(sourceVideoBlob, {
+        effect: selectedEffect,
+        strength: brushStrength / 100,
+        emoji: pickRandomEmoji(),
+        forceLocal: processingLocal,
+        outputFormat: videoExportFormat,
+        frameOverrides: manualOverrides,
+        timedZones,
+        onPhase: (phase) => setVideoProgress((prev) => ({ current: prev?.current ?? 0, total: prev?.total ?? 1, phase })),
+        onProgress: (current, total) => setVideoProgress((prev) => ({ current, total, phase: prev?.phase ?? 'analyzing' })),
+        abortSignal: abort.signal,
+      })
+      const [poster, meta] = await Promise.all([
+        extractPosterFrame(resultBlob).catch(() => null),
+        getVideoMetadata(resultBlob).catch(() => null),
+      ])
+      const nextPreviewUrl = poster ? URL.createObjectURL(poster.blob) : null
+      setPhotos((cur) => cur.map((p) => {
+        if (p.id !== activePhoto.id) return p
+        if (nextPreviewUrl && nextPreviewUrl !== p.previewUrl) URL.revokeObjectURL(p.previewUrl)
+        return {
+          ...p,
+          blob: resultBlob,
+          previewUrl: nextPreviewUrl ?? p.previewUrl,
+          edited: true,
+          mimeType: resultBlob.type || selectedContainer.mimeType || p.mimeType,
+          videoDuration: meta?.duration ?? p.videoDuration,
+          videoWidth: meta?.width ?? poster?.width ?? p.videoWidth,
+          videoHeight: meta?.height ?? poster?.height ?? p.videoHeight,
+          videoFps: meta?.fps ?? p.videoFps,
+        }
+      }))
+      const manualSummary = [
+        manualOverrides.length > 0 ? `${manualOverrides.length} frame override${manualOverrides.length === 1 ? '' : 's'}` : '',
+        timedZones.length > 0 ? `${timedZones.length} timeline mask${timedZones.length === 1 ? '' : 's'}` : '',
+      ].filter(Boolean).join(' and ')
+      setNotice(`Video processed successfully as ${selectedContainer.label}. ${manualSummary ? `${manualSummary} baked in.` : 'Preview updated.'}`)
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        setNotice('Video processing cancelled.')
+      } else {
+        setNotice('Video processing failed.')
+        console.error('Video processing error:', err)
+      }
+    } finally {
+      setVideoProcessing(false)
+      setVideoProgress(null)
+      videoAbortRef.current = null
+    }
+  }, [activePhoto, brushStrength, originalBlobByPhoto, processingLocal, selectedEffect, videoExportFormat, videoExportOptions, videoFrameOverridesByPhoto, videoTimedZonesByPhoto])
+
+  const cancelVideoProcessing = useCallback(() => {
+    videoAbortRef.current?.abort()
+  }, [])
+
+  const stepActiveVideoFrame = useCallback((direction: -1 | 1) => {
+    if (!activePhoto?.isVideo || !activeVideoRef.current) return
+    const video = activeVideoRef.current
+    const fps = activePhoto.videoFps && activePhoto.videoFps > 0 ? activePhoto.videoFps : 30
+    const duration = Number.isFinite(video.duration) && video.duration > 0
+      ? video.duration
+      : activePhoto.videoDuration ?? 0
+    const frameStep = 1 / fps
+    const nextTime = clamp(video.currentTime + direction * frameStep, 0, duration > 0 ? duration : Number.MAX_SAFE_INTEGER)
+
+    video.pause()
+    video.currentTime = nextTime
+    setActiveVideoTime(nextTime)
+  }, [activePhoto])
+
+  const openCurrentVideoFrameAsSnapshot = useCallback(async () => {
+    if (!activePhoto?.isVideo || !activeVideoRef.current) return
+    const video = activeVideoRef.current
+    const width = video.videoWidth || activePhoto.videoWidth || 0
+    const height = video.videoHeight || activePhoto.videoHeight || 0
+    if (width <= 0 || height <= 0) {
+      setNotice('Current video frame is not ready yet.')
+      return
+    }
+    setIsBusy(true)
+    try {
+      const frameCanvas = document.createElement('canvas')
+      frameCanvas.width = width
+      frameCanvas.height = height
+      const frameCtx = frameCanvas.getContext('2d')
+      if (!frameCtx) throw new Error('2D context unavailable')
+      frameCtx.drawImage(video, 0, 0, width, height)
+      const blob = await canvasToBlob(frameCanvas, 'image/png')
+      const previewUrl = URL.createObjectURL(blob)
+      const baseName = activePhoto.name.replace(/\.[^.]+$/, '')
+      const frameStamp = `${Math.floor(video.currentTime / 60)}-${String(Math.floor(video.currentTime % 60)).padStart(2, '0')}-${String(Math.floor((video.currentTime % 1) * 100)).padStart(2, '0')}`
+      const snapshotName = `${baseName}-frame-${frameStamp}.png`
+      const newPhoto: PhotoItem = {
+        id: createId(), name: snapshotName, mimeType: 'image/png',
+        blob, previewUrl, source: 'upload' satisfies SourceType, edited: false,
+        derivedFromVideoId: activePhoto.id,
+        derivedFromVideoTime: video.currentTime,
+      }
+      setPhotos((cur) => [...cur, newPhoto])
+      setOriginalBlobByPhoto((cur) => ({ ...cur, [newPhoto.id]: blob }))
+      setActivePhotoId(newPhoto.id)
+      setNotice('Current video frame opened as a snapshot for brush edits.')
+    } catch (err) {
+      setNotice(err instanceof Error ? `Frame snapshot failed: ${err.message}` : 'Frame snapshot failed.')
+    } finally {
+      setIsBusy(false)
+    }
+  }, [activePhoto])
+
+  const exportActiveVideo = useCallback(() => {
+    if (!activePhoto?.isVideo) return
+    const ext = mimeTypeToVideoExtension(activePhoto.mimeType)
+    const baseName = activePhoto.name.split('/').pop() ?? activePhoto.name
+    const outName = baseName.replace(/\.[^.]+$/, '') + `-anon.${ext}`
+    saveAs(activePhoto.blob, outName)
+    setNotice(`Exported: ${outName}`)
+  }, [activePhoto])
+
+  // Vectorize panel
+  const [vectorizePanelOpen, setVectorizePanelOpen] = useState(false)
+  const [vectorizeParams, setVectorizeParams] = useState<VectorizeParams>({ ...DEFAULT_VECTORIZE_PARAMS })
+  const [svgPreview, setSvgPreview] = useState<string | null>(null)
+  const [svgPreviewUrl, setSvgPreviewUrl] = useState<string | null>(null)
+  const [svgPreviewSize, setSvgPreviewSize] = useState<number | null>(null)
+  const [vectorizing, setVectorizing] = useState(false)
+  const vectorizeDebounceRef = useRef<ReturnType<typeof setTimeout>>()
+  const vectorizePreviewUrlRef = useRef<string | null>(null)
+  const vectorizePreviewSeqRef = useRef(0)
+
+  const runVectorizePreview = useCallback(async (params: VectorizeParams) => {
+    const wc = workCanvasRef.current
+    if (!wc || wc.width === 0) return
+    const seq = ++vectorizePreviewSeqRef.current
+    setVectorizing(true)
+    try {
+      const svg = await canvasToSvg(wc, params)
+      if (seq !== vectorizePreviewSeqRef.current) return
+      const nextUrl = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }))
+      if (vectorizePreviewUrlRef.current) URL.revokeObjectURL(vectorizePreviewUrlRef.current)
+      vectorizePreviewUrlRef.current = nextUrl
+      setSvgPreview(svg)
+      setSvgPreviewUrl(nextUrl)
+      setSvgPreviewSize(new Blob([svg]).size)
+    } catch (err) {
+      console.warn('SVG vectorization preview failed:', err)
+      if (seq !== vectorizePreviewSeqRef.current) return
+      if (vectorizePreviewUrlRef.current) {
+        URL.revokeObjectURL(vectorizePreviewUrlRef.current)
+        vectorizePreviewUrlRef.current = null
+      }
+      setSvgPreview(null)
+      setSvgPreviewUrl(null)
+      setSvgPreviewSize(null)
+    } finally {
+      if (seq === vectorizePreviewSeqRef.current) setVectorizing(false)
+    }
+  }, [])
+
+  const updateVectorizeParam = useCallback(<K extends keyof VectorizeParams>(key: K, value: VectorizeParams[K]) => {
+    setVectorizeParams((prev) => {
+      const next = { ...prev, [key]: value }
+      if (vectorizeDebounceRef.current) clearTimeout(vectorizeDebounceRef.current)
+      vectorizeDebounceRef.current = setTimeout(() => runVectorizePreview(next), 400)
+      return next
+    })
+  }, [runVectorizePreview])
+
+  // Trigger preview when panel opens or preset changes
+  useEffect(() => {
+    if (vectorizePanelOpen && activePhoto && !activePhoto.isVideo) {
+      runVectorizePreview(vectorizeParams)
+      return
+    }
+    if (!vectorizePanelOpen || activePhoto?.isVideo) {
+      vectorizePreviewSeqRef.current += 1
+      if (vectorizeDebounceRef.current) clearTimeout(vectorizeDebounceRef.current)
+      if (vectorizePreviewUrlRef.current) {
+        URL.revokeObjectURL(vectorizePreviewUrlRef.current)
+        vectorizePreviewUrlRef.current = null
+      }
+      setSvgPreview(null)
+      setSvgPreviewUrl(null)
+      setSvgPreviewSize(null)
+      setVectorizing(false)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vectorizePanelOpen, activePhoto?.id, activePhoto?.isVideo])
+
+  useEffect(() => () => {
+    if (vectorizeDebounceRef.current) clearTimeout(vectorizeDebounceRef.current)
+    if (vectorizePreviewUrlRef.current) URL.revokeObjectURL(vectorizePreviewUrlRef.current)
+  }, [])
+
+  const exportAsSvg = useCallback(async () => {
+    if (!activePhoto) return
+    const wc = workCanvasRef.current
+    if (!wc || wc.width === 0) return
+    setIsBusy(true)
+    try {
+      const blob = svgPreview
+        ? new Blob([svgPreview], { type: 'image/svg+xml' })
+        : await canvasToSvgBlob(wc, vectorizeParams)
+      const baseName = activePhoto.name.split('/').pop() ?? activePhoto.name
+      const outName = baseName.replace(/\.[^.]+$/, '') + '-vector.svg'
+      saveAs(blob, outName)
+      setNotice(`Exported SVG: ${outName} (${Math.round(blob.size / 1024)} KB)`)
+    } catch { setNotice('SVG vectorization failed.') }
+    finally { setIsBusy(false) }
+  }, [activePhoto, vectorizeParams, svgPreview])
 
   const exportZip = useCallback(async () => {
     if (photos.length === 0) return
@@ -1275,7 +1866,7 @@ function App() {
               const tmpCtx = tmp.getContext('2d', { willReadFrequently: true })!
               tmpCtx.drawImage(bmp, 0, 0); bmp.close()
               applyColorAdjustments(tmpCtx, photoColorAdj, tmp)
-              const coloredBlob = await canvasToBlob(tmp, s.outputFormat)
+              const coloredBlob = await exportCanvasToBlob(tmp, s.outputFormat, s.quality, 'full')
               result = { ...result, blob: coloredBlob, afterBytes: coloredBlob.size }
             }
           }
@@ -1294,7 +1885,7 @@ function App() {
               halftoneDotSize: s.halftoneDotSize,
               halftoneShape: s.halftoneShape,
             })
-            const glitchedBlob = await canvasToBlob(glitched, s.outputFormat)
+            const glitchedBlob = await exportCanvasToBlob(glitched, s.outputFormat, s.quality, 'full')
             result = { ...result, blob: glitchedBlob, afterBytes: glitchedBlob.size }
           }
 
@@ -1310,10 +1901,11 @@ function App() {
               if (boxes.length > 0) {
                 const effId = s.batchAnonymizeEffect as AnonymizeEffectId
                 const strength = s.batchAnonymizeStrength
-                boxes.forEach((b) => applyEffectRect(tmpCtx, effId, b.x, b.y, b.width, b.height, strength, pickRandomEmoji()))
+                const batchEmojis = pickUniqueEmojis(boxes.length)
+                boxes.forEach((b, i) => applyEffectRect(tmpCtx, effId, b.x, b.y, b.width, b.height, strength, batchEmojis[i]))
               }
             } catch { /* detection failed — skip anonymize for this photo */ }
-            const anonBlob = await canvasToBlob(tmp, s.outputFormat)
+            const anonBlob = await exportCanvasToBlob(tmp, s.outputFormat, s.quality, 'full')
             result = { ...result, blob: anonBlob, afterBytes: anonBlob.size }
           }
 
@@ -1350,6 +1942,21 @@ function App() {
       setNormalizeResults((cur) => ({ ...cur, ...localResults }))
       setPhotos(updatedPhotos)
       toRevoke.forEach((url) => URL.revokeObjectURL(url))
+      // Reload work canvas if the active photo was in the batch
+      if (activePhotoId && localResults[activePhotoId]) {
+        const updated = updatedMap.get(activePhotoId)
+        if (updated) {
+          createImageBitmap(updated.blob).then((bmp) => {
+            const wc = workCanvasRef.current
+            if (wc) {
+              wc.width = bmp.width; wc.height = bmp.height
+              wc.getContext('2d')!.drawImage(bmp, 0, 0)
+              bmp.close()
+              renderCanvas()
+            }
+          }).catch(() => {})
+        }
+      }
     }
     setNormalizeSummary({ success, failed, canceled, inputBytes, outputBytes, elapsedSeconds, overwritten })
     if (canceled) { setNotice(`Cancelled after ${completed}/${batch.length}.`); return }
@@ -1378,18 +1985,26 @@ function App() {
     setColorAdj({ ...preset.values, preset: presetId })
   }, [])
 
+  const resetAdjTransformPreview = useCallback(() => {
+    setAdjTransform('none')
+    setAdjTransformStrength(35)
+    if (transformPreviewCanvasRef.current) transformPreviewCanvasRef.current.width = 0
+    renderCanvas()
+  }, [renderCanvas])
+
   const applyColorAdjToActive = useCallback(() => {
     const wc = workCanvasRef.current
     if (!wc || wc.width === 0) return
     const ctx = getWorkCtx()
     if (!ctx) return
+    pushUndo()
     applyColorAdjustments(ctx, colorAdj, wc)
     setActiveDirty(true)
     if (activePhotoId) {
       setColorAdjByPhoto((cur) => ({ ...cur, [activePhotoId]: { ...colorAdj } }))
     }
     renderCanvas()
-  }, [activePhotoId, colorAdj, getWorkCtx, renderCanvas, setActiveDirty])
+  }, [activePhotoId, colorAdj, getWorkCtx, pushUndo, renderCanvas, setActiveDirty])
 
   const applyAdjTransformToCanvas = useCallback(async () => {
     const wc = workCanvasRef.current
@@ -1401,28 +2016,35 @@ function App() {
       'pixel-shift': 'pixel-shift',
       'color-shift': 'color-shift',
     }
-    const glitched = await applyGlitchEffect(wc, {
-      subEffect: subEffectMap[adjTransform] ?? 'glitch',
-      amount: adjTransformStrength,
-      seed: Math.floor(Math.random() * 999),
-      halftoneDotSize: adjTransformParams.dotSize,
-      halftoneShape: 'circle',
-      halftoneContrast: adjTransformParams.halftoneContrast,
-      halftoneAngle: adjTransformParams.halftoneAngle,
-      glitchShift: adjTransformParams.glitchShift,
-      glitchColorSplit: adjTransformParams.glitchColorSplit,
-      pixelShiftX: adjTransformParams.pixelShiftX,
-      pixelShiftY: adjTransformParams.pixelShiftY,
-      pixelShiftType: adjPixelShiftType,
-      colorShiftHue: adjTransformParams.colorShiftHue,
-      colorShiftSat: adjTransformParams.colorShiftSat,
-    })
-    const ctx = wc.getContext('2d', { willReadFrequently: true })!
-    ctx.clearRect(0, 0, wc.width, wc.height)
-    ctx.drawImage(glitched, 0, 0)
-    setActiveDirty(true)
-    renderCanvas()
-  }, [adjTransform, adjTransformParams, adjTransformStrength, pushUndo, renderCanvas, setActiveDirty])
+    try {
+      const glitched = await applyGlitchEffect(wc, {
+        subEffect: subEffectMap[adjTransform] ?? 'glitch',
+        amount: adjTransformStrength,
+        seed: Math.floor(Math.random() * 999),
+        halftoneDotSize: adjTransformParams.dotSize,
+        halftoneShape: 'circle',
+        halftoneContrast: adjTransformParams.halftoneContrast,
+        halftoneAngle: adjTransformParams.halftoneAngle,
+        glitchShift: adjTransformParams.glitchShift,
+        glitchColorSplit: adjTransformParams.glitchColorSplit,
+        pixelShiftX: adjTransformParams.pixelShiftX,
+        pixelShiftY: adjTransformParams.pixelShiftY,
+        pixelShiftType: adjPixelShiftType,
+        colorShiftHue: adjTransformParams.colorShiftHue,
+        colorShiftSat: adjTransformParams.colorShiftSat,
+      })
+      const ctx = wc.getContext('2d', { willReadFrequently: true })!
+      ctx.clearRect(0, 0, wc.width, wc.height)
+      ctx.drawImage(glitched, 0, 0)
+      setActiveDirty(true)
+      setTransformFlyoutOpen(false)
+      resetAdjTransformPreview()
+      setNotice('Transform applied to photo.')
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      setNotice(`Transform apply failed: ${msg}`)
+    }
+  }, [adjPixelShiftType, adjTransform, adjTransformParams, adjTransformStrength, pushUndo, resetAdjTransformPreview, setActiveDirty])
   // applyAdjTransformToCanvas is called from toolbar Apply if a transform is pending
   void applyAdjTransformToCanvas
 
@@ -1434,8 +2056,8 @@ function App() {
       return
     }
     setPreviewRendering(true)
-    if (exportFormat === 'image/png') {
-      quantizeCanvasToBlob(wc, exportPngDepth).then((blob) => {
+    if (isLosslessFormat(exportFormat)) {
+      exportCanvasToBlob(wc, exportFormat, exportQuality, exportPngDepth).then((blob) => {
         setPreviewFileSizeKb(Math.round(blob.size / 1024))
         if (qualityPreviewCanvasRef.current) { qualityPreviewCanvasRef.current.width = 0 }
         renderCanvasRef.current()
@@ -1516,7 +2138,7 @@ function App() {
     const clear = () => {
       if (transformPreviewCanvasRef.current) { transformPreviewCanvasRef.current.width = 0 }
     }
-    if (!adjFlyoutOpen || adjTransform === 'none') {
+    if ((!adjFlyoutOpen && !transformFlyoutOpen) || adjTransform === 'none') {
       clear(); renderCanvasRef.current(); return
     }
     const wc = workCanvasRef.current
@@ -1556,7 +2178,7 @@ function App() {
     }, 180)
     return () => { if (transformPreviewDebounceRef.current) clearTimeout(transformPreviewDebounceRef.current) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [adjFlyoutOpen, adjTransform, adjTransformStrength, adjTransformParams, adjPixelShiftType, activePhoto?.id])
+  }, [adjFlyoutOpen, transformFlyoutOpen, adjTransform, adjTransformStrength, adjTransformParams, adjPixelShiftType, activePhoto?.id])
 
   // Recompute preview file size debounced whenever quality/format/depth/photo changes
   useEffect(() => {
@@ -1692,6 +2314,7 @@ function App() {
     }
     if (toolMode === 'brush') {
       pushUndo()
+      brushEmojiRef.current = pickRandomEmoji()
       pointerSessionRef.current = { mode: 'brush', lastPointer: mapped }
       setCursorPoint({ x: mapped.canvasX, y: mapped.canvasY })
       brushLastApplyRef.current = 0
@@ -1868,6 +2491,36 @@ function App() {
     }
   }, [activePhoto, activeZones, brushStrength, getWorkCtx, originalBlobByPhoto, setActiveZones, zonesAnonymized])
 
+  // Live re-apply zones when brushStrength changes (while zones are already anonymized)
+  const strengthDebounceRef = useRef<ReturnType<typeof setTimeout>>()
+  useEffect(() => {
+    if (!zonesAnonymized || !activePhoto || activeZones.length === 0) return
+    const orig = originalBlobByPhoto[activePhoto.id]
+    if (!orig) return
+    if (strengthDebounceRef.current) clearTimeout(strengthDebounceRef.current)
+    strengthDebounceRef.current = setTimeout(() => {
+      createImageBitmap(orig).then((bmp) => {
+        const wc = workCanvasRef.current!
+        if (!wc) return
+        if (wc.width !== bmp.width || wc.height !== bmp.height) {
+          wc.width = bmp.width; wc.height = bmp.height; workCtxRef.current = null
+        }
+        const ctx = getWorkCtx()
+        if (ctx) {
+          ctx.clearRect(0, 0, wc.width, wc.height)
+          ctx.drawImage(bmp, 0, 0)
+        }
+        bmp.close()
+        activeZones.forEach((z) =>
+          applyEffectRect(ctx!, z.effect, z.x * wc.width, z.y * wc.height, z.width * wc.width, z.height * wc.height, brushStrength, z.emoji),
+        )
+        renderCanvasRef.current()
+      }).catch(() => {})
+    }, 150)
+    return () => { if (strengthDebounceRef.current) clearTimeout(strengthDebounceRef.current) }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [brushStrength])
+
   // Sync brushSizeRef when slider changes
   useEffect(() => { brushSizeRef.current = brushSize }, [brushSize])
 
@@ -1982,15 +2635,102 @@ function App() {
     } catch { setDepsStatus(null) }
   }, [])
 
+  const isWindows = typeof navigator !== 'undefined' && /win/i.test(navigator.platform ?? '')
+
+  const INSTALL_SCRIPT_SH = `#!/usr/bin/env bash
+# W3PN Anonymizer — Install & start Python backend (macOS / Linux)
+# This script runs LOCALLY on your machine. No data is sent anywhere.
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)/server"
+VENV_DIR="$SCRIPT_DIR/.venv"
+echo ""
+echo "╔══════════════════════════════════════════════════════╗"
+echo "║  W3PN Anonymizer — Python backend setup & start      ║"
+echo "╚══════════════════════════════════════════════════════╝"
+echo ""
+# 1. Check Python
+if command -v python3 &>/dev/null; then PYTHON=python3
+elif command -v python &>/dev/null; then PYTHON=python
+else echo "❌ Python not found. Install from https://python.org"; exit 1; fi
+PY_VER=$($PYTHON --version); echo "✓ $PY_VER"
+# 2. Virtual environment
+[ ! -d "$VENV_DIR" ] && { echo "→ Creating venv…"; $PYTHON -m venv "$VENV_DIR"; }
+source "$VENV_DIR/bin/activate"
+# 3. Install packages: fastapi, uvicorn, opencv, pillow, numpy
+echo "→ Installing dependencies…"
+pip install --quiet --upgrade pip
+pip install --upgrade -r "$SCRIPT_DIR/requirements.txt"
+echo "✓ All packages installed"
+# 4. Download YuNet face detection model (~400 KB)
+MODEL="$SCRIPT_DIR/models/face_detection_yunet_2023mar.onnx"
+mkdir -p "$SCRIPT_DIR/models"
+[ ! -f "$MODEL" ] && curl -fL "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx" -o "$MODEL" 2>/dev/null && echo "✓ Model downloaded"
+# 5. Start server on http://127.0.0.1:7865
+echo ""; echo "✅ Starting server on http://127.0.0.1:7865"; echo "   Press Ctrl+C to stop."; echo ""
+cd "$SCRIPT_DIR" && exec python main.py
+`
+
+  const INSTALL_SCRIPT_BAT = `@echo off
+REM W3PN Anonymizer — Install ^& start Python backend (Windows)
+REM This script runs LOCALLY. No data is sent anywhere.
+setlocal EnableDelayedExpansion
+set "SD=%~dp0server"
+echo.
+echo  W3PN Anonymizer — Python backend setup
+echo.
+REM 1. Check Python
+where python >nul 2>&1
+if errorlevel 1 ( echo Python not found. Install from https://python.org & pause & exit /b 1 )
+set PYTHON=python
+REM 2. Virtual environment
+if not exist "%SD%\\.venv\\" ( echo Creating venv... & %PYTHON% -m venv "%SD%\\.venv" )
+call "%SD%\\.venv\\Scripts\\activate.bat"
+REM 3. Install packages
+echo Installing dependencies...
+pip install --quiet --upgrade pip
+pip install --upgrade -r "%SD%\\requirements.txt"
+echo All packages installed
+REM 4. YuNet model
+set "MF=%SD%\\models\\face_detection_yunet_2023mar.onnx"
+if not exist "%SD%\\models\\" mkdir "%SD%\\models"
+if not exist "%MF%" ( powershell -Command "Invoke-WebRequest -Uri 'https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx' -OutFile '%MF%' -UseBasicParsing" )
+REM 5. Start server
+echo.
+echo Starting server on http://127.0.0.1:7865
+echo Press Ctrl+C to stop.
+echo.
+cd "%SD%" & %PYTHON% main.py
+endlocal
+`
+
+  const downloadInstallScript = useCallback(() => {
+    const script = isWindows ? INSTALL_SCRIPT_BAT : INSTALL_SCRIPT_SH
+    const filename = isWindows ? 'anonymizer-setup.bat' : 'anonymizer-setup.sh'
+    const blob = new Blob([script], { type: 'text/plain' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = filename; a.click()
+    URL.revokeObjectURL(url)
+  }, [isWindows])
+
   const runInstall = useCallback(async () => {
     setDepsInstalling(true)
     setInstallResult(null)
     try {
       const result = await triggerInstall()
+      if (!result) {
+        setInstallResult({ ok: false, returncode: -1, stdout: '', stderr: '', message: 'Server not reachable. Start the Python server first, then try again.' })
+        return
+      }
       setInstallResult(result)
       const status = await checkDeps()
       setDepsStatus(status)
-    } catch { setInstallResult({ ok: false, returncode: -1, stdout: '', stderr: 'Request failed', message: 'Install request failed — is the server running?' }) }
+      if (result.ok) {
+        setTimeout(() => {
+          initializeDetector().then((s) => { setDetector(s); setNotice(`Backend connected: ${s.message}`) })
+        }, 1500)
+      }
+    } catch { setInstallResult({ ok: false, returncode: -1, stdout: '', stderr: '', message: 'Server not reachable. Start the Python server first, then try again.' }) }
     finally { setDepsInstalling(false) }
   }, [])
 
@@ -2018,13 +2758,7 @@ function App() {
       // Trigger batch preview after canvas is loaded (avoids race with 350ms debounce)
       if (computeBatchPreviewRef.current) computeBatchPreviewRef.current()
 
-      // Auto-detect faces unless we already have zones for this photo
-      const alreadyHasZones = (zonesByPhoto[activePhoto.id] ?? []).length > 0
-      if (autoDetect && !alreadyHasZones && detector.mode !== 'unavailable') {
-        setIsBusy(false)
-        if (cancelled) return
-        await detectFacesOnActiveImage(true)
-      }
+      // Auto-detect is triggered by the [autoDetect, detector.mode, activePhoto?.id] effect below
     }).catch(() => setNotice('Failed to load photo.'))
       .finally(() => { if (!cancelled) setIsBusy(false) })
     return () => { cancelled = true }
@@ -2033,15 +2767,26 @@ function App() {
 
   useEffect(() => { renderCanvas() }, [renderCanvas, activeZones, selectedZoneId, draftZone, cursorPoint, toolMode, showBoxes])
 
-  // Re-run face detection when autoDetect is toggled ON for the current photo
+  // Auto-detect: fires when detector becomes ready, photo changes, or autoDetect toggles ON
   useEffect(() => {
     if (!autoDetect || !activePhoto) return
-    const alreadyHasZones = activeZones.length > 0
-    if (!alreadyHasZones && detector.mode !== 'unavailable') {
-      detectFacesOnActiveImage(true)
-    }
+    if (detector.mode === 'unavailable') return
+    let cancelled = false
+
+    // Small delay to let the photo-loading effect finish drawing to workCanvas
+    const timer = setTimeout(() => {
+      if (cancelled) return
+      const wc = workCanvasRef.current
+      if (!wc || wc.width === 0) return
+      const alreadyHasZones = (zonesByPhoto[activePhoto.id] ?? []).length > 0
+      if (!alreadyHasZones) {
+        detectFacesOnActiveImage(true)
+      }
+    }, 300)
+
+    return () => { cancelled = true; clearTimeout(timer) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoDetect])
+  }, [autoDetect, detector.mode, activePhoto?.id])
 
   useEffect(() => {
     const viewport = viewportRef.current
@@ -2110,7 +2855,19 @@ function App() {
     setDirtyByPhoto((cur) => { const next = { ...cur }; delete next[photoId]; return next })
     setColorAdjByPhoto((cur) => { const next = { ...cur }; delete next[photoId]; return next })
     setAppliedByPhoto((cur) => { const next = { ...cur }; delete next[photoId]; return next })
-    if (activePhotoId === photoId) setActivePhotoId(null)
+    setVideoFrameOverridesByPhoto((cur) => {
+      const next = { ...cur }
+      delete next[photoId]
+      return next
+    })
+    if (activePhotoId === photoId) {
+      setActivePhotoId(null)
+      detectingRef.current = false
+      setIsDetecting(false)
+      setLocalProcessingMs(null)
+      if (videoAbortRef.current) { videoAbortRef.current.abort(); videoAbortRef.current = null }
+      setVideoProcessing(false)
+    }
   }, [activePhotoId])
 
   const rotatePhoto = useCallback(async (photoId: string) => {
@@ -2182,18 +2939,40 @@ function App() {
         </button>
 
         <span className="topbar-tagline">
-          <a
-            href="https://github.com/web3privacy/w3pn-anonymizer"
-            target="_blank"
-            rel="noreferrer"
-            className="topbar-tagline-link"
-          >downloadable</a>
+          <span className="download-menu-wrap" ref={downloadMenuRef}>
+            <button
+              className="topbar-tagline-link download-trigger"
+              type="button"
+              onClick={() => setDownloadMenuOpen((v) => !v)}
+            >downloadable ▾</button>
+            {downloadMenuOpen && (
+              <div className="download-dropdown">
+                <a href="https://github.com/web3privacy/w3pn-anonymizer/releases/latest/download/W3PN-Anonymizer.dmg"
+                  className="download-dropdown-item">
+                  <Icon name="laptop_mac" size={14} /> Download for macOS
+                </a>
+                <a href="https://github.com/web3privacy/w3pn-anonymizer/releases/latest/download/W3PN-Anonymizer-Setup.exe"
+                  className="download-dropdown-item">
+                  <Icon name="desktop_windows" size={14} /> Download for Windows
+                </a>
+                <a href="https://github.com/web3privacy/w3pn-anonymizer/releases/latest/download/W3PN-Anonymizer.AppImage"
+                  className="download-dropdown-item">
+                  <Icon name="computer" size={14} /> Download for Linux
+                </a>
+                <div className="download-dropdown-divider" />
+                <a href="https://github.com/web3privacy/w3pn-anonymizer/releases" target="_blank" rel="noreferrer"
+                  className="download-dropdown-item" onClick={() => setDownloadMenuOpen(false)}>
+                  <Icon name="open_in_new" size={14} /> All releases on GitHub
+                </a>
+              </div>
+            )}
+          </span>
           {' · private · no data collected'}
         </span>
 
         <div className="topbar-gap" />
 
-        {/* Demo button — small, muted */}
+        {/* Demo button */}
         <button
           className="topbar-demo-btn"
           type="button"
@@ -2203,6 +2982,70 @@ function App() {
         >
           Demo
         </button>
+
+        {/* Processing mode toggle + badge — grouped tightly */}
+        <div className="topbar-processing-group">
+          {/* Privacy shield icon */}
+          <div className="privacy-shield-wrap">
+            <button
+              className={`privacy-shield-btn${processingLocal ? ' secure' : ''}`}
+              type="button"
+              title="Privacy status"
+              aria-label="Privacy status"
+              onClick={() => setAboutOpen(true)}
+            >
+              <Icon name={processingLocal ? 'verified_user' : 'shield'} size={14} />
+            </button>
+            <div className="privacy-shield-tooltip">
+              <div className="privacy-shield-title">
+                {processingLocal ? '✅ Fully Local' : '⚠️ Hybrid Mode'}
+              </div>
+              <ul className="privacy-shield-list">
+                <li className="ok">No analytics or tracking</li>
+                <li className="ok">No third-party fonts or CDNs</li>
+                <li className="ok">CSP blocks outbound connections</li>
+                <li className="ok">Images stay in browser memory</li>
+                <li className={processingLocal ? 'ok' : 'warn'}>
+                  {processingLocal ? 'Face detection: browser-only' : 'Face detection: may use server'}
+                </li>
+              </ul>
+            </div>
+          </div>
+
+          <span className="topbar-privacy-badge visible">
+            {processingLocal ? 'Your data never leaves your device' : 'Data processed by W3PN server, no data saved'}
+          </span>
+
+          <div
+            className="processing-toggle"
+            title={processingLocal
+              ? 'Local mode — all processing in your browser. Click to switch to server.'
+              : 'Server mode — may use backend for better accuracy. Click for fully local.'}
+          >
+            <button
+              className={`processing-toggle-opt${!processingLocal ? ' active' : ''}`}
+              type="button"
+              onClick={() => {
+                setProcessingLocal(false); setForceLocal(false); localStorage.setItem('anonymizer-processing-local', 'false')
+                resetDetectorStatus()
+                initializeDetector().then((s) => setDetector(s))
+              }}
+            >
+              <Icon name="cloud" size={11} /> Server
+            </button>
+            <button
+              className={`processing-toggle-opt${processingLocal ? ' active' : ''}`}
+              type="button"
+              onClick={() => {
+                setProcessingLocal(true); setForceLocal(true); localStorage.setItem('anonymizer-processing-local', 'true')
+                resetDetectorStatus()
+                initializeDetector().then((s) => setDetector(s))
+              }}
+            >
+              <Icon name="lock" size={11} /> Local
+            </button>
+          </div>
+        </div>
 
         {/* GitHub link in topbar */}
         <a
@@ -2228,14 +3071,65 @@ function App() {
       </header>
 
       {/* hidden file inputs */}
-      <input ref={uploadInputRef} type="file" accept="image/*" multiple onChange={handleUploadInput} hidden />
+      <input ref={uploadInputRef} type="file" accept="image/*,video/*" multiple onChange={handleUploadInput} hidden />
       <input ref={folderInputRef} type="file" multiple onChange={handleFolderInput} hidden
         // @ts-expect-error webkitdirectory is not in React's type defs
         webkitdirectory="" directory="" />
 
       {/* ── Workspace — flex row: sidebar | resizer | batch | tool-strip | editor ── */}
       <div className="workspace">
+
+        {/* ── Welcome screen (no photos loaded) ──────────────── */}
+        {photos.length === 0 && (
+          <div
+            className={`welcome-screen${isDragOver ? ' drag-active' : ''}`}
+            onDragEnter={handleDragEnter}
+            onDragLeave={handleDragLeave}
+            onDragOver={handleDragOver}
+            onDrop={handleDrop}
+          >
+            {isDragOver ? (
+              <div className="welcome-drag-overlay">
+                <Icon name="folder_open" size={52} />
+                <span>Drop to add photos or folders</span>
+              </div>
+            ) : (
+              <div className="welcome-content">
+                <button className="welcome-upload-btn" type="button" onClick={openUnifiedPicker}>
+                  <Icon name="cloud_upload" size={48} />
+                  <span className="welcome-upload-title">Upload media</span>
+                  <span className="welcome-upload-sub">Drop files, paste from clipboard, or click to browse</span>
+                  <span className="welcome-upload-formats">JPG · PNG · WebP · GIF · BMP · MP4 · WebM · and more</span>
+                  <span className="welcome-upload-shortcut">
+                    <kbd className="kbd">{navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'}+V</kbd> paste from clipboard
+                  </span>
+                </button>
+
+                <div className="welcome-features">
+                  {[
+                    { icon: 'visibility_off', title: 'Face Anonymization', desc: 'Auto-detect and blur, pixelate, or cover faces with emoji' },
+                    { icon: 'videocam', title: 'Video Anonymization', desc: 'Frame-by-frame local video processing — MP4, WebM, MOV' },
+                    { icon: 'brush', title: 'Brush & Zone Tools', desc: 'Paint over or draw rectangles on any sensitive area' },
+                    { icon: 'polyline', title: 'SVG Vectorization', desc: 'Convert images to SVG with live preview and 8 presets' },
+                    { icon: 'batch_prediction', title: 'Batch Processing', desc: 'Resize, crop, convert, grade, and anonymize photos in bulk' },
+                    { icon: 'lock', title: 'Fully Local', desc: 'No data ever leaves your device — no cloud, no tracking' },
+                  ].map((f) => (
+                    <button key={f.icon} className="welcome-feature-card" type="button" onClick={() => setAboutOpen(true)}>
+                      <Icon name={f.icon} size={20} />
+                      <div>
+                        <div className="welcome-feature-title">{f.title}</div>
+                        <div className="welcome-feature-desc">{f.desc}</div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* ── Sidebar ───────────────────────────────────────── */}
+        {photos.length > 0 && (
         <aside
           className="sidebar"
           style={{
@@ -2245,24 +3139,7 @@ function App() {
             transition: 'width 0.18s cubic-bezier(0.4,0,0.2,1)',
           }}
         >
-          {photos.length === 0 ? (
-            /* Empty state — large drop zone */
-            <button
-              className={`sidebar-dropzone${isDragOver ? ' drag-active' : ''}`}
-              type="button"
-              onClick={openUnifiedPicker}
-              onDragEnter={handleDragEnter}
-              onDragOver={handleDragOver}
-              onDrop={handleDrop}
-            >
-              <span className="sidebar-dropzone-icon"><Icon name="upload_file" size={36} /></span>
-              <span>Drop photos or a folder here</span>
-              <span className="sidebar-dropzone-link">Browse files</span>
-              <span style={{ fontSize: '0.65rem', opacity: 0.55 }}>
-                JPG · PNG · WebP · and more
-              </span>
-            </button>
-          ) : (
+          {(
             /* Photos loaded — compact top bar + list */
             <>
               <div className="sidebar-topbar">
@@ -2363,12 +3240,12 @@ function App() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
                   {batchPanelOpen && photos.length > 0 && (
                     <>
-                      <button className="icon-btn" type="button" onClick={selectAllForBatch} title="Select all"><Icon name="done_all" size={14} /></button>
-                      <button className="icon-btn" type="button" onClick={deselectAllForBatch} title="Deselect all"><Icon name="remove_done" size={14} /></button>
+                      <button className="icon-btn" type="button" onClick={selectAllForBatch} title="Select all" aria-label="Select all"><Icon name="done_all" size={14} /></button>
+                      <button className="icon-btn" type="button" onClick={deselectAllForBatch} title="Deselect all" aria-label="Deselect all"><Icon name="remove_done" size={14} /></button>
                     </>
                   )}
-                  <button className={`icon-btn ${sidebarView === 'grid' ? 'active' : ''}`} type="button" onClick={() => setSidebarView('grid')} title="Thumbnails"><Icon name="grid_view" size={14} /></button>
-                  <button className={`icon-btn ${sidebarView === 'list' ? 'active' : ''}`} type="button" onClick={() => setSidebarView('list')} title="List"><Icon name="list" size={14} /></button>
+                  <button className={`icon-btn ${sidebarView === 'grid' ? 'active' : ''}`} type="button" onClick={() => setSidebarView('grid')} title="Thumbnails" aria-label="Thumbnails"><Icon name="grid_view" size={14} /></button>
+                  <button className={`icon-btn ${sidebarView === 'list' ? 'active' : ''}`} type="button" onClick={() => setSidebarView('list')} title="List" aria-label="List"><Icon name="list" size={14} /></button>
                 </div>
               </div>
 
@@ -2397,6 +3274,9 @@ function App() {
                       {isEdited && (
                         <div className="photo-edited-badge" title="Edited">✓</div>
                       )}
+                      {photo.isVideo && (
+                        <div className="photo-video-badge" title="Video">▶</div>
+                      )}
                       {sidebarView === 'grid' ? (
                         <img src={photo.previewUrl} alt={photo.name} loading="lazy" />
                       ) : (
@@ -2422,6 +3302,7 @@ function App() {
                           className="photo-item-action-btn"
                           type="button"
                           title="Rotate 90°"
+                          aria-label="Rotate 90°"
                           onClick={(e) => { e.stopPropagation(); rotatePhoto(photo.id) }}
                         >
                           <Icon name="rotate_90_degrees_cw" size={13} />
@@ -2430,6 +3311,7 @@ function App() {
                           className="photo-item-action-btn photo-item-action-btn--danger"
                           type="button"
                           title="Remove from list"
+                          aria-label="Remove from list"
                           onClick={(e) => { e.stopPropagation(); deletePhoto(photo.id) }}
                         >
                           <Icon name="delete" size={13} />
@@ -2473,7 +3355,9 @@ function App() {
             </>
           )}
         </aside>
+        )}
 
+        {photos.length > 0 && (<>
         {/* ── Sidebar resize handle ────────────────────────── */}
         <div
           className="sidebar-resizer"
@@ -2486,38 +3370,40 @@ function App() {
         {/* ── Tool Strip ───────────────────────────────────── */}
         <div className="tool-strip">
 
-          {/* 1. Auto-detect toggle — unified: ON=zones visible+active, OFF=zones hidden */}
+          {/* 1. Auto-detect toggle — color states: green=backend, orange=local, red=failed */}
           <div className="ts-tooltip-wrap" style={{ position: 'relative' }}>
-            <button
-              className={`ts-btn ts-btn-autodetect${autoDetect ? ' active' : ''}${(detector as { mode?: string }).mode !== 'backend' ? ' ts-btn-warn' : ''}`}
-              type="button"
-              onClick={() => {
-                const next = !autoDetect
-                setAutoDetect(next)
-                setShowBoxes(next)   // ON → show zones, OFF → hide zones
-              }}
-              title={autoDetect ? 'Face detection ON — click to disable and hide zones' : 'Face detection OFF — click to enable and show zones'}
-            >
-              <Icon name="face_retouching_natural" filled={autoDetect} size={18} />
-              {autoDetect && activeZones.length > 0 && (
-                <span className="ts-face-count-inline">{activeZones.length}</span>
-              )}
-            </button>
-            {/* Orange deps-warning dot — shown when Python backend is not active */}
-            {(detector as { mode?: string }).mode !== 'backend' && (
-              <button
-                className="ts-deps-dot"
-                type="button"
-                title="Python backend unavailable — click for details and install options"
-                onClick={(e) => { e.stopPropagation(); openDepsModal() }}
-              />
-            )}
-            <span className="ts-tooltip">
-              {autoDetect
-                ? `Detection: ON${activeZones.length > 0 ? ` · ${activeZones.length} face${activeZones.length !== 1 ? 's' : ''}` : ''}`
-                : 'Detection: OFF (zones hidden)'}
-              {(detector as { mode?: string }).mode !== 'backend' && ' · backend offline'}
-            </span>
+            {(() => {
+              const detMode = (detector as { mode?: string }).mode
+              const backendOff = detMode !== 'backend' && detMode !== 'mediapipe' && detMode !== 'yunet-wasm'
+              const btnClass = lastDetectFailed && autoDetect
+                ? ' ts-btn-fail'
+                : backendOff ? ' ts-btn-setup' : ''
+              return (<>
+                <button
+                  className={`ts-btn ts-btn-autodetect${autoDetect ? ' active' : ''}${btnClass}`}
+                  type="button"
+                  onClick={() => {
+                    const next = !autoDetect
+                    setAutoDetect(next)
+                    setShowBoxes(next)
+                  }}
+                  onDoubleClick={() => openDepsModal()}
+                  title={autoDetect ? 'Face detection ON (double-click for settings)' : 'Face detection OFF'}
+                >
+                  <Icon name="face_retouching_natural" filled={autoDetect} size={18} />
+                  {autoDetect && activeZones.length > 0 && (
+                    <span className="ts-face-count-inline">{activeZones.length}</span>
+                  )}
+                </button>
+                <span className="ts-tooltip">
+                  {lastDetectFailed && autoDetect
+                    ? 'No faces found — double-click for settings'
+                    : autoDetect
+                      ? `Detection: ON${activeZones.length > 0 ? ` · ${activeZones.length} face${activeZones.length !== 1 ? 's' : ''}` : ''}${backendOff ? ' · local mode' : ''}`
+                      : 'Detection: OFF'}
+                </span>
+              </>)
+            })()}
           </div>
 
           <div className="ts-sep" />
@@ -2535,6 +3421,7 @@ function App() {
                 setAdjFlyoutOpen(false)
               }}
               title={`Effect: ${selectedEffect} — click to change`}
+              aria-label={`Effect: ${selectedEffect}`}
             >
               <Icon name={EFFECT_ICONS[selectedEffect]} size={18} />
             </button>
@@ -2555,6 +3442,7 @@ function App() {
                 setNotice('Draw a box on the photo to add a face zone.')
               }}
               title="Add zone — draw rectangle to select face region"
+              aria-label="Add zone"
             >
               <Icon name="crop_free" size={18} />
             </button>
@@ -2569,12 +3457,14 @@ function App() {
               disabled={!activePhoto}
               onClick={() => setToolMode((m) => m === 'brush' ? 'zone' : 'brush')}
               title={toolMode === 'brush' ? 'Brush active — click to switch to zone selection' : 'Brush tool — click to activate'}
+              aria-label="Brush tool"
             >
               <Icon name="brush" size={18} />
             </button>
             <span className="ts-tooltip">{toolMode === 'brush' ? 'Brush (active)' : 'Brush'}</span>
           </div>
 
+          {/* Color Adjustments flyout */}
           {adjFlyoutOpen && adjFlyoutAnchor && createPortal(
             <div
               className="ts-flyout-portal ts-flyout"
@@ -2611,80 +3501,99 @@ function App() {
                   </div>
                 ))}
               </div>
-              {/* Transform section */}
-              <div style={{ marginTop: '0.5rem', borderTop: '1px solid var(--border)', paddingTop: '0.4rem' }}>
-                <div style={{ fontSize: '0.64rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.3rem' }}>Transform</div>
-                <select
-                  className="field-select"
-                  style={{ width: '100%', marginBottom: '0.3rem' }}
-                  value={adjTransform}
-                  onChange={(e) => setAdjTransform(e.target.value)}
-                >
-                  <option value="none">None</option>
-                  <option value="halftone">Halftone</option>
-                  <option value="glitch">Glitch</option>
-                  <option value="pixel-shift">Pixel shift</option>
-                  <option value="color-shift">Color shift</option>
-                </select>
-                {adjTransform === 'halftone' && (<>
-                  {[['Dot size', 'dotSize', 2, 30] as const, ['Contrast', 'halftoneContrast', 0, 100] as const, ['Angle', 'halftoneAngle', 0, 360] as const].map(([label, key, min, max]) => (
-                    <div key={key} className="color-slider-row" style={{ gridTemplateColumns: '60px 1fr 28px' }}>
-                      <span className="color-slider-label" style={{ fontSize: '0.62rem' }}>{label}</span>
-                      <input type="range" className="color-slider-input" min={min} max={max} value={adjTransformParams[key]} onChange={(e) => setAdjParam(key, Number(e.target.value))} />
-                      <span className="color-slider-val">{adjTransformParams[key]}</span>
-                    </div>
-                  ))}
-                </>)}
-                {adjTransform === 'glitch' && (
-                  <div className="color-slider-row" style={{ gridTemplateColumns: '60px 1fr 28px' }}>
-                    <span className="color-slider-label" style={{ fontSize: '0.62rem' }}>Shift</span>
-                    <input type="range" className="color-slider-input" min={1} max={40} value={adjTransformParams.glitchShift} onChange={(e) => setAdjParam('glitchShift', Number(e.target.value))} />
-                    <span className="color-slider-val">{adjTransformParams.glitchShift}</span>
-                  </div>
-                )}
-                {adjTransform === 'pixel-shift' && (<>
-                  <div className="color-slider-row" style={{ gridTemplateColumns: '60px 1fr' }}>
-                    <span className="color-slider-label" style={{ fontSize: '0.62rem' }}>Type</span>
-                    <select className="field-select" style={{ fontSize: '0.66rem', padding: '0.15rem 0.3rem' }} value={adjPixelShiftType} onChange={(e) => setAdjPixelShiftType(e.target.value as PixelShiftType)}>
-                      <option value="wave">Wave</option>
-                      <option value="shear">Shear</option>
-                      <option value="ripple">Ripple</option>
-                      <option value="mirror">Mirror</option>
-                    </select>
-                  </div>
-                  {[['X shift', 'pixelShiftX', 1, 60] as const, ['Y shift', 'pixelShiftY', 1, 60] as const].map(([label, key, min, max]) => (
-                    <div key={key} className="color-slider-row" style={{ gridTemplateColumns: '60px 1fr 28px' }}>
-                      <span className="color-slider-label" style={{ fontSize: '0.62rem' }}>{label}</span>
-                      <input type="range" className="color-slider-input" min={min} max={max} value={adjTransformParams[key]} onChange={(e) => setAdjParam(key, Number(e.target.value))} />
-                      <span className="color-slider-val">{adjTransformParams[key]}</span>
-                    </div>
-                  ))}
-                </>)}
-                {adjTransform === 'color-shift' && (<>
-                  {[['Hue rotate', 'colorShiftHue', 0, 360] as const, ['Sat boost', 'colorShiftSat', 0, 100] as const].map(([label, key, min, max]) => (
-                    <div key={key} className="color-slider-row" style={{ gridTemplateColumns: '60px 1fr 28px' }}>
-                      <span className="color-slider-label" style={{ fontSize: '0.62rem' }}>{label}</span>
-                      <input type="range" className="color-slider-input" min={min} max={max} value={adjTransformParams[key]} onChange={(e) => setAdjParam(key, Number(e.target.value))} />
-                      <span className="color-slider-val">{adjTransformParams[key]}</span>
-                    </div>
-                  ))}
-                </>)}
-                {adjTransform !== 'none' && (
-                  <div className="color-slider-row" style={{ gridTemplateColumns: '60px 1fr 28px' }}>
-                    <span className="color-slider-label" style={{ fontSize: '0.62rem' }}>Amount</span>
-                    <input type="range" className="color-slider-input" min={1} max={80} value={adjTransformStrength} onChange={(e) => setAdjTransformStrength(Number(e.target.value))} />
-                    <span className="color-slider-val">{adjTransformStrength}</span>
-                  </div>
-                )}
-              </div>
               <div className="color-actions" style={{ marginTop: '0.4rem' }}>
                 <button className="btn btn-sm" type="button" onClick={() => {
                   setColorAdj(DEFAULT_COLOR_ADJUSTMENTS)
-                  setAdjTransform('none')
-                  setAdjTransformStrength(35)
-                  if (transformPreviewCanvasRef.current) transformPreviewCanvasRef.current.width = 0
                   renderCanvas()
-                }} title="Reset all color and transform adjustments">Reset all</button>
+                }} title="Reset color adjustments">Reset</button>
+              </div>
+            </div>,
+            document.body
+          )}
+
+          {/* Transform Effects flyout */}
+          {transformFlyoutOpen && transformFlyoutAnchor && createPortal(
+            <div
+              className="ts-flyout-portal ts-flyout"
+              style={{ position: 'fixed', top: transformFlyoutAnchor.top, left: transformFlyoutAnchor.left, zIndex: 9999 }}
+              onMouseDown={(e) => e.stopPropagation()}
+            >
+              <div className="ts-flyout-title">Transform effects</div>
+              <select
+                className="field-select"
+                style={{ width: '100%', marginBottom: '0.3rem' }}
+                value={adjTransform}
+                onChange={(e) => setAdjTransform(e.target.value)}
+              >
+                <option value="none">None</option>
+                <option value="halftone">Halftone</option>
+                <option value="glitch">Glitch</option>
+                <option value="pixel-shift">Pixel shift</option>
+                <option value="color-shift">Color shift</option>
+              </select>
+              {adjTransform === 'halftone' && (<>
+                {[['Dot size', 'dotSize', 2, 30] as const, ['Contrast', 'halftoneContrast', 0, 100] as const, ['Angle', 'halftoneAngle', 0, 360] as const].map(([label, key, min, max]) => (
+                  <div key={key} className="color-slider-row" style={{ gridTemplateColumns: '60px 1fr 28px' }}>
+                    <span className="color-slider-label" style={{ fontSize: '0.62rem' }}>{label}</span>
+                    <input type="range" className="color-slider-input" min={min} max={max} value={adjTransformParams[key]} onChange={(e) => setAdjParam(key, Number(e.target.value))} />
+                    <span className="color-slider-val">{adjTransformParams[key]}</span>
+                  </div>
+                ))}
+              </>)}
+              {adjTransform === 'glitch' && (
+                <div className="color-slider-row" style={{ gridTemplateColumns: '60px 1fr 28px' }}>
+                  <span className="color-slider-label" style={{ fontSize: '0.62rem' }}>Shift</span>
+                  <input type="range" className="color-slider-input" min={1} max={40} value={adjTransformParams.glitchShift} onChange={(e) => setAdjParam('glitchShift', Number(e.target.value))} />
+                  <span className="color-slider-val">{adjTransformParams.glitchShift}</span>
+                </div>
+              )}
+              {adjTransform === 'pixel-shift' && (<>
+                <div className="color-slider-row" style={{ gridTemplateColumns: '60px 1fr' }}>
+                  <span className="color-slider-label" style={{ fontSize: '0.62rem' }}>Type</span>
+                  <select className="field-select" style={{ fontSize: '0.66rem', padding: '0.15rem 0.3rem' }} value={adjPixelShiftType} onChange={(e) => setAdjPixelShiftType(e.target.value as PixelShiftType)}>
+                    <option value="wave">Wave</option>
+                    <option value="shear">Shear</option>
+                    <option value="ripple">Ripple</option>
+                    <option value="mirror">Mirror</option>
+                  </select>
+                </div>
+                {[['X shift', 'pixelShiftX', 1, 60] as const, ['Y shift', 'pixelShiftY', 1, 60] as const].map(([label, key, min, max]) => (
+                  <div key={key} className="color-slider-row" style={{ gridTemplateColumns: '60px 1fr 28px' }}>
+                    <span className="color-slider-label" style={{ fontSize: '0.62rem' }}>{label}</span>
+                    <input type="range" className="color-slider-input" min={min} max={max} value={adjTransformParams[key]} onChange={(e) => setAdjParam(key, Number(e.target.value))} />
+                    <span className="color-slider-val">{adjTransformParams[key]}</span>
+                  </div>
+                ))}
+              </>)}
+              {adjTransform === 'color-shift' && (<>
+                {[['Hue rotate', 'colorShiftHue', 0, 360] as const, ['Sat boost', 'colorShiftSat', 0, 100] as const].map(([label, key, min, max]) => (
+                  <div key={key} className="color-slider-row" style={{ gridTemplateColumns: '60px 1fr 28px' }}>
+                    <span className="color-slider-label" style={{ fontSize: '0.62rem' }}>{label}</span>
+                    <input type="range" className="color-slider-input" min={min} max={max} value={adjTransformParams[key]} onChange={(e) => setAdjParam(key, Number(e.target.value))} />
+                    <span className="color-slider-val">{adjTransformParams[key]}</span>
+                  </div>
+                ))}
+              </>)}
+              {adjTransform !== 'none' && (
+                <div className="color-slider-row" style={{ gridTemplateColumns: '60px 1fr 28px' }}>
+                  <span className="color-slider-label" style={{ fontSize: '0.62rem' }}>Amount</span>
+                  <input type="range" className="color-slider-input" min={1} max={80} value={adjTransformStrength} onChange={(e) => setAdjTransformStrength(Number(e.target.value))} />
+                  <span className="color-slider-val">{adjTransformStrength}</span>
+                </div>
+              )}
+              <div className="color-actions" style={{ marginTop: '0.4rem' }}>
+                <button className="btn btn-sm" type="button" onClick={() => {
+                  resetAdjTransformPreview()
+                }} title="Reset transform effects">Reset</button>
+                <button
+                  className="btn btn-sm btn-primary"
+                  type="button"
+                  onClick={() => { void applyAdjTransformToCanvas() }}
+                  disabled={!activePhoto || adjTransform === 'none'}
+                  title="Apply transform to photo"
+                >
+                  Apply
+                </button>
               </div>
             </div>,
             document.body
@@ -2700,6 +3609,7 @@ function App() {
               disabled={!activePhoto}
               onClick={() => { setToolMode((m) => m === 'crop' ? 'brush' : 'crop'); setCropDraft(null) }}
               title="Crop tool — draw a region and confirm in viewer"
+              aria-label="Crop tool"
             >
               <Icon name="crop" size={18} />
             </button>
@@ -2716,13 +3626,36 @@ function App() {
                 if (rect) setAdjFlyoutAnchor({ top: rect.top, left: rect.right + 6 })
                 setAdjFlyoutOpen((v) => !v)
                 setEffectFlyoutOpen(false)
+                setTransformFlyoutOpen(false)
               }}
               disabled={!activePhoto}
               title="Color adjustments"
+              aria-label="Color adjustments"
             >
-              <Icon name="tune" size={18} />
+              <Icon name="palette" size={18} />
             </button>
-            <span className="ts-tooltip">Adjustments</span>
+            <span className="ts-tooltip">Colors</span>
+          </div>
+
+          <div className="ts-tooltip-wrap">
+            <button
+              ref={transformFlyoutBtnRef}
+              className={`ts-btn${transformFlyoutOpen ? ' active' : ''}`}
+              type="button"
+              onClick={() => {
+                const rect = transformFlyoutBtnRef.current?.getBoundingClientRect()
+                if (rect) setTransformFlyoutAnchor({ top: rect.top, left: rect.right + 6 })
+                setTransformFlyoutOpen((v) => !v)
+                setAdjFlyoutOpen(false)
+                setEffectFlyoutOpen(false)
+              }}
+              disabled={!activePhoto}
+              title="Transform effects (halftone, glitch, pixel-shift, color-shift)"
+              aria-label="Transform effects"
+            >
+              <Icon name="auto_awesome" size={18} />
+            </button>
+            <span className="ts-tooltip">Transform</span>
           </div>
 
           {effectFlyoutOpen && effectFlyoutAnchor && createPortal(
@@ -2871,9 +3804,12 @@ function App() {
                             <option value="image/jpeg">JPG</option>
                             <option value="image/png">PNG</option>
                             <option value="image/webp">WebP</option>
+                            <option value="image/bmp">BMP</option>
+                            <option value="image/gif">GIF</option>
+                            <option value="image/tiff">TIFF</option>
                           </select>
                         </div>
-                        {normalizeSettings.outputFormat !== 'image/png' && (
+                        {(normalizeSettings.outputFormat === 'image/jpeg' || normalizeSettings.outputFormat === 'image/webp') && (
                           <div>
                             <span className="field-label">Quality</span>
                             <div className="tb-quality-wrap" style={{ marginTop: '0.25rem' }}>
@@ -3235,6 +4171,9 @@ function App() {
                   <option value="image/jpeg">JPG</option>
                   <option value="image/png">PNG</option>
                   <option value="image/webp">WebP</option>
+                  <option value="image/bmp">BMP</option>
+                  <option value="image/gif">GIF</option>
+                  <option value="image/tiff">TIFF</option>
                 </select>
 
                 {/* PNG depth selector — quantization reduces file size at the cost of color precision */}
@@ -3252,7 +4191,7 @@ function App() {
                 )}
 
                 {/* Quality slider+number — only for lossy formats */}
-                {exportFormat !== 'image/png' && (
+                {!isLosslessFormat(exportFormat) && (
                   <div className="tb-quality-wrap">
                     <input
                       className="tb-quality-slider"
@@ -3282,6 +4221,42 @@ function App() {
                   </span>
                 )}
 
+                {/* SVG vectorize toggle */}
+                {activePhoto && !activePhoto.isVideo && (
+                  <button
+                    className={`tb-btn${vectorizePanelOpen ? ' active' : ''}`}
+                    type="button"
+                    onClick={() => setVectorizePanelOpen((v) => !v)}
+                    title="Vectorize image to SVG"
+                    style={{ fontSize: '0.62rem' }}
+                  >
+                    <Icon name="polyline" size={13} /> Vectorize
+                  </button>
+                )}
+
+                {activePhoto && !activePhoto.isVideo && sourceVideoPhoto && (
+                  <>
+                    <button
+                      className="tb-btn"
+                      type="button"
+                      onClick={applySnapshotToSourceVideo}
+                      disabled={isBusy}
+                      title="Attach the current edited frame back to its source video for the next video render"
+                    >
+                      <Icon name="movie_edit" size={13} /> Apply Frame To Video
+                    </button>
+                    <button
+                      className="tb-btn"
+                      type="button"
+                      onClick={jumpToSourceVideoFromSnapshot}
+                      disabled={isBusy}
+                      title="Jump back to the source video for this frame snapshot"
+                    >
+                      <Icon name="videocam" size={13} /> Open Source Video
+                    </button>
+                  </>
+                )}
+
                 {/* Save to disk + Download — grouped on the right */}
                 <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.3rem', flexShrink: 0, position: 'relative' }}>
                   {/* Floppy: write to disk — shows error flyout if no file permissions */}
@@ -3292,6 +4267,7 @@ function App() {
                       onClick={saveActivePhoto}
                       disabled={isBusy || !activePhoto}
                       title="Save to disk — overwrites original file (requires desktop app mode)"
+                      aria-label="Save to disk"
                     >
                       <Icon name="save" size={17} />
                     </button>
@@ -3313,8 +4289,8 @@ function App() {
                     className="tb-btn"
                     style={{ background: '#3b5bdb', borderColor: '#3b5bdb', color: '#fff', fontWeight: 600 }}
                     type="button"
-                    onClick={exportActivePhoto}
-                    disabled={!activePhoto || isBusy}
+                    onClick={activePhoto?.isVideo ? exportActiveVideo : exportActivePhoto}
+                    disabled={!activePhoto || isBusy || videoProcessing}
                     title="Download anonymized copy"
                   >
                     <Icon name="download" size={15} /> Download
@@ -3378,16 +4354,232 @@ function App() {
 
             {/* Detecting overlay */}
             {isDetecting && (
-              <div className="detecting-overlay">
-                <span>⏳</span>
-                <span>Detecting faces…</span>
+              <div className="detecting-overlay" style={{ flexDirection: 'column', gap: '0.3rem', minWidth: 260, alignItems: 'center' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                  <span>⏳</span>
+                  <span>Detecting faces…</span>
+                  <ElapsedTimer />
+                </div>
+                {activePhoto && (
+                  <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', maxWidth: 230, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {activePhoto.name.split('/').pop()}
+                  </span>
+                )}
+                {detectionStep && (
+                  <span style={{ fontSize: '0.58rem', color: 'var(--accent)', opacity: 0.9 }}>{detectionStep}</span>
+                )}
+                {processingLocal && (
+                  <div className="local-proof-bar">
+                    <div className="local-proof-progress" />
+                    <span className="local-proof-label">
+                      <Icon name="lock" size={10} /> All data stays on your device
+                    </span>
+                  </div>
+                )}
+                <button
+                  className="btn btn-sm"
+                  type="button"
+                  onClick={cancelDetection}
+                  style={{ marginTop: '0.15rem', fontSize: '0.6rem', padding: '0.15rem 0.5rem' }}
+                >
+                  Stop
+                </button>
+              </div>
+            )}
+            {/* Local processing proof badge */}
+            {!isDetecting && localProcessingMs != null && processingLocal && (
+              <div className="local-proof-badge">
+                <Icon name="verified_user" size={11} /> Processed locally in {localProcessingMs} ms
+              </div>
+            )}
+
+            {/* Video processing overlay */}
+            {videoProcessing && videoProgress && (
+              <div className="detecting-overlay" style={{ flexDirection: 'column', gap: '0.6rem' }}>
+                <span>🎬</span>
+                <span>
+                  {videoProgress.phase === 'analyzing'
+                    ? 'Analyzing video tracks'
+                    : videoProgress.phase === 'preparing'
+                      ? 'Preparing frame map'
+                      : 'Rendering video'}… {videoProgress.current}/{videoProgress.total}
+                </span>
+                <div style={{ width: '60%', maxWidth: 300, height: 6, background: 'rgba(255,255,255,0.15)', borderRadius: 3, overflow: 'hidden' }}>
+                  <div style={{ width: `${(videoProgress.current / videoProgress.total) * 100}%`, height: '100%', background: 'var(--accent)', borderRadius: 3, transition: 'width 0.1s' }} />
+                </div>
+                <button className="btn btn-sm" type="button" onClick={cancelVideoProcessing} style={{ marginTop: '0.3rem' }}>
+                  Cancel
+                </button>
+              </div>
+            )}
+
+            {/* Video player — shown instead of canvas when a video is selected */}
+            {activePhoto?.isVideo && activeVideoUrl && (
+              <div className="video-player-wrap">
+                <div className="video-stage">
+                  <video
+                    key={activeVideoUrl}
+                    ref={activeVideoRef}
+                    src={activeVideoUrl}
+                    controls
+                    className="video-player"
+                    style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
+                    onTimeUpdate={(event) => setActiveVideoTime(event.currentTarget.currentTime)}
+                    onSeeked={(event) => setActiveVideoTime(event.currentTarget.currentTime)}
+                    onLoadedMetadata={(event) => setActiveVideoTime(event.currentTarget.currentTime)}
+                  />
+                  <div
+                    className={`video-mask-layer${videoMaskDrawActive ? ' drawing' : ''}`}
+                    onPointerDown={handleVideoMaskPointerDown}
+                    onPointerMove={handleVideoMaskPointerMove}
+                    onPointerUp={handleVideoMaskPointerUp}
+                    onPointerCancel={handleVideoMaskPointerUp}
+                  >
+                    {[...visibleVideoTimedZones.map((item) => item.zone), ...(videoDraftZone ? [videoDraftZone] : [])].map((zone) => (
+                      <div
+                        key={zone.id}
+                        className={`video-mask-rect${zone.id === 'draft-video-mask' ? ' draft' : ''}`}
+                        style={{
+                          left: `${zone.x * 100}%`,
+                          top: `${zone.y * 100}%`,
+                          width: `${zone.width * 100}%`,
+                          height: `${zone.height * 100}%`,
+                        }}
+                      />
+                    ))}
+                  </div>
+                </div>
+                <div className="video-controls-bar">
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                    <span>Export</span>
+                    <select
+                      className="field-select"
+                      value={videoExportFormat}
+                      onChange={(e) => setVideoExportFormat(e.target.value as VideoExportFormatId)}
+                      disabled={videoProcessing || isBusy}
+                      style={{ minWidth: 110 }}
+                    >
+                      {videoExportOptions.map((opt) => (
+                        <option key={opt.id} value={opt.id} disabled={!opt.supported}>
+                          {opt.label}{opt.supported ? '' : ' — unavailable'}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <button
+                    className="btn btn-primary"
+                    type="button"
+                    onClick={processActiveVideo}
+                    disabled={videoProcessing || isBusy}
+                  >
+                    <Icon name="auto_awesome" size={16} /> Anonymize Video
+                  </button>
+                  {hasPendingVideoEdits && (
+                    <button
+                      className="btn btn-sm"
+                      type="button"
+                      onClick={processActiveVideo}
+                      disabled={videoProcessing || isBusy}
+                      title="Bake frame snapshots and timeline masks into the anonymized video"
+                    >
+                      <Icon name="task_alt" size={14} /> Apply Changes
+                    </button>
+                  )}
+                  {activePhoto.edited && (
+                    <button
+                      className="btn btn-sm"
+                      type="button"
+                      onClick={exportActiveVideo}
+                      disabled={videoProcessing}
+                    >
+                      <Icon name="download" size={14} /> Export Video
+                    </button>
+                  )}
+                  <button
+                    className="btn btn-sm"
+                    type="button"
+                    onClick={() => stepActiveVideoFrame(-1)}
+                    disabled={videoProcessing || isBusy}
+                    title="Step one frame back"
+                  >
+                    <Icon name="skip_previous" size={14} /> Frame -
+                  </button>
+                  <button
+                    className="btn btn-sm"
+                    type="button"
+                    onClick={() => stepActiveVideoFrame(1)}
+                    disabled={videoProcessing || isBusy}
+                    title="Step one frame forward"
+                  >
+                    <Icon name="skip_next" size={14} /> Frame +
+                  </button>
+                  <button
+                    className="btn btn-sm"
+                    type="button"
+                    onClick={openCurrentVideoFrameAsSnapshot}
+                    disabled={videoProcessing || isBusy}
+                    title="Open the current video frame as an editable snapshot"
+                  >
+                    <Icon name="image" size={14} /> Edit Current Frame
+                  </button>
+                  <button
+                    className={`btn btn-sm${videoMaskDrawActive ? ' active' : ''}`}
+                    type="button"
+                    onClick={() => setVideoMaskDrawActive((cur) => !cur)}
+                    disabled={videoProcessing || isBusy}
+                    title="Draw a rectangle over the video and bake it into a time range"
+                  >
+                    <Icon name="select" size={14} /> Draw Time Mask
+                  </button>
+                  <label className="video-mask-range-label">
+                    <span>Range</span>
+                    <input
+                      type="number"
+                      min={0.2}
+                      max={30}
+                      step={0.5}
+                      value={videoMaskRangeSec}
+                      onChange={(event) => setVideoMaskRangeSec(clamp(Number(event.target.value) || 0.2, 0.2, 30))}
+                      disabled={videoProcessing || isBusy}
+                    />
+                    <span>s</span>
+                  </label>
+                  {activeVideoFrameOverrides.length > 0 && (
+                    <span className="video-meta-badge" title="Manual frame overrides that will be baked into the next video render">
+                      Manual fixes: {activeVideoFrameOverrides.length}
+                    </span>
+                  )}
+                  {activeVideoTimedZones.length > 0 && (
+                    <>
+                      <span className="video-meta-badge" title="Manual timeline masks that will be baked into the next video render">
+                        Time masks: {activeVideoTimedZones.length}
+                      </span>
+                      <button className="btn btn-sm" type="button" onClick={clearVideoTimedZones} disabled={videoProcessing}>
+                        Reset Masks
+                      </button>
+                    </>
+                  )}
+                  <span
+                    className="video-meta-badge"
+                    title={`Timeline worker: ${videoPipelineCapabilities.timelineWorker ? 'yes' : 'no'} · Manual frame pacing: ${videoPipelineCapabilities.manualCanvasFrameCapture ? 'yes' : 'no'} · WebCodecs renderer: ${videoPipelineCapabilities.webCodecsRenderer ? 'available' : 'not available'} · Raw WebCodecs encoder: ${videoPipelineCapabilities.webCodecs ? 'available' : 'not available'}`}
+                  >
+                    Pipeline: {videoPipelineCapabilities.timelineWorker ? 'worker' : 'main'} · {videoPipelineCapabilities.webCodecsRenderer ? 'WebCodecs render' : 'MediaRecorder'}
+                  </span>
+                  {activePhoto.videoDuration != null && (
+                    <span className="video-meta-badge">
+                      {formatVideoTime(activePhoto.videoDuration)}
+                      {activePhoto.videoWidth ? ` · ${activePhoto.videoWidth}×${activePhoto.videoHeight}` : ''}
+                      {activePhoto.videoFps ? ` · ${Math.round(activePhoto.videoFps)} fps` : ''}
+                    </span>
+                  )}
+                </div>
               </div>
             )}
 
             <canvas
               ref={canvasRef}
               className={batchPanelOpen && !isNormalizeCropPicking ? 'readonly-canvas' : ''}
-              style={toolMode === 'crop' ? { cursor: 'crosshair' } : undefined}
+              style={activePhoto?.isVideo ? { display: 'none' } : (toolMode === 'crop' ? { cursor: 'crosshair' } : undefined)}
               onPointerDown={handleCanvasPointerDown}
               onPointerMove={handleCanvasPointerMove}
               onPointerUp={handleCanvasPointerUp}
@@ -3414,6 +4606,7 @@ function App() {
                     style={{ top, left }}
                     onClick={(e) => { e.stopPropagation(); removeZoneById(id) }}
                     title="Remove this face box"
+                    aria-label="Remove this face box"
                   >
                     ×
                   </button>
@@ -3439,6 +4632,92 @@ function App() {
                 />
               )
             })()}
+
+            {/* SVG vectorize preview overlay */}
+            {vectorizePanelOpen && svgPreviewUrl && (() => {
+              const t = transformRef.current
+              const hasFrame = t.drawWidth > 0 && t.drawHeight > 0
+              return (
+                <div
+                  className="svg-preview-overlay"
+                  style={hasFrame ? { left: t.drawX, top: t.drawY, width: t.drawWidth, height: t.drawHeight } : undefined}
+                >
+                  <img src={svgPreviewUrl} alt="SVG vectorized preview" />
+                </div>
+              )
+            })()}
+
+            {/* Vectorize panel — flyout from toolbar */}
+            {vectorizePanelOpen && activePhoto && !activePhoto.isVideo && (
+              <div className="vectorize-panel">
+                <div className="vectorize-panel-header">
+                  <span style={{ fontWeight: 600, fontSize: '0.72rem' }}>Vectorize to SVG</span>
+                  {vectorizing && <span className="vectorize-spinner">⏳</span>}
+                  {svgPreviewSize != null && !vectorizing && (
+                    <span style={{ fontSize: '0.62rem', color: 'var(--text-muted)' }}>~{Math.round(svgPreviewSize / 1024)} KB</span>
+                  )}
+                </div>
+
+                <label className="vectorize-label">Preset</label>
+                <select
+                  className="field-select"
+                  value={vectorizeParams.preset}
+                  onChange={(e) => {
+                    const preset = e.target.value as VectorizePreset
+                    const next = { ...vectorizeParams, preset }
+                    setVectorizeParams(next)
+                    runVectorizePreview(next)
+                  }}
+                >
+                  {VECTORIZE_PRESETS.map((p) => (
+                    <option key={p.id} value={p.id} title={p.desc}>{p.label}</option>
+                  ))}
+                </select>
+
+                {vectorizeParams.preset === 'default' && (<>
+                  <label className="vectorize-label">Colors: {vectorizeParams.colorCount}</label>
+                  <input type="range" min={2} max={64} value={vectorizeParams.colorCount}
+                    onChange={(e) => updateVectorizeParam('colorCount', Number(e.target.value))} />
+
+                  <label className="vectorize-label">Smoothing: {vectorizeParams.minPathLength.toFixed(1)}</label>
+                  <input type="range" min={0.5} max={10} step={0.5} value={vectorizeParams.minPathLength}
+                    onChange={(e) => updateVectorizeParam('minPathLength', Number(e.target.value))} />
+
+                  <label className="vectorize-label">Corner rounding: {vectorizeParams.cornerThreshold.toFixed(1)}</label>
+                  <input type="range" min={0} max={2} step={0.1} value={vectorizeParams.cornerThreshold}
+                    onChange={(e) => updateVectorizeParam('cornerThreshold', Number(e.target.value))} />
+                </>)}
+
+                {vectorizing && (
+                  <div className="vectorize-progress">
+                    <div className="vectorize-progress-bar" />
+                  </div>
+                )}
+
+                <button
+                  className="btn btn-primary"
+                  type="button"
+                  onClick={exportAsSvg}
+                  disabled={isBusy || vectorizing}
+                  style={{ marginTop: '0.4rem', width: '100%' }}
+                >
+                  <Icon name="download" size={14} /> Download SVG
+                </button>
+              </div>
+            )}
+
+            {/* Save snapshot — bottom-left (shown when photo has edits, not for video) */}
+            {activePhoto && !activePhoto.isVideo && (dirtyByPhoto[activePhoto.id] || zonesAnonymized) && !batchPanelOpen && (
+              <button
+                className="snapshot-corner-btn"
+                type="button"
+                onClick={saveSnapshot}
+                disabled={isBusy}
+                title="Save a snapshot of the current state as a new image in the explorer"
+              >
+                <Icon name="add_a_photo" size={13} /> Save snapshot
+              </button>
+            )}
 
             {/* Quality preview progress — bottom-left mini bar */}
             {previewRendering && (
@@ -3491,132 +4770,204 @@ function App() {
             )}
           </div>
         </div>
+        </>)}
       </div>
 
       {/* ── About modal ───────────────────────────────────── */}
       {/* ── Backend deps modal ───────────────────────────────────────────── */}
       {depsModalOpen && (
         <div className="about-backdrop" onClick={() => setDepsModalOpen(false)}>
-          <div className="about-modal deps-modal" onClick={(e) => e.stopPropagation()}>
+          <div className="about-modal deps-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 440 }}>
             <button className="about-modal-close" type="button" onClick={() => setDepsModalOpen(false)}>✕ Close</button>
-            <h2 style={{ margin: '0 0 0.3rem', fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', background: (detector as { mode?: string }).mode === 'backend' ? 'var(--accent)' : 'var(--warn)', flexShrink: 0 }} />
-              Python backend — {(detector as { mode?: string }).mode === 'backend' ? 'connected' : 'not connected'}
-            </h2>
-            <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '0 0 0.7rem', lineHeight: 1.5 }}>
-              {(detector as { mode?: string }).mode === 'backend'
-                ? 'The local Python backend is running. Face detection uses OpenCV YuNet — highest accuracy.'
-                : 'The app is using browser-based AI (face-api.js) for face detection. For higher accuracy, set up the local Python backend.'}
-            </p>
+            <h2 style={{ margin: '0 0 0.4rem', fontSize: '1.05rem' }}>Face Detection</h2>
 
-            {/* Current detection mode */}
-            <div style={{ fontSize: '0.75rem', marginBottom: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
-              <div style={{ fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.2rem' }}>Active detection mode</div>
-              {[
-                { label: 'Python backend (OpenCV YuNet)', mode: 'backend', best: true },
-                { label: 'Native browser FaceDetector', mode: 'native', best: false },
-                { label: 'face-api.js (JS fallback)', mode: 'face-api', best: false },
-                { label: 'Unavailable', mode: 'unavailable', best: false },
-              ].map(({ label, mode, best }) => {
-                const active = (detector as { mode?: string }).mode === mode
-                return (
-                  <div key={mode} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', opacity: active ? 1 : 0.35 }}>
-                    <span style={{ width: 7, height: 7, borderRadius: '50%', flexShrink: 0, background: active ? (best ? 'var(--accent)' : 'var(--warn)') : 'var(--border)' }} />
-                    <span style={{ color: active ? 'var(--text-primary)' : 'var(--text-muted)' }}>
-                      {label}{best && <span style={{ color: 'var(--accent)', marginLeft: 4, fontSize: '0.68rem' }}>recommended</span>}
-                    </span>
+            {/* ── Active mode pill ──────────────────────────── */}
+            {(() => {
+              const dm = (detector as { mode?: string }).mode
+              const isGood = dm === 'backend' || dm === 'yunet-wasm' || dm === 'mediapipe'
+              return (
+                <div style={{ padding: '0.35rem 0.5rem', borderRadius: 6, background: isGood ? 'var(--accent-soft)' : 'rgba(255,169,77,0.08)', border: `1px solid ${isGood ? 'rgba(112,255,136,0.2)' : 'rgba(255,169,77,0.2)'}`, marginBottom: '0.5rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.72rem', fontWeight: 600 }}>
+                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: isGood ? 'var(--accent)' : 'var(--warn)' }} />
+                    {dm === 'backend' ? 'Python backend — highest accuracy'
+                      : dm === 'yunet-wasm' ? 'YuNet (WASM) — high accuracy, fully local'
+                      : dm === 'mediapipe' ? 'MediaPipe BlazeFace — fast local detection'
+                      : 'Browser AI — basic detection'}
                   </div>
-                )
-              })}
-            </div>
-
-            <hr style={{ border: 'none', borderTop: '1px solid var(--border)', margin: '0.5rem 0 0.75rem' }} />
-
-            {/* Install guide */}
-            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.5rem', fontWeight: 600 }}>
-              How to start the backend
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', marginBottom: '0.7rem' }}>
-              {[
-                { os: 'macOS / Linux', cmd: './server/install.sh && ./server/start.sh' },
-                { os: 'Windows', cmd: 'server\\install.bat && server\\start.bat' },
-              ].map(({ os, cmd }) => (
-                <div key={os} style={{ fontSize: '0.72rem' }}>
-                  <span style={{ color: 'var(--text-muted)' }}>{os}</span>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', marginTop: '0.15rem' }}>
-                    <code style={{
-                      flex: 1, background: 'var(--input-bg)', border: '1px solid var(--border)',
-                      borderRadius: 4, padding: '0.2rem 0.4rem', fontSize: '0.7rem',
-                      fontFamily: 'monospace', color: 'var(--text-primary)', wordBreak: 'break-all',
-                    }}>{cmd}</code>
-                    <button
-                      className="tb-btn"
-                      type="button"
-                      style={{ fontSize: '0.62rem', padding: '0.15rem 0.4rem', flexShrink: 0 }}
-                      title="Copy to clipboard"
-                      onClick={() => navigator.clipboard?.writeText(cmd)}
-                    >
-                      Copy
-                    </button>
+                  <div style={{ fontSize: '0.62rem', color: 'var(--text-muted)', marginTop: '0.1rem', paddingLeft: '1.2rem' }}>
+                    {dm === 'backend' ? 'OpenCV YuNet on localhost server.'
+                      : dm === 'yunet-wasm' ? 'Same YuNet model as Python backend, running locally via ONNX Runtime WebAssembly. High accuracy, fully offline.'
+                      : dm === 'mediapipe' ? 'Google MediaPipe WASM — fast, offline, no GPU needed.'
+                      : <>face-api.js fallback.{getFaceApiBackendName() && <> Using: <strong>{getFaceApiBackendName()}</strong></>}</>}
+                    {' '}All data stays on your device.
                   </div>
                 </div>
-              ))}
+              )
+            })()}
+
+            {/* ── Enable auto-detect toggle ─────────────────── */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.3rem 0', marginBottom: '0.4rem' }}>
+              <button
+                type="button"
+                onClick={() => { setAutoDetect(!autoDetect); setShowBoxes(!autoDetect) }}
+                style={{
+                  width: 36, height: 20, borderRadius: 10, border: 'none', cursor: 'pointer', position: 'relative', transition: 'background 0.2s',
+                  background: autoDetect ? 'var(--accent)' : 'var(--border)',
+                }}
+              >
+                <span style={{
+                  position: 'absolute', top: 2, left: autoDetect ? 18 : 2, width: 16, height: 16, borderRadius: '50%',
+                  background: '#fff', transition: 'left 0.2s', boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+                }} />
+              </button>
+              <span style={{ fontSize: '0.72rem', fontWeight: 500 }}>Auto-detect faces when opening photos</span>
             </div>
 
-            {/* Deps check table — only if backend is reachable */}
-            {depsStatus ? (
-              <>
-                <hr style={{ border: 'none', borderTop: '1px solid var(--border)', margin: '0.5rem 0 0.6rem' }} />
-                <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.4rem' }}>
-                  Dependency status (backend is reachable)
+            {/* ── Install Python server ────────────────────── */}
+            {(detector as { mode?: string }).mode !== 'backend' && (detector as { mode?: string }).mode !== 'yunet-wasm' && (detector as { mode?: string }).mode !== 'mediapipe' && (<>
+              <hr style={{ border: 'none', borderTop: '1px solid var(--border)', margin: '0 0 0.5rem' }} />
+              <div style={{ fontSize: '0.74rem', fontWeight: 600, marginBottom: '0.15rem' }}>Upgrade to Python backend</div>
+              <p style={{ fontSize: '0.62rem', color: 'var(--text-muted)', margin: '0 0 0.35rem', lineHeight: 1.45 }}>
+                The built-in browser AI works, but a local Python server gives <strong>much better accuracy</strong> using{' '}
+                <a href="https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet" target="_blank" rel="noreferrer" className="about-link">OpenCV YuNet</a>.
+                It runs on your computer at <code style={{ fontSize: '0.6rem' }}>127.0.0.1:7865</code> — no data leaves your machine.
+              </p>
+              <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)', marginBottom: '0.35rem', lineHeight: 1.45 }}>
+                <strong>What gets installed:</strong>{' '}
+                <a href="https://pypi.org/project/fastapi/" target="_blank" rel="noreferrer" className="about-link">FastAPI</a>,{' '}
+                <a href="https://pypi.org/project/uvicorn/" target="_blank" rel="noreferrer" className="about-link">Uvicorn</a>,{' '}
+                <a href="https://pypi.org/project/opencv-contrib-python/" target="_blank" rel="noreferrer" className="about-link">OpenCV</a>,{' '}
+                <a href="https://pypi.org/project/Pillow/" target="_blank" rel="noreferrer" className="about-link">Pillow</a>,{' '}
+                <a href="https://pypi.org/project/numpy/" target="_blank" rel="noreferrer" className="about-link">NumPy</a>{' '}
+                — all inside a virtual environment (<code style={{ fontSize: '0.58rem' }}>server/.venv</code>).
+                Requires <a href="https://python.org/downloads" target="_blank" rel="noreferrer" className="about-link">Python ≥ 3.9</a>.
+              </div>
+
+              {/* Electron — true one-click */}
+              {(window as unknown as { electronBackend?: { checkPython: () => Promise<{ cmd: string; version: string } | null>; installDeps: () => Promise<{ ok: boolean; message: string }>; startServer: () => Promise<{ ok: boolean; message: string }> } }).electronBackend ? (
+                <button
+                  className="deps-install-btn"
+                  type="button"
+                  disabled={depsInstalling}
+                  onClick={async () => {
+                    const eb = (window as unknown as { electronBackend: { checkPython: () => Promise<{ cmd: string; version: string } | null>; installDeps: () => Promise<{ ok: boolean; message: string; stderr?: string }>; startServer: () => Promise<{ ok: boolean; message: string }> } }).electronBackend
+                    setDepsInstalling(true)
+                    setInstallResult(null)
+                    try {
+                      const py = await eb.checkPython()
+                      if (!py) {
+                        setInstallResult({ ok: false, returncode: -1, stdout: '', stderr: '', message: 'Python not found. Install Python 3.9+ from python.org first.' })
+                        return
+                      }
+                      setInstallResult({ ok: true, returncode: 0, stdout: '', stderr: '', message: `Found ${py.version}. Installing…` })
+                      const inst = await eb.installDeps()
+                      if (!inst.ok) { setInstallResult({ ok: false, returncode: 1, stdout: '', stderr: inst.message, message: inst.message }); return }
+                      setInstallResult({ ok: true, returncode: 0, stdout: '', stderr: '', message: 'Starting server…' })
+                      const srv = await eb.startServer()
+                      setInstallResult({ ok: srv.ok, returncode: srv.ok ? 0 : 1, stdout: '', stderr: srv.ok ? '' : srv.message, message: srv.message })
+                      if (srv.ok) {
+                        setTimeout(() => {
+                          initializeDetector().then((s) => { setDetector(s); setNotice(`Backend connected: ${s.message}`); setDepsModalOpen(false) })
+                        }, 2000)
+                      }
+                    } catch (e) {
+                      setInstallResult({ ok: false, returncode: -1, stdout: '', stderr: '', message: `${e instanceof Error ? e.message : String(e)}` })
+                    } finally { setDepsInstalling(false) }
+                  }}
+                >
+                  <Icon name="play_arrow" size={18} />
+                  {depsInstalling ? 'Setting up…' : 'Install & start Python server'}
+                </button>
+              ) : (
+                /* Web — download script */
+                <button
+                  className="deps-install-btn"
+                  type="button"
+                  onClick={downloadInstallScript}
+                >
+                  <Icon name="download" size={18} />
+                  Download install script ({isWindows ? '.bat' : '.sh'})
+                </button>
+              )}
+
+              {/* Script preview toggle */}
+              <div style={{ marginTop: '0.25rem', marginBottom: '0.25rem' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowInstallScript(!showInstallScript)}
+                  style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '0.58rem', padding: 0, textDecoration: 'underline' }}
+                >
+                  {showInstallScript ? 'Hide script source ▲' : 'View full script source ▼'}
+                </button>
+              </div>
+              {showInstallScript && (
+                <pre style={{
+                  background: 'var(--surface-muted)', border: '1px solid var(--border)',
+                  borderRadius: 6, padding: '0.4rem', fontSize: '0.55rem', lineHeight: 1.45,
+                  maxHeight: 200, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+                  color: 'var(--text-primary)', marginBottom: '0.35rem',
+                }}>
+                  {isWindows ? INSTALL_SCRIPT_BAT : INSTALL_SCRIPT_SH}
+                </pre>
+              )}
+
+              {/* Instructions for web users */}
+              {!(window as unknown as { electronBackend?: unknown }).electronBackend && (
+                <div style={{ fontSize: '0.58rem', color: 'var(--text-muted)', lineHeight: 1.45, marginBottom: '0.3rem' }}>
+                  <strong>How to use:</strong> Download the script → open it to review → {isWindows
+                    ? 'double-click the .bat file to run it'
+                    : <>open Terminal, run <code style={{ fontSize: '0.55rem' }}>chmod +x anonymizer-setup.sh && ./anonymizer-setup.sh</code></>
+                  }. The script installs everything in a virtual environment and starts the server.
+                  This app will auto-detect it.
                 </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem', marginBottom: '0.5rem' }}>
-                  {depsStatus.deps.map((d) => (
-                    <div key={d.pkg} style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.72rem' }}>
-                      <span style={{ width: 7, height: 7, borderRadius: '50%', flexShrink: 0, background: d.ok ? 'var(--accent)' : 'var(--warn)' }} />
-                      <span style={{ flex: 1, color: d.ok ? 'var(--text-primary)' : 'var(--warn)' }}>{d.label}</span>
-                      {d.ok && <span style={{ color: 'var(--text-muted)' }}>{d.version}</span>}
-                      {!d.ok && <span style={{ color: 'var(--warn)', fontWeight: 600 }}>MISSING</span>}
-                    </div>
-                  ))}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.72rem', marginTop: '0.1rem' }}>
-                    <span style={{ width: 7, height: 7, borderRadius: '50%', flexShrink: 0, background: depsStatus.yunet_model_present ? 'var(--accent)' : 'var(--warn)' }} />
-                    <span style={{ flex: 1, color: depsStatus.yunet_model_present ? 'var(--text-primary)' : 'var(--warn)' }}>YuNet ONNX model</span>
-                    {!depsStatus.yunet_model_present && <span style={{ color: 'var(--warn)', fontWeight: 600 }}>will download on start</span>}
-                    {depsStatus.yunet_model_present && <span style={{ color: 'var(--text-muted)' }}>present</span>}
+              )}
+
+              {/* If server already reachable, offer direct install */}
+              {depsStatus && !depsStatus.all_ok && (
+                <button
+                  className="deps-install-btn"
+                  type="button"
+                  onClick={runInstall}
+                  disabled={depsInstalling}
+                  style={{ background: 'var(--accent)', marginBottom: '0.25rem' }}
+                >
+                  <Icon name="build" size={18} />
+                  {depsInstalling ? 'Installing…' : 'Server running — install missing packages'}
+                </button>
+              )}
+            </>)}
+
+            {/* Deps status (if backend reachable) */}
+            {depsStatus && (
+              <div style={{ padding: '0.25rem 0.4rem', borderRadius: 6, border: '1px solid var(--border)', marginBottom: '0.3rem', fontSize: '0.62rem' }}>
+                <div style={{ fontWeight: 600, color: 'var(--accent)', marginBottom: '0.1rem' }}>Server dependencies:</div>
+                {depsStatus.deps.map((d) => (
+                  <div key={d.pkg} style={{ display: 'flex', alignItems: 'center', gap: '0.2rem' }}>
+                    <span style={{ color: d.ok ? 'var(--accent)' : 'var(--warn)' }}>{d.ok ? '✓' : '✗'}</span>
+                    <span>{d.label}</span>
+                    {d.ok && d.version && <span style={{ color: 'var(--text-muted)' }}>{d.version}</span>}
                   </div>
-                </div>
+                ))}
                 {!depsStatus.all_ok && (
-                  <button
-                    className="tb-btn"
-                    type="button"
-                    style={{ background: 'var(--warn)', borderColor: 'var(--warn)', color: '#fff', fontWeight: 600, fontSize: '0.75rem', width: '100%', justifyContent: 'center' }}
-                    disabled={depsInstalling}
-                    onClick={runInstall}
-                  >
-                    {depsInstalling ? '⏳ Installing…' : '⚙ Install missing dependencies'}
+                  <button className="deps-install-btn" type="button" onClick={runInstall} disabled={depsInstalling}
+                    style={{ marginTop: '0.25rem', fontSize: '0.65rem', padding: '0.3rem 0.6rem' }}>
+                    {depsInstalling ? 'Installing…' : 'Install missing'}
                   </button>
                 )}
-                {installResult && (
-                  <div style={{
-                    marginTop: '0.5rem', padding: '0.3rem 0.5rem', borderRadius: 5, fontSize: '0.7rem',
-                    background: installResult.ok ? 'rgba(0,200,80,0.1)' : 'rgba(220,60,60,0.1)',
-                    border: `1px solid ${installResult.ok ? 'var(--accent)' : 'var(--danger)'}`,
-                    color: installResult.ok ? 'var(--accent)' : 'var(--danger)',
-                  }}>
-                    {installResult.message}
-                    {installResult.ok && <div style={{ marginTop: '0.3rem', color: 'var(--text-muted)' }}>Restart the backend server to apply changes.</div>}
-                    {!installResult.ok && installResult.stderr && (
-                      <pre style={{ marginTop: '0.3rem', fontSize: '0.62rem', whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: 120, overflow: 'auto', color: 'var(--text-muted)' }}>{installResult.stderr}</pre>
-                    )}
-                  </div>
-                )}
-              </>
-            ) : (depsModalOpen && (detector as { mode?: string }).mode !== 'backend') ? (
-              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
-                Backend not reachable — run the install script above, then start the server.
               </div>
-            ) : null}
+            )}
+
+            {/* Install result */}
+            {installResult && (
+              <div style={{
+                padding: '0.25rem 0.4rem', borderRadius: 5, fontSize: '0.64rem',
+                background: installResult.ok ? 'rgba(0,200,80,0.06)' : 'rgba(220,60,60,0.06)',
+                border: `1px solid ${installResult.ok ? 'var(--accent)' : 'var(--danger)'}`,
+                color: installResult.ok ? 'var(--accent)' : 'var(--danger)',
+              }}>
+                {installResult.message}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -3631,20 +4982,37 @@ function App() {
             <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: '0 0 0.6rem', lineHeight: 1.5 }}>
               A community project by{' '}
               <a href="https://www.web3privacy.info" target="_blank" rel="noreferrer" className="about-link">Web3Privacy Now</a>
-              {' '}— an open-source initiative building privacy tools for everyone.
+              {' '}— privacy-first image and video anonymization tool. Everything runs locally in your browser.
             </p>
 
-            <h3 style={{ margin: '0.7rem 0 0.3rem', fontSize: '0.82rem', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)' }}>What it does</h3>
+            <h3 style={{ margin: '0.7rem 0 0.3rem', fontSize: '0.82rem', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)' }}>Features</h3>
             <ul style={{ margin: '0 0 0.4rem', paddingLeft: '1.1rem' }}>
               {[
-                '🎭 Anonymize faces with blur, pixelate, blackout, emoji, glitch, thermal, and more',
-                '✏️ Brush and zone tools — paint or draw rectangles over any area',
-                '🤖 Auto face detection (browser AI + optional local Python backend)',
-                '🎨 Color adjustments: brightness, contrast, saturation, shadows, highlights + presets',
-                '🌀 Transform effects: halftone, glitch, pixel shift (wave / zoom / shear / ripple / mirror), color shift',
-                '📐 Batch processing: resize, crop, format conversion, color grading, transforms, auto-anonymize',
-                '📦 ZIP export of all processed photos',
-                '🌙 Fully local — no photo ever leaves your device, no cloud, no tracking',
+                '🎭 14+ anonymization effects — blur, pixelate, blackout, emoji, glitch, thermal, halftone, silhouette, noise, swirl, contour, diamond, and more',
+                '✏️ Brush & zone tools — paint or draw rectangles over any region, adjustable size',
+                '🤖 Auto face detection — browser-side AI (face-api.js / TensorFlow.js) + optional Python backend (OpenCV YuNet)',
+                '🎨 Color adjustments — brightness, contrast, saturation, shadows, highlights, temperature + presets',
+                '🌀 Transform effects — halftone, glitch, pixel shift (wave / zoom / shear / ripple / mirror), color shift',
+                '🎬 Video anonymization — frame-by-frame local processing with MediaRecorder for MP4, WebM, MOV, and more',
+                '📐 Batch processing — resize, crop, format convert, color grade, transforms, auto-anonymize hundreds of photos',
+                '📦 Export: JPEG, PNG, WebP, BMP, GIF, TIFF + ZIP for batch downloads',
+                '🖼️ SVG vectorization — convert images to SVG with 8 presets, custom parameters, and live preview',
+                '📸 Save snapshot — freeze intermediate edits as new photos in the explorer',
+                '🖥️ Desktop apps — downloadable for macOS, Windows, and Linux (Electron)',
+              ].map((item) => (
+                <li key={item} style={{ marginBottom: '0.22rem', fontSize: '0.76rem', color: 'var(--text-secondary)' }}>{item}</li>
+              ))}
+            </ul>
+
+            <h3 style={{ margin: '0.7rem 0 0.3rem', fontSize: '0.82rem', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)' }}>Privacy & security</h3>
+            <ul style={{ margin: '0 0 0.4rem', paddingLeft: '1.1rem' }}>
+              {[
+                '🔒 100% local by default — all processing runs in your browser, no uploads',
+                '🛡️ Local / Server toggle — choose fully local or optional server-assisted detection',
+                '📊 CPU timing proof — shows processing time to verify local execution',
+                '🚫 No analytics, no cookies, no tracking — zero external network requests',
+                '🔤 Self-hosted fonts — Material Symbols served locally, no Google CDN',
+                '🌐 Content Security Policy — blocks unintended outbound connections',
               ].map((item) => (
                 <li key={item} style={{ marginBottom: '0.22rem', fontSize: '0.76rem', color: 'var(--text-secondary)' }}>{item}</li>
               ))}
@@ -3660,12 +5028,55 @@ function App() {
               ))}
             </ul>
 
-            <p style={{ fontSize: '0.73rem', color: 'var(--text-secondary)', margin: '0.8rem 0 0', borderTop: '1px solid var(--border)', paddingTop: '0.6rem', lineHeight: 1.5 }}>
-              Built with love by the{' '}
-              <a href="https://www.web3privacy.info" target="_blank" rel="noreferrer" className="about-link">Web3Privacy Now</a>
-              {' '}community. Source code on{' '}
-              <a href="https://github.com/web3privacy/w3pn-anonymizer" target="_blank" rel="noreferrer" className="about-link">GitHub</a>.
+            <div style={{ margin: '0.8rem 0 0', borderTop: '1px solid var(--border)', paddingTop: '0.6rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+              <p style={{ fontSize: '0.73rem', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.5 }}>
+                Built with love by the{' '}
+                <a href="https://www.web3privacy.info" target="_blank" rel="noreferrer" className="about-link">Web3Privacy Now</a>
+                {' '}community. Source code on{' '}
+                <a href="https://github.com/web3privacy/w3pn-anonymizer" target="_blank" rel="noreferrer" className="about-link">GitHub</a>.
+              </p>
+              <button
+                className="btn btn-sm"
+                type="button"
+                onClick={() => { setAboutOpen(false); setFeedbackOpen(true) }}
+                style={{ flexShrink: 0, fontSize: '0.7rem' }}
+              >
+                Give us Feedback
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Feedback modal ──────────────────────────────────── */}
+      {feedbackOpen && (
+        <div className="about-backdrop" onClick={() => setFeedbackOpen(false)}>
+          <div className="about-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 440 }}>
+            <button className="about-modal-close" type="button" onClick={() => setFeedbackOpen(false)}>✕ Close</button>
+            <h2 style={{ margin: '0 0 0.35rem', fontSize: '1.05rem' }}>Send Feedback</h2>
+            <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '0 0 0.6rem', lineHeight: 1.5 }}>
+              We'd love to hear from you! Your message will be sent to the W3PN team.
             </p>
+            <textarea
+              className="feedback-textarea"
+              rows={6}
+              placeholder="Tell us what you think, report a bug, or suggest a feature…"
+              value={feedbackMsg}
+              onChange={(e) => setFeedbackMsg(e.target.value)}
+            />
+            <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
+              <button className="btn btn-sm" type="button" onClick={() => setFeedbackOpen(false)}>Cancel</button>
+              <a
+                className="btn btn-sm btn-primary"
+                href={`mailto:web3privacynow@protonmail.com?subject=${encodeURIComponent('W3PN Anonymizer Feedback')}&body=${encodeURIComponent(feedbackMsg)}`}
+                target="_blank"
+                rel="noreferrer"
+                style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
+                onClick={() => { setFeedbackOpen(false); setFeedbackMsg(''); setNotice('Opening mail client…') }}
+              >
+                <Icon name="send" size={13} /> Send
+              </a>
+            </div>
           </div>
         </div>
       )}

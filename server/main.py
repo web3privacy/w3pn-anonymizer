@@ -157,31 +157,66 @@ def _decode_image(data: bytes) -> np.ndarray:
     return img
 
 
-def _detect_yunet(img_bgr: np.ndarray, score_threshold: float = 0.60, robust: bool = False) -> list[dict]:
-    """Detect faces with YuNet. Returns list of box dicts."""
-    global _yunet
-    h, w = img_bgr.shape[:2]
+def _iou_face_box(a: dict, b: dict) -> float:
+    ax2 = a["x"] + a["width"]
+    ay2 = a["y"] + a["height"]
+    bx2 = b["x"] + b["width"]
+    by2 = b["y"] + b["height"]
+    x1 = max(a["x"], b["x"])
+    y1 = max(a["y"], b["y"])
+    x2 = min(ax2, bx2)
+    y2 = min(ay2, by2)
+    iw = max(0, x2 - x1)
+    ih = max(0, y2 - y1)
+    inter = iw * ih
+    if inter <= 0:
+        return 0.0
+    area_a = a["width"] * a["height"]
+    area_b = b["width"] * b["height"]
+    union = area_a + area_b - inter
+    return inter / union if union > 0 else 0.0
 
-    # Re-create detector for this image size
-    score_thr = 0.40 if robust else score_threshold
+
+def _nms_face_boxes(boxes: list[dict], iou_threshold: float = 0.35) -> list[dict]:
+    """Greedy NMS on dicts with x,y,width,height,score."""
+    if len(boxes) <= 1:
+        return boxes
+    sorted_boxes = sorted(boxes, key=lambda b: float(b.get("score", 0)), reverse=True)
+    kept: list[dict] = []
+    suppressed: set[int] = set()
+    for i in range(len(sorted_boxes)):
+        if i in suppressed:
+            continue
+        bi = sorted_boxes[i]
+        kept.append(bi)
+        for j in range(i + 1, len(sorted_boxes)):
+            if j in suppressed:
+                continue
+            if _iou_face_box(bi, sorted_boxes[j]) > iou_threshold:
+                suppressed.add(j)
+    return kept
+
+
+def _yune_single_pass(img_bgr: np.ndarray, score_threshold: float) -> list[dict]:
+    """One YuNet forward on an image (any size). Boxes in pixel coords of that image."""
+    h, w = img_bgr.shape[:2]
+    if w < 5 or h < 5:
+        return []
     det = cv2.FaceDetectorYN.create(
         str(YUNET_MODEL_PATH),
         "",
         (w, h),
-        score_threshold=score_thr,
+        score_threshold=score_threshold,
         nms_threshold=0.30,
         top_k=5000,
     )
-
-    _faces_count, faces = det.detect(img_bgr)
+    _fc, faces = det.detect(img_bgr)
     if faces is None:
         return []
-
-    results = []
+    results: list[dict] = []
     for face in faces:
         x, y, bw, bh = face[:4]
         score = float(face[14]) if len(face) > 14 else float(face[4]) if len(face) > 4 else 1.0
-        # Clamp to image bounds
         x = max(0, int(x))
         y = max(0, int(y))
         bw = min(int(bw), w - x)
@@ -197,6 +232,44 @@ def _detect_yunet(img_bgr: np.ndarray, score_threshold: float = 0.60, robust: bo
             "source": "yunet",
         })
     return results
+
+
+def _detect_yunet(img_bgr: np.ndarray, *, robust: bool = False, score_threshold: float = 0.55) -> list[dict]:
+    """YuNet detection aligned with browser WASM: full frame + tiled crops on large images.
+
+    Args must be keyword-only so callers cannot accidentally pass ``robust`` as score_threshold.
+    Previously ``_detect_yunet(img, robust=…)`` was interpreted as positional ``score_threshold``,
+    coercing ``False→0.0`` and ``True→1.0`` — destroying recall/precision.
+    """
+    h, w = img_bgr.shape[:2]
+    # Match src/lib/detector.ts: full pass ~0.50 / robust 0.40; tiles use ~0.45
+    full_thr = 0.40 if robust else min(score_threshold, 0.50)
+    tile_thr = 0.40 if robust else 0.45
+
+    all_boxes: list[dict] = _yune_single_pass(img_bgr, full_thr)
+
+    TILE = 640
+    MIN_DIM_FOR_TILING = 800
+    if max(w, h) > MIN_DIM_FOR_TILING or robust:
+        step = max(1, int(round(TILE * 0.75)))
+        for ty in range(0, h, step):
+            for tx in range(0, w, step):
+                cw = min(TILE, w - tx)
+                ch = min(TILE, h - ty)
+                if cw < 80 or ch < 80:
+                    continue
+                crop = img_bgr[ty : ty + ch, tx : tx + cw]
+                for b in _yune_single_pass(crop, tile_thr):
+                    all_boxes.append({
+                        "x": b["x"] + tx,
+                        "y": b["y"] + ty,
+                        "width": b["width"],
+                        "height": b["height"],
+                        "score": b["score"],
+                        "source": "yunet",
+                    })
+
+    return _nms_face_boxes(all_boxes, 0.35)
 
 
 def _detect_haar(img_bgr: np.ndarray, robust: bool = False) -> list[dict]:

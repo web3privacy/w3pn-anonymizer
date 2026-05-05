@@ -1,27 +1,97 @@
 {
   "name": "anonymizer-app",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
+  "description": "W3PN Anonymizer — privacy-first image and video anonymization tool",
+  "author": "Web3Privacy Now <web3privacynow@protonmail.com>",
+  "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
+    "dev:ipv4": "vite --host 127.0.0.1 --port 5173 --strictPort",
     "build": "tsc && vite build",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "electron:dev": "npm run build && electron .",
+    "electron:build": "npm run build && electron-builder --mac",
+    "electron:build:win": "npm run build && electron-builder --win",
+    "electron:build:linux": "npm run build && electron-builder --linux",
+    "electron:build:all": "npm run build && electron-builder -mwl",
+    "desktop:mac": "npm run build && electron-builder --mac",
+    "desktop:win": "npm run build && electron-builder --win",
+    "desktop:linux": "npm run build && electron-builder --linux"
+  },
+  "build": {
+    "appId": "info.web3privacy.anonymizer",
+    "productName": "W3PN Anonymizer",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "server/main.py",
+      "server/requirements.txt",
+      "public/fonts/**/*",
+      "public/mediapipe/**/*",
+      "public/models/**/*",
+      "public/vendor/**/*"
+    ],
+    "mac": {
+      "category": "public.app-category.photography",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "universal"
+          ]
+        }
+      ],
+      "icon": "public/icon-512.png"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "public/icon-512.png"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Graphics",
+      "icon": "public/icon-512.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
   },
   "dependencies": {
     "@9am/img-halftone": "^1.0.3",
+    "@mediapipe/tasks-vision": "^0.10.35",
     "@tensorflow/tfjs-backend-webgl": "^4.22.0",
     "@tensorflow/tfjs-converter": "^4.22.0",
     "@tensorflow/tfjs-core": "^4.22.0",
     "browser-image-compression": "^2.0.2",
     "face-api.js": "^0.22.2",
     "file-saver": "^2.0.5",
+    "imagetracerjs": "^1.2.6",
     "jszip": "^3.10.1",
+    "onnxruntime-web": "^1.25.1",
     "pica": "^9.0.1",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "smartcrop": "^2.0.5"
+    "smartcrop": "^2.0.5",
+    "webm-duration-fix": "^1.0.4"
   },
   "devDependencies": {
     "@types/file-saver": "^2.0.7",
@@ -31,6 +101,8 @@
     "@typescript-eslint/eslint-plugin": "^6.21.0",
     "@typescript-eslint/parser": "^6.21.0",
     "@vitejs/plugin-react": "^4.2.1",
+    "electron": "^41.5.0",
+    "electron-builder": "^26.8.1",
     "eslint": "^8.56.0",
     "eslint-plugin-react-hooks": "^4.6.0",
     "eslint-plugin-react-refresh": "^0.4.5",
