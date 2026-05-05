@@ -89,7 +89,8 @@ async function ensureMediaPipe(): Promise<boolean> {
       mpDetector = await FaceDetector.createFromOptions(vision, {
         baseOptions: { modelAssetPath: modelPath, delegate },
         runningMode: 'IMAGE',
-        minDetectionConfidence: 0.35,
+        // Prefer recall over precision: robust/local mode can dedupe later.
+        minDetectionConfidence: 0.20,
       })
 
       mpReady = true
@@ -169,7 +170,7 @@ function iou(a: FaceBox, b: FaceBox): number {
  *
  * Results are merged and deduplicated with NMS.
  */
-async function detectWithMediaPipe(source: HTMLCanvasElement): Promise<FaceBox[]> {
+async function detectWithMediaPipe(source: HTMLCanvasElement, robust = false): Promise<FaceBox[]> {
   if (!mpDetector) return []
   try {
     const w = source.width
@@ -182,9 +183,9 @@ async function detectWithMediaPipe(source: HTMLCanvasElement): Promise<FaceBox[]
     console.log(`[detector] MediaPipe full-image: ${allBoxes.length} faces in ${w}×${h}`)
 
     // Pass 2: tiled detection for images with small faces
-    const TILE_SIZE = 640
-    const OVERLAP = 0.25
-    const MIN_DIM_FOR_TILING = 800
+    const TILE_SIZE = robust ? 512 : 640
+    const OVERLAP = robust ? 0.4 : 0.25
+    const MIN_DIM_FOR_TILING = robust ? 480 : 800
 
     if (w > MIN_DIM_FOR_TILING || h > MIN_DIM_FOR_TILING) {
       const step = Math.round(TILE_SIZE * (1 - OVERLAP))
@@ -431,6 +432,18 @@ function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob> {
   })
 }
 
+function toCanvas(source: HTMLCanvasElement | HTMLImageElement | HTMLVideoElement): HTMLCanvasElement {
+  if (source instanceof HTMLCanvasElement) return source
+
+  const width = source.width || (source as HTMLImageElement).naturalWidth
+  const height = source.height || (source as HTMLImageElement).naturalHeight
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  canvas.getContext('2d')!.drawImage(source, 0, 0)
+  return canvas
+}
+
 async function detectViaBackend(canvas: HTMLCanvasElement, robust: boolean): Promise<FaceBox[]> {
   const blob = await canvasToBlob(canvas)
   const form = new FormData()
@@ -446,6 +459,165 @@ async function detectViaBackend(canvas: HTMLCanvasElement, robust: boolean): Pro
   return (data.faces ?? []).map((f) => ({ x: f.x, y: f.y, width: f.width, height: f.height, score: f.score }))
 }
 
+async function detectViaLocalYuNet(canvas: HTMLCanvasElement, robust: boolean): Promise<FaceBox[]> {
+  if (!isYuNetReady()) return []
+
+  const w = canvas.width
+  const h = canvas.height
+  reportProgress(`Running YuNet on ${w}×${h} image…`)
+
+  const fullThreshold = robust ? 0.32 : 0.50
+  const tileThreshold = robust ? 0.28 : 0.45
+
+  const fullBoxes = await detectYuNet(canvas, fullThreshold)
+  console.log('[detector] YuNet full-image: %d faces in %dx%d', fullBoxes.length, w, h)
+
+  const TILE = robust ? 512 : 640
+  const MIN_FOR_TILING = robust ? 480 : 800
+  if (w > MIN_FOR_TILING || h > MIN_FOR_TILING || robust) {
+    const overlap = robust ? 0.4 : 0.25
+    const step = Math.max(1, Math.round(TILE * (1 - overlap)))
+    const tiles: Array<[number, number]> = []
+    for (let ty = 0; ty < h; ty += step) {
+      for (let tx = 0; tx < w; tx += step) {
+        if (Math.min(TILE, w - tx) >= 80 && Math.min(TILE, h - ty) >= 80) tiles.push([tx, ty])
+      }
+    }
+
+    const tileCanvas = document.createElement('canvas')
+    const tileCtx = tileCanvas.getContext('2d')!
+    let tileFaces = 0
+
+    for (let i = 0; i < tiles.length; i++) {
+      const [tx, ty] = tiles[i]
+      const cw = Math.min(TILE, w - tx)
+      const ch = Math.min(TILE, h - ty)
+      tileCanvas.width = cw
+      tileCanvas.height = ch
+      tileCtx.clearRect(0, 0, cw, ch)
+      tileCtx.drawImage(canvas, tx, ty, cw, ch, 0, 0, cw, ch)
+
+      try {
+        const tileBoxes = await detectYuNet(tileCanvas, tileThreshold)
+        for (const b of tileBoxes) {
+          fullBoxes.push({ x: b.x + tx, y: b.y + ty, width: b.width, height: b.height, score: b.score })
+        }
+        tileFaces += tileBoxes.length
+      } catch (err) {
+        console.warn('[detector] YuNet tile detection error at (%d,%d):', tx, ty, err)
+      }
+
+      if (i % 3 === 2) {
+        reportProgress(`Scanning region ${i + 1}/${tiles.length} (${fullBoxes.length} faces)…`)
+        await new Promise<void>((r) => setTimeout(r, 0))
+      }
+    }
+    console.log('[detector] YuNet tiles: %d tiles, %d tile faces', tiles.length, tileFaces)
+  }
+
+  const deduped = nms(fullBoxes, 0.35)
+  console.log('[detector] YuNet total: %d raw → %d after NMS', fullBoxes.length, deduped.length)
+  return deduped
+}
+
+async function detectViaLocalMediaPipe(canvas: HTMLCanvasElement, robust = false): Promise<FaceBox[]> {
+  console.log('[detector] detectFaces: trying MediaPipe (mpReady=%s)', mpReady)
+  if (mpReady || await ensureMediaPipe()) {
+    const boxes = await detectWithMediaPipe(canvas, robust)
+    console.log('[detector] MediaPipe result: %d faces', boxes.length)
+    return boxes
+  }
+
+  console.warn('[detector] MediaPipe not available, falling through')
+  return []
+}
+
+async function detectViaFaceApi(
+  source: HTMLCanvasElement | HTMLImageElement | HTMLVideoElement,
+  robust = false,
+): Promise<FaceBox[]> {
+  console.log('[detector] trying face-api.js%s', robust ? ' (robust)' : ' (fallback)')
+  const ok = await ensureFaceApi()
+  if (!ok) return []
+
+  const faceapi = await import('face-api.js')
+  const w = (source as HTMLCanvasElement).width || (source as HTMLImageElement).naturalWidth || 0
+  const h = (source as HTMLCanvasElement).height || (source as HTMLImageElement).naturalHeight || 0
+  reportProgress(`Analyzing ${w}×${h} with face-api.js…`)
+
+  const opts = new faceapi.TinyFaceDetectorOptions({
+    inputSize: robust ? 512 : 320,
+    scoreThreshold: robust ? 0.15 : 0.25,
+  })
+  const detections = await Promise.race([
+    faceapi.detectAllFaces(source, opts),
+    new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), 30_000)),
+  ])
+  console.log('[detector] face-api.js found %d faces', detections.length)
+  return detections.map((d) => ({ x: d.box.x, y: d.box.y, width: d.box.width, height: d.box.height, score: d.score }))
+}
+
+async function detectViaFaceApiTinyTiled(canvas: HTMLCanvasElement): Promise<FaceBox[]> {
+  console.log('[detector] trying face-api.js tiny-face tiled pass')
+  const ok = await ensureFaceApi()
+  if (!ok) return []
+
+  const faceapi = await import('face-api.js')
+  const w = canvas.width
+  const h = canvas.height
+  const TILE = 384
+  const OVERLAP = 0.5
+  const step = Math.max(1, Math.round(TILE * (1 - OVERLAP)))
+  const opts = new faceapi.TinyFaceDetectorOptions({
+    inputSize: 512,
+    scoreThreshold: 0.10,
+  })
+
+  const tileCanvas = document.createElement('canvas')
+  const tileCtx = tileCanvas.getContext('2d')!
+  const allBoxes: FaceBox[] = []
+  const tiles: Array<[number, number, number, number]> = []
+
+  for (let ty = 0; ty < h; ty += step) {
+    for (let tx = 0; tx < w; tx += step) {
+      const cw = Math.min(TILE, w - tx)
+      const ch = Math.min(TILE, h - ty)
+      if (cw >= 96 && ch >= 96) tiles.push([tx, ty, cw, ch])
+    }
+  }
+
+  for (let i = 0; i < tiles.length; i++) {
+    const [tx, ty, cw, ch] = tiles[i]
+    tileCanvas.width = cw
+    tileCanvas.height = ch
+    tileCtx.clearRect(0, 0, cw, ch)
+    tileCtx.drawImage(canvas, tx, ty, cw, ch, 0, 0, cw, ch)
+
+    const detections = await Promise.race([
+      faceapi.detectAllFaces(tileCanvas, opts),
+      new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), 30_000)),
+    ])
+
+    for (const d of detections) {
+      allBoxes.push({
+        x: d.box.x + tx,
+        y: d.box.y + ty,
+        width: d.box.width,
+        height: d.box.height,
+        score: d.score,
+      })
+    }
+
+    if (i % 2 === 1) {
+      reportProgress(`Tiny-face scan ${i + 1}/${tiles.length} (${allBoxes.length} faces)…`)
+      await new Promise<void>((r) => setTimeout(r, 0))
+    }
+  }
+
+  console.log('[detector] face-api.js tiny-face tiles: %d raw faces across %d tiles', allBoxes.length, tiles.length)
+  return nms(allBoxes, 0.40)
+}
+
 /**
  * Detect faces. Returns FaceBox[] in image-pixel coordinates.
  */
@@ -455,20 +627,92 @@ export const detectFaces = async (
 ): Promise<FaceBox[]> => {
   reportProgress('Initializing…')
   const status = await initializeDetector()
+  const canvas = toCanvas(source)
+
+  if (robust) {
+    if (status.mode === 'backend' && !_forceLocal) {
+      try {
+        reportProgress('Sending to server…')
+        const backendBoxes = await detectViaBackend(canvas, true)
+        console.log('[detector] Robust backend-only detection: %d faces', backendBoxes.length)
+        if (backendBoxes.length > 0) return backendBoxes
+      } catch (err) {
+        console.warn('[detector] Robust backend pass failed:', err)
+      }
+    }
+
+    const merged: FaceBox[] = []
+    let localYuNetCount = 0
+    let mediaPipeCount = 0
+    let faceApiCount = 0
+    let tinyFaceCount = 0
+
+    const [yuNetResult, mediaPipeResult] = await Promise.allSettled([
+      isYuNetReady() ? detectViaLocalYuNet(canvas, true) : Promise.resolve([] as FaceBox[]),
+      detectViaLocalMediaPipe(canvas, true),
+    ])
+
+    if (yuNetResult.status === 'fulfilled') {
+      localYuNetCount = yuNetResult.value.length
+      merged.push(...yuNetResult.value)
+    } else {
+      console.warn('[detector] Robust local YuNet supplement failed:', yuNetResult.reason)
+    }
+
+    if (mediaPipeResult.status === 'fulfilled') {
+      mediaPipeCount = mediaPipeResult.value.length
+      merged.push(...mediaPipeResult.value)
+    } else {
+      console.warn('[detector] Robust MediaPipe supplement failed:', mediaPipeResult.reason)
+    }
+
+    let deduped = merged.length > 0 ? nms(merged, 0.40) : []
+
+    // If the fast local detectors already found a strong set of faces,
+    // skip the much slower face-api passes to keep local mode responsive.
+    if (deduped.length < 100) {
+      try {
+        const boxes = await detectViaFaceApi(canvas, true)
+        faceApiCount = boxes.length
+        if (boxes.length > 0) {
+          deduped = nms([...deduped, ...boxes], 0.40)
+        }
+      } catch (err) {
+        console.warn('[detector] Robust face-api supplement failed:', err)
+      }
+
+      if (deduped.length < 100) {
+        try {
+          const boxes = await detectViaFaceApiTinyTiled(canvas)
+          tinyFaceCount = boxes.length
+          if (boxes.length > 0) {
+            deduped = nms([...deduped, ...boxes], 0.40)
+          }
+        } catch (err) {
+          console.warn('[detector] Robust tiny-face supplement failed:', err)
+        }
+      }
+    }
+
+    if (deduped.length > 0) {
+      console.log(
+        '[detector] Robust local merged detection: localYuNet=%d mediaPipe=%d faceApi=%d tinyFace=%d merged=%d deduped=%d',
+        localYuNetCount,
+        mediaPipeCount,
+        faceApiCount,
+        tinyFaceCount,
+        merged.length,
+        deduped.length,
+      )
+      return deduped
+    }
+  }
 
   // 1. Backend (server mode)
   if (status.mode === 'backend' && !_forceLocal) {
-    let canvas: HTMLCanvasElement
-    if (source instanceof HTMLCanvasElement) { canvas = source }
-    else {
-      canvas = document.createElement('canvas')
-      canvas.width = source.width || (source as HTMLImageElement).naturalWidth
-      canvas.height = source.height || (source as HTMLImageElement).naturalHeight
-      canvas.getContext('2d')!.drawImage(source, 0, 0)
-    }
     try {
       reportProgress('Sending to server…')
-      return await detectViaBackend(canvas, robust)
+      return await detectViaBackend(canvas, false)
     } catch (err) {
       console.warn('Backend failed:', err)
       reportProgress('Server failed — using local detection…')
@@ -478,104 +722,21 @@ export const detectFaces = async (
   // 2. YuNet WASM (same model as Python backend, highest local accuracy)
   if (isYuNetReady()) {
     try {
-      const w = (source as HTMLCanvasElement).width || (source as HTMLImageElement).naturalWidth || 0
-      const h = (source as HTMLCanvasElement).height || (source as HTMLImageElement).naturalHeight || 0
-      reportProgress(`Running YuNet on ${w}×${h} image…`)
-
-      let canvas: HTMLCanvasElement
-      if (source instanceof HTMLCanvasElement) {
-        canvas = source
-      } else {
-        canvas = document.createElement('canvas')
-        canvas.width = w; canvas.height = h
-        canvas.getContext('2d')!.drawImage(source, 0, 0)
-      }
-
-      const fullThreshold = robust ? 0.40 : 0.50
-      const tileThreshold = robust ? 0.40 : 0.45
-
-      // Multi-scale: run on full image + tiles for large images.
-      // Match the backend thresholds so "Local" and "Server" stay comparable.
-      const fullBoxes = await detectYuNet(canvas, fullThreshold)
-      console.log('[detector] YuNet full-image: %d faces in %dx%d', fullBoxes.length, w, h)
-
-      const TILE = 640
-      const MIN_FOR_TILING = 800
-      if (w > MIN_FOR_TILING || h > MIN_FOR_TILING || robust) {
-        const step = Math.round(TILE * 0.75)
-        const tiles: Array<[number, number]> = []
-        for (let ty = 0; ty < h; ty += step) {
-          for (let tx = 0; tx < w; tx += step) {
-            if (Math.min(TILE, w - tx) >= 80 && Math.min(TILE, h - ty) >= 80) tiles.push([tx, ty])
-          }
-        }
-
-        const tileCanvas = document.createElement('canvas')
-        const tileCtx = tileCanvas.getContext('2d')!
-        let tileFaces = 0
-
-        for (let i = 0; i < tiles.length; i++) {
-          const [tx, ty] = tiles[i]
-          const cw = Math.min(TILE, w - tx)
-          const ch = Math.min(TILE, h - ty)
-          tileCanvas.width = cw; tileCanvas.height = ch
-          tileCtx.clearRect(0, 0, cw, ch)
-          tileCtx.drawImage(canvas, tx, ty, cw, ch, 0, 0, cw, ch)
-
-          try {
-            const tileBoxes = await detectYuNet(tileCanvas, tileThreshold)
-            for (const b of tileBoxes) {
-              fullBoxes.push({ x: b.x + tx, y: b.y + ty, width: b.width, height: b.height, score: b.score })
-            }
-            tileFaces += tileBoxes.length
-          } catch (err) {
-            console.warn('[detector] YuNet tile detection error at (%d,%d):', tx, ty, err)
-          }
-
-          if (i % 3 === 2) {
-            reportProgress(`Scanning region ${i + 1}/${tiles.length} (${fullBoxes.length} faces)…`)
-            await new Promise<void>((r) => setTimeout(r, 0))
-          }
-        }
-        console.log('[detector] YuNet tiles: %d tiles, %d tile faces', tiles.length, tileFaces)
-      }
-
-      const deduped = nms(fullBoxes, 0.35)
-      console.log('[detector] YuNet total: %d raw → %d after NMS', fullBoxes.length, deduped.length)
-      return deduped
+      return await detectViaLocalYuNet(canvas, false)
     } catch (err) {
       console.warn('[detector] YuNet WASM detection error:', err)
     }
   }
 
   // 3. MediaPipe (fast WASM fallback, full-range model + multi-scale tiling)
-  console.log('[detector] detectFaces: trying MediaPipe (mpReady=%s)', mpReady)
-  if (mpReady || await ensureMediaPipe()) {
-    try {
-      const w = (source as HTMLCanvasElement).width || (source as HTMLImageElement).naturalWidth || 0
-      const h = (source as HTMLCanvasElement).height || (source as HTMLImageElement).naturalHeight || 0
-      reportProgress(`Detecting faces in ${w}×${h} image (MediaPipe)…`)
-
-      let canvas: HTMLCanvasElement
-      if (source instanceof HTMLCanvasElement) {
-        canvas = source
-      } else {
-        canvas = document.createElement('canvas')
-        canvas.width = w; canvas.height = h
-        canvas.getContext('2d')!.drawImage(source, 0, 0)
-      }
-
-      const boxes = await detectWithMediaPipe(canvas)
-      console.log('[detector] MediaPipe result: %d faces', boxes.length)
-      return boxes
-    } catch (err) {
-      console.warn('[detector] MediaPipe detection threw:', err)
-    }
-  } else {
-    console.warn('[detector] MediaPipe not available, falling through')
+  try {
+    const boxes = await detectViaLocalMediaPipe(canvas, false)
+    if (boxes.length > 0) return boxes
+  } catch (err) {
+    console.warn('[detector] MediaPipe detection threw:', err)
   }
 
-  // 5. Native browser FaceDetector
+  // 4. Native browser FaceDetector
   if (nativeDetector) {
     try {
       console.log('[detector] trying native browser FaceDetector')
@@ -591,22 +752,11 @@ export const detectFaces = async (
     } catch (err) { console.warn('[detector] native error:', err) }
   }
 
-  // 6. face-api.js (legacy)
+  // 5. face-api.js (legacy)
   try {
-    console.log('[detector] trying face-api.js (legacy fallback)')
-    const ok = await ensureFaceApi()
-    if (ok) {
-      const faceapi = await import('face-api.js')
-      const w = (source as HTMLCanvasElement).width || (source as HTMLImageElement).naturalWidth || 0
-      const h = (source as HTMLCanvasElement).height || (source as HTMLImageElement).naturalHeight || 0
-      reportProgress(`Analyzing ${w}×${h} with face-api.js…`)
-      const opts = new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.25 })
-      const detections = await Promise.race([
-        faceapi.detectAllFaces(source, opts),
-        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), 30_000)),
-      ])
-      console.log('[detector] face-api.js found %d faces', detections.length)
-      return detections.map((d) => ({ x: d.box.x, y: d.box.y, width: d.box.width, height: d.box.height, score: d.score }))
+    const boxes = await detectViaFaceApi(source, false)
+    if (boxes.length > 0) {
+      return boxes
     }
   } catch (err) { console.warn('[detector] face-api.js error:', err) }
 
