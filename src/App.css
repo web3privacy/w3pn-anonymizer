@@ -104,52 +104,6 @@
   color: var(--success);
 }
 
-/* ── Download dropdown ───────────────────────────────────────────── */
-.download-menu-wrap {
-  position: relative;
-  display: inline-block;
-}
-.download-trigger {
-  cursor: pointer;
-  background: none;
-  border: none;
-  font: inherit;
-  padding: 0;
-}
-.download-dropdown {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  margin-top: 0.25rem;
-  background: var(--panel-bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.35);
-  z-index: 900;
-  min-width: 210px;
-  padding: 0.3rem 0;
-}
-.download-dropdown-item {
-  display: flex;
-  align-items: center;
-  gap: 0.45rem;
-  padding: 0.4rem 0.7rem;
-  color: var(--text);
-  text-decoration: none;
-  font-size: 0.68rem;
-  white-space: nowrap;
-  transition: background 0.1s;
-}
-.download-dropdown-item:hover {
-  background: var(--border);
-  color: var(--accent);
-}
-.download-dropdown-divider {
-  height: 1px;
-  background: var(--border);
-  margin: 0.2rem 0.5rem;
-}
-
 /* ── Theme icon toggle ───────────────────────────────────────────── */
 .theme-toggle-icon {
   display: flex;
@@ -2535,6 +2489,10 @@ input[type="number"].field-input {
 [data-theme="light"] .sidebar-add-btn {
   color: #1a1a1a;
 }
+[data-theme="light"] .privacy-shield-btn,
+[data-theme="light"] .privacy-shield-btn.secure {
+  color: #1a1a1a;
+}
 
 /* ── Folder tree in sidebar ───────────────────────────────────────── */
 .folder-tree {
@@ -2879,26 +2837,29 @@ input[type="number"].field-input {
     border-color: var(--border);
   }
 
-  /* Unified hover for small action buttons — subtle, no lime green accent */
+  /* Unified hover for light-mode buttons — dark surface + white text */
+  .btn:hover:not(:disabled),
+  .btn-primary:hover:not(:disabled),
+  .deps-install-btn:hover:not(:disabled),
   .topbar-demo-btn:hover:not(:disabled) {
-    border-color: #aaa;
-    color: var(--text-primary);
-    background: var(--surface-hover);
+    border-color: #1f2329;
+    color: #ffffff;
+    background: #1f2329;
   }
   .sidebar-batch-btn:hover:not(:disabled) {
-    border-color: #aaa;
-    color: var(--text-primary);
-    background: var(--surface-hover);
+    border-color: #1f2329;
+    color: #ffffff;
+    background: #1f2329;
   }
   .sidebar-add-btn:hover:not(:disabled) {
-    border-color: #aaa;
-    color: var(--text-primary);
-    background: var(--surface-hover);
+    border-color: #1f2329;
+    color: #ffffff;
+    background: #1f2329;
   }
-  .tb-btn:hover:not(:disabled) {
-    background: var(--surface-hover);
-    border-color: #aaa;
-    color: var(--text-primary);
+  .tb-btn:hover:not(:disabled):not(.active) {
+    background: #1f2329;
+    border-color: #1f2329;
+    color: #ffffff;
   }
   .topbar-github-link:hover {
     color: var(--text-primary);
@@ -2981,7 +2942,8 @@ input[type="number"].field-input {
     color: #fff;
   }
   .processing-toggle-opt:hover:not(.active) {
-    background: rgba(0,0,0,0.06);
+    background: #1f2329;
+    color: #ffffff;
   }
 
   /* ── Header text: dark in light mode ─────────────────────── */
@@ -2999,7 +2961,42 @@ input[type="number"].field-input {
     border-color: #c8ccd6;
   }
   .topbar-privacy-badge {
-    color: #2f9e44 !important;
+    color: #1a1a1a !important;
+    opacity: 0.9;
+  }
+  .privacy-shield-btn,
+  .privacy-shield-btn.secure {
+    color: #1a1a1a;
+  }
+  .privacy-shield-btn:hover {
+    color: #000000;
+  }
+
+  /* ── Welcome cards: no lime outline in light mode ─────────── */
+  .welcome-feature-card {
+    color: #1a1a1a;
+  }
+  .welcome-feature-card .material-symbols-outlined,
+  .welcome-feature-title {
+    color: #1a1a1a;
+  }
+  .welcome-feature-card:hover,
+  .welcome-feature-card:focus,
+  .welcome-feature-card:focus-visible {
+    background: #1f2329;
+    border-color: #1f2329;
+    color: #ffffff;
+    outline: none;
+  }
+  .welcome-feature-card:hover .welcome-feature-title,
+  .welcome-feature-card:focus .welcome-feature-title,
+  .welcome-feature-card:focus-visible .welcome-feature-title {
+    color: #ffffff;
+  }
+  .welcome-feature-card:hover .welcome-feature-desc,
+  .welcome-feature-card:focus .welcome-feature-desc,
+  .welcome-feature-card:focus-visible .welcome-feature-desc {
+    color: rgba(255,255,255,0.82);
   }
 
   /* ── tb-btn.active: dark bg + white text in light mode ───── */
@@ -3020,18 +3017,6 @@ input[type="number"].field-input {
   }
   .vectorize-label {
     color: #3d4047;
-  }
-
-  /* ── Download dropdown: light mode ───────────────────────── */
-  .download-dropdown {
-    box-shadow: 0 8px 24px rgba(0,0,0,0.12);
-  }
-  .download-dropdown-item {
-    color: #1a1a1a;
-  }
-  .download-dropdown-item:hover {
-    background: #f0f1f4;
-    color: #1a1a1a;
   }
 
   /* ── Local proof badge: darker green text on light bg ────── */

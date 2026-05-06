@@ -1,0 +1,9 @@
+node_modules/
+.playwright-cli/
+.venv/
+server/.venv/
+__pycache__/
+*.pyc
+.DS_Store
+release/
+anonymizer-github-ready/

@@ -61,7 +61,7 @@ export interface PhotoItem {
 }
 
 export interface DetectorStatus {
-  mode: 'backend' | 'yunet-wasm' | 'mediapipe' | 'native' | 'face-api' | 'unavailable'
+  mode: 'backend' | 'yunet-wasm' | 'unavailable'
   message: string
 }
 

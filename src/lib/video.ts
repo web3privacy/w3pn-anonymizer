@@ -94,6 +94,16 @@ const VIDEO_DETECTION_PREROLL_SEC = 0.16
 const VIDEO_MIN_FACE_SCORE = 0.42
 const VIDEO_MIN_EFFECT_STRENGTH = 0.92
 
+export const VIDEO_RUNTIME_LIMITS = {
+  acceptedExtensions: ['mp4', 'webm', 'mov', 'avi', 'mkv', 'm4v', 'ogv'] as const,
+  maxUploadBytes: 500 * 1024 * 1024,
+  detectMaxDimension: DETECT_MAX_DIM,
+  defaultFps: FALLBACK_FPS,
+  estimatedFpsRange: { min: 10, max: 60 },
+  videoBitrate: VIDEO_BITRATE,
+  audioBitrate: AUDIO_BITRATE,
+} as const
+
 type WindowWithWebCodecs = Window & {
   VideoEncoder?: unknown
   VideoFrame?: VideoFrameConstructor
@@ -812,7 +822,8 @@ export async function getVideoMetadata(videoBlob: Blob): Promise<VideoMetadata> 
 /**
  * Process video as a continuous stream so the output timing stays 1:1 with the source.
  * Audio is preserved by muxing the original audio track with the processed canvas video track.
- * All processing happens in the browser — no data is sent to any server.
+ * Rendering and final encoding always stay in the browser. In Server mode only
+ * sampled detection frames may be sent to the localhost YuNet backend.
  */
 export async function processVideo(
   videoBlob: Blob,

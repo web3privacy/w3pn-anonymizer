@@ -11,13 +11,13 @@ import { createPortal } from 'react-dom'
 import JSZip from 'jszip'
 import { saveAs } from 'file-saver'
 import './App.css'
-import { detectFaces, initializeDetector, resetDetectorStatus, getDetectorStatus, checkDeps, triggerInstall, setForceLocal, setDetectionProgressCallback, getFaceApiBackendName } from './lib/detector'
+import { detectFaces, initializeDetector, resetDetectorStatus, getDetectorStatus, checkDeps, triggerInstall, setForceLocal, setDetectionProgressCallback } from './lib/detector'
 import type { DepsStatus, InstallResult } from './lib/detector'
 import { EFFECTS, applyColorAdjustments, applyEffectBrush, applyEffectRect, applyGlitchEffect, pickRandomEmoji, pickUniqueEmojis, previewEffectBrush } from './lib/effects'
 import type { PixelShiftType } from './lib/effects'
 import { canvasToBmpBlob, canvasToGifBlob, canvasToTiffBlob, FORMAT_EXT, isLosslessFormat } from './lib/image-encoders'
 import { canvasToSvg, canvasToSvgBlob, VECTORIZE_PRESETS, DEFAULT_VECTORIZE_PARAMS, type VectorizeParams, type VectorizePreset } from './lib/vectorize'
-import { extractPosterFrame, getSupportedVideoExportOptions, getVideoMetadata, getVideoPipelineCapabilities, mimeTypeToVideoExtension, processVideo, type VideoExportFormatId, type VideoFrameOverride, type VideoProcessingPhase, type VideoTimedZone } from './lib/video'
+import { VIDEO_RUNTIME_LIMITS, extractPosterFrame, getSupportedVideoExportOptions, getVideoMetadata, getVideoPipelineCapabilities, mimeTypeToVideoExtension, processVideo, type VideoExportFormatId, type VideoFrameOverride, type VideoProcessingPhase, type VideoTimedZone } from './lib/video'
 import {
   detectFrameCropFromBlob,
   getCropRectNormalized,
@@ -105,8 +105,8 @@ const DEMO_IMAGES = [
 ]
 
 const OPEN_SOURCE_CANDIDATES = [
-  { name: 'vladmandic/face-api', url: 'https://github.com/vladmandic/face-api', note: 'Local Tiny Face Detector running entirely in the browser via TensorFlow.js/WebGL.' },
-  { name: 'opencv/opencv (YuNet)', url: 'https://github.com/opencv/opencv', note: 'High-accuracy face detection via the optional local Python backend (FastAPI).' },
+  { name: 'opencv/opencv (YuNet)', url: 'https://github.com/opencv/opencv', note: 'Face detection model used in both local WASM mode and the optional localhost Python backend.' },
+  { name: 'microsoft/onnxruntime', url: 'https://github.com/microsoft/onnxruntime', note: 'Runs the local YuNet ONNX model directly in the browser via WebAssembly.' },
   { name: 'imagetracer.js', url: 'https://github.com/nicholasgasior/imagetracerjs', note: 'Raster-to-SVG vectorization with configurable presets — fully browser-based.' },
   { name: 'nodeca/pica', url: 'https://github.com/nodeca/pica', note: 'High-quality in-browser image resizing (Lanczos filter, Web Workers).' },
   { name: 'Donaldcwl/browser-image-compression', url: 'https://github.com/Donaldcwl/browser-image-compression', note: 'Worker-based JPEG/WebP compression in batch mode.' },
@@ -378,7 +378,6 @@ function App() {
   const [depsStatus, setDepsStatus] = useState<DepsStatus | null>(null)
   const [depsInstalling, setDepsInstalling] = useState(false)
   const [installResult, setInstallResult] = useState<InstallResult | null>(null)
-  const [showInstallScript, setShowInstallScript] = useState(false)
   const [autoDetect, setAutoDetect] = useState(true)   // auto-detect faces on photo open
   const [processingLocal, setProcessingLocal] = useState(() => {
     const saved = localStorage.getItem('anonymizer-processing-local')
@@ -429,8 +428,6 @@ function App() {
   const [aboutOpen, setAboutOpen] = useState(false)
   const [feedbackOpen, setFeedbackOpen] = useState(false)
   const [feedbackMsg, setFeedbackMsg] = useState('')
-  const [downloadMenuOpen, setDownloadMenuOpen] = useState(false)
-  const downloadMenuRef = useRef<HTMLDivElement>(null)
   const [isDragOver, setIsDragOver] = useState(false)
   const [folderScanState, setFolderScanState] = useState<{ found: number } | null>(null)
   const [colorAdj, setColorAdj] = useState<ColorAdjustments>(DEFAULT_COLOR_ADJUSTMENTS)
@@ -515,17 +512,6 @@ function App() {
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [adjFlyoutOpen, effectFlyoutOpen, transformFlyoutOpen])
-  // Close download menu on outside click
-  useEffect(() => {
-    if (!downloadMenuOpen) return
-    const handler = (e: MouseEvent) => {
-      if (downloadMenuRef.current?.contains(e.target as Node)) return
-      setDownloadMenuOpen(false)
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [downloadMenuOpen])
-
   const [activeBatchTasks, setActiveBatchTasks] = useState<Set<BatchTaskId>>(new Set(['format']))
   const [expandedBatchTasks, setExpandedBatchTasks] = useState<Set<BatchTaskId>>(new Set(['format']))
   const [zonesAnonymized, setZonesAnonymized] = useState(false)
@@ -1226,8 +1212,8 @@ function App() {
       const src = getDetectorStatus()
       const detSrc = src?.mode === 'backend'
         ? `via ${(src as { backendDetector?: string }).backendDetector ?? 'backend'}`
-        : src?.mode === 'face-api'
-          ? `via face-api.js (${getFaceApiBackendName() || 'local'})`
+        : src?.mode === 'yunet-wasm'
+          ? 'via local YuNet'
           : src?.mode ?? ''
       setNotice(`Detected ${zones.length} face${zones.length === 1 ? '' : 's'} ${detSrc} — ${elapsed} ms locally.`)
     } catch (err) {
@@ -2611,20 +2597,61 @@ function App() {
     setNormalizeCropDraft(null); setIsNormalizeCropPicking(false); pointerSessionRef.current = { mode: 'idle' }
   }, [normalizeSettings.cropMode])
 
+  const refreshDetector = useCallback(async (forceReset = true): Promise<DetectorStatus> => {
+    setDetectorLoading(true)
+    try {
+      if (forceReset) resetDetectorStatus()
+      const status = await initializeDetector()
+      setDetector(status)
+      return status
+    } catch {
+      const failed: DetectorStatus = { mode: 'unavailable', message: 'Initialization failed.' }
+      setDetector(failed)
+      return failed
+    } finally {
+      setDetectorLoading(false)
+    }
+  }, [])
+
   // Detector init
   useEffect(() => {
+    void refreshDetector(false)
+  }, [refreshDetector])
+
+  useEffect(() => {
+    const retryIfUnavailable = () => {
+      if (document.visibilityState === 'hidden') return
+      if (detector.mode !== 'unavailable') return
+      void refreshDetector(true)
+    }
+    window.addEventListener('focus', retryIfUnavailable)
+    document.addEventListener('visibilitychange', retryIfUnavailable)
+    return () => {
+      window.removeEventListener('focus', retryIfUnavailable)
+      document.removeEventListener('visibilitychange', retryIfUnavailable)
+    }
+  }, [detector.mode, refreshDetector])
+
+  useEffect(() => {
+    if (detector.mode !== 'unavailable') return
     let cancelled = false
-    setDetectorLoading(true)
-    initializeDetector().then((status) => {
-      if (!cancelled) { setDetector(status); setDetectorLoading(false) }
-    }).catch(() => {
-      if (!cancelled) {
-        setDetector({ mode: 'unavailable', message: 'Initialization failed.' })
-        setDetectorLoading(false)
-      }
-    })
-    return () => { cancelled = true }
-  }, [])
+    let timer: ReturnType<typeof setTimeout> | null = null
+
+    const retry = () => {
+      if (cancelled || document.visibilityState === 'hidden') return
+      void refreshDetector(true).then((status) => {
+        if (!cancelled && status.mode === 'unavailable') {
+          timer = setTimeout(retry, 2500)
+        }
+      })
+    }
+
+    timer = setTimeout(retry, 1200)
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+    }
+  }, [detector.mode, refreshDetector])
 
   const openDepsModal = useCallback(async () => {
     setInstallResult(null)
@@ -2632,8 +2659,9 @@ function App() {
     try {
       const status = await checkDeps()
       setDepsStatus(status)
+      await refreshDetector(true)
     } catch { setDepsStatus(null) }
-  }, [])
+  }, [refreshDetector])
 
   const isWindows = typeof navigator !== 'undefined' && /win/i.test(navigator.platform ?? '')
 
@@ -2727,12 +2755,12 @@ endlocal
       setDepsStatus(status)
       if (result.ok) {
         setTimeout(() => {
-          initializeDetector().then((s) => { setDetector(s); setNotice(`Backend connected: ${s.message}`) })
+          refreshDetector(true).then((s) => { setNotice(`Backend connected: ${s.message}`) })
         }, 1500)
       }
     } catch { setInstallResult({ ok: false, returncode: -1, stdout: '', stderr: '', message: 'Server not reachable. Start the Python server first, then try again.' }) }
     finally { setDepsInstalling(false) }
-  }, [])
+  }, [refreshDetector])
 
   // Load active photo into work canvas; auto-detect if enabled
   useEffect(() => {
@@ -2939,34 +2967,7 @@ endlocal
         </button>
 
         <span className="topbar-tagline">
-          <span className="download-menu-wrap" ref={downloadMenuRef}>
-            <button
-              className="topbar-tagline-link download-trigger"
-              type="button"
-              onClick={() => setDownloadMenuOpen((v) => !v)}
-            >downloadable ▾</button>
-            {downloadMenuOpen && (
-              <div className="download-dropdown">
-                <a href="https://github.com/web3privacy/w3pn-anonymizer/releases/latest/download/W3PN-Anonymizer.dmg"
-                  className="download-dropdown-item">
-                  <Icon name="laptop_mac" size={14} /> Download for macOS
-                </a>
-                <a href="https://github.com/web3privacy/w3pn-anonymizer/releases/latest/download/W3PN-Anonymizer-Setup.exe"
-                  className="download-dropdown-item">
-                  <Icon name="desktop_windows" size={14} /> Download for Windows
-                </a>
-                <a href="https://github.com/web3privacy/w3pn-anonymizer/releases/latest/download/W3PN-Anonymizer.AppImage"
-                  className="download-dropdown-item">
-                  <Icon name="computer" size={14} /> Download for Linux
-                </a>
-                <div className="download-dropdown-divider" />
-                <a href="https://github.com/web3privacy/w3pn-anonymizer/releases" target="_blank" rel="noreferrer"
-                  className="download-dropdown-item" onClick={() => setDownloadMenuOpen(false)}>
-                  <Icon name="open_in_new" size={14} /> All releases on GitHub
-                </a>
-              </div>
-            )}
-          </span>
+          <span>open source</span>
           {' · private · no data collected'}
         </span>
 
@@ -3013,7 +3014,7 @@ endlocal
           </div>
 
           <span className="topbar-privacy-badge visible">
-            {processingLocal ? 'Your data never leaves your device' : 'Data processed by W3PN server, no data saved'}
+            {processingLocal ? 'Your data never leaves your device' : 'Detection uses your local localhost backend, with no data saved'}
           </span>
 
           <div
@@ -3374,7 +3375,7 @@ endlocal
           <div className="ts-tooltip-wrap" style={{ position: 'relative' }}>
             {(() => {
               const detMode = (detector as { mode?: string }).mode
-              const backendOff = detMode !== 'backend' && detMode !== 'mediapipe' && detMode !== 'yunet-wasm'
+              const backendOff = detMode !== 'backend' && detMode !== 'yunet-wasm'
               const btnClass = lastDetectFailed && autoDetect
                 ? ' ts-btn-fail'
                 : backendOff ? ' ts-btn-setup' : ''
@@ -4784,21 +4785,19 @@ endlocal
             {/* ── Active mode pill ──────────────────────────── */}
             {(() => {
               const dm = (detector as { mode?: string }).mode
-              const isGood = dm === 'backend' || dm === 'yunet-wasm' || dm === 'mediapipe'
+              const isGood = dm === 'backend' || dm === 'yunet-wasm'
               return (
                 <div style={{ padding: '0.35rem 0.5rem', borderRadius: 6, background: isGood ? 'var(--accent-soft)' : 'rgba(255,169,77,0.08)', border: `1px solid ${isGood ? 'rgba(112,255,136,0.2)' : 'rgba(255,169,77,0.2)'}`, marginBottom: '0.5rem' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.72rem', fontWeight: 600 }}>
                     <span style={{ width: 8, height: 8, borderRadius: '50%', background: isGood ? 'var(--accent)' : 'var(--warn)' }} />
                     {dm === 'backend' ? 'Python backend — highest accuracy'
                       : dm === 'yunet-wasm' ? 'YuNet (WASM) — high accuracy, fully local'
-                      : dm === 'mediapipe' ? 'MediaPipe BlazeFace — fast local detection'
-                      : 'Browser AI — basic detection'}
+                      : 'YuNet unavailable'}
                   </div>
                   <div style={{ fontSize: '0.62rem', color: 'var(--text-muted)', marginTop: '0.1rem', paddingLeft: '1.2rem' }}>
                     {dm === 'backend' ? 'OpenCV YuNet on localhost server.'
                       : dm === 'yunet-wasm' ? 'Same YuNet model as Python backend, running locally via ONNX Runtime WebAssembly. High accuracy, fully offline.'
-                      : dm === 'mediapipe' ? 'Google MediaPipe WASM — fast, offline, no GPU needed.'
-                      : <>face-api.js fallback.{getFaceApiBackendName() && <> Using: <strong>{getFaceApiBackendName()}</strong></>}</>}
+                      : 'YuNet is unavailable. Reinstall or reload the local model/runtime, or start the localhost backend.'}
                     {' '}All data stays on your device.
                   </div>
                 </div>
@@ -4823,137 +4822,123 @@ endlocal
               <span style={{ fontSize: '0.72rem', fontWeight: 500 }}>Auto-detect faces when opening photos</span>
             </div>
 
-            {/* ── Install Python server ────────────────────── */}
-            {(detector as { mode?: string }).mode !== 'backend' && (detector as { mode?: string }).mode !== 'yunet-wasm' && (detector as { mode?: string }).mode !== 'mediapipe' && (<>
-              <hr style={{ border: 'none', borderTop: '1px solid var(--border)', margin: '0 0 0.5rem' }} />
-              <div style={{ fontSize: '0.74rem', fontWeight: 600, marginBottom: '0.15rem' }}>Upgrade to Python backend</div>
-              <p style={{ fontSize: '0.62rem', color: 'var(--text-muted)', margin: '0 0 0.35rem', lineHeight: 1.45 }}>
-                The built-in browser AI works, but a local Python server gives <strong>much better accuracy</strong> using{' '}
-                <a href="https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet" target="_blank" rel="noreferrer" className="about-link">OpenCV YuNet</a>.
-                It runs on your computer at <code style={{ fontSize: '0.6rem' }}>127.0.0.1:7865</code> — no data leaves your machine.
-              </p>
-              <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)', marginBottom: '0.35rem', lineHeight: 1.45 }}>
-                <strong>What gets installed:</strong>{' '}
-                <a href="https://pypi.org/project/fastapi/" target="_blank" rel="noreferrer" className="about-link">FastAPI</a>,{' '}
-                <a href="https://pypi.org/project/uvicorn/" target="_blank" rel="noreferrer" className="about-link">Uvicorn</a>,{' '}
-                <a href="https://pypi.org/project/opencv-contrib-python/" target="_blank" rel="noreferrer" className="about-link">OpenCV</a>,{' '}
-                <a href="https://pypi.org/project/Pillow/" target="_blank" rel="noreferrer" className="about-link">Pillow</a>,{' '}
-                <a href="https://pypi.org/project/numpy/" target="_blank" rel="noreferrer" className="about-link">NumPy</a>{' '}
-                — all inside a virtual environment (<code style={{ fontSize: '0.58rem' }}>server/.venv</code>).
-                Requires <a href="https://python.org/downloads" target="_blank" rel="noreferrer" className="about-link">Python ≥ 3.9</a>.
-              </div>
+            <hr style={{ border: 'none', borderTop: '1px solid var(--border)', margin: '0 0 0.5rem' }} />
 
-              {/* Electron — true one-click */}
-              {(window as unknown as { electronBackend?: { checkPython: () => Promise<{ cmd: string; version: string } | null>; installDeps: () => Promise<{ ok: boolean; message: string }>; startServer: () => Promise<{ ok: boolean; message: string }> } }).electronBackend ? (
+            <div style={{ padding: '0.35rem 0.5rem', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--surface-muted)', marginBottom: '0.45rem' }}>
+              <div style={{ fontSize: '0.72rem', fontWeight: 600, marginBottom: '0.16rem' }}>
+                {depsStatus?.all_ok ? 'Localhost backend ready' : 'Localhost backend optional'}
+              </div>
+              <div style={{ fontSize: '0.62rem', color: 'var(--text-muted)', lineHeight: 1.45 }}>
+                {depsStatus?.all_ok
+                  ? <>Server detected on <code style={{ fontSize: '0.58rem' }}>127.0.0.1:7865</code>. Python and the YuNet model are ready.</>
+                  : <>Use your own localhost Python backend if you want the server YuNet path available on this device. It never uploads data to the internet.</>}
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '0.45rem', flexWrap: 'wrap', marginBottom: '0.45rem' }}>
+              <button
+                className="btn btn-sm"
+                type="button"
+                onClick={() => { void refreshDetector(true) }}
+              >
+                <Icon name="refresh" size={14} /> Re-check detector
+              </button>
+
+              {depsStatus?.all_ok && (
                 <button
-                  className="deps-install-btn"
+                  className="btn btn-sm"
                   type="button"
-                  disabled={depsInstalling}
-                  onClick={async () => {
-                    const eb = (window as unknown as { electronBackend: { checkPython: () => Promise<{ cmd: string; version: string } | null>; installDeps: () => Promise<{ ok: boolean; message: string; stderr?: string }>; startServer: () => Promise<{ ok: boolean; message: string }> } }).electronBackend
-                    setDepsInstalling(true)
-                    setInstallResult(null)
-                    try {
-                      const py = await eb.checkPython()
-                      if (!py) {
-                        setInstallResult({ ok: false, returncode: -1, stdout: '', stderr: '', message: 'Python not found. Install Python 3.9+ from python.org first.' })
-                        return
-                      }
-                      setInstallResult({ ok: true, returncode: 0, stdout: '', stderr: '', message: `Found ${py.version}. Installing…` })
-                      const inst = await eb.installDeps()
-                      if (!inst.ok) { setInstallResult({ ok: false, returncode: 1, stdout: '', stderr: inst.message, message: inst.message }); return }
-                      setInstallResult({ ok: true, returncode: 0, stdout: '', stderr: '', message: 'Starting server…' })
-                      const srv = await eb.startServer()
-                      setInstallResult({ ok: srv.ok, returncode: srv.ok ? 0 : 1, stdout: '', stderr: srv.ok ? '' : srv.message, message: srv.message })
-                      if (srv.ok) {
-                        setTimeout(() => {
-                          initializeDetector().then((s) => { setDetector(s); setNotice(`Backend connected: ${s.message}`); setDepsModalOpen(false) })
-                        }, 2000)
-                      }
-                    } catch (e) {
-                      setInstallResult({ ok: false, returncode: -1, stdout: '', stderr: '', message: `${e instanceof Error ? e.message : String(e)}` })
-                    } finally { setDepsInstalling(false) }
+                  onClick={() => {
+                    setProcessingLocal(false)
+                    setForceLocal(false)
+                    localStorage.setItem('anonymizer-processing-local', 'false')
+                    void refreshDetector(true)
                   }}
                 >
-                  <Icon name="play_arrow" size={18} />
-                  {depsInstalling ? 'Setting up…' : 'Install & start Python server'}
-                </button>
-              ) : (
-                /* Web — download script */
-                <button
-                  className="deps-install-btn"
-                  type="button"
-                  onClick={downloadInstallScript}
-                >
-                  <Icon name="download" size={18} />
-                  Download install script ({isWindows ? '.bat' : '.sh'})
+                  <Icon name="cloud" size={14} /> Use server mode
                 </button>
               )}
+            </div>
 
-              {/* Script preview toggle */}
-              <div style={{ marginTop: '0.25rem', marginBottom: '0.25rem' }}>
-                <button
-                  type="button"
-                  onClick={() => setShowInstallScript(!showInstallScript)}
-                  style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '0.58rem', padding: 0, textDecoration: 'underline' }}
-                >
-                  {showInstallScript ? 'Hide script source ▲' : 'View full script source ▼'}
-                </button>
-              </div>
-              {showInstallScript && (
-                <pre style={{
-                  background: 'var(--surface-muted)', border: '1px solid var(--border)',
-                  borderRadius: 6, padding: '0.4rem', fontSize: '0.55rem', lineHeight: 1.45,
-                  maxHeight: 200, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
-                  color: 'var(--text-primary)', marginBottom: '0.35rem',
-                }}>
-                  {isWindows ? INSTALL_SCRIPT_BAT : INSTALL_SCRIPT_SH}
-                </pre>
-              )}
-
-              {/* Instructions for web users */}
-              {!(window as unknown as { electronBackend?: unknown }).electronBackend && (
-                <div style={{ fontSize: '0.58rem', color: 'var(--text-muted)', lineHeight: 1.45, marginBottom: '0.3rem' }}>
-                  <strong>How to use:</strong> Download the script → open it to review → {isWindows
-                    ? 'double-click the .bat file to run it'
-                    : <>open Terminal, run <code style={{ fontSize: '0.55rem' }}>chmod +x anonymizer-setup.sh && ./anonymizer-setup.sh</code></>
-                  }. The script installs everything in a virtual environment and starts the server.
-                  This app will auto-detect it.
-                </div>
-              )}
-
-              {/* If server already reachable, offer direct install */}
-              {depsStatus && !depsStatus.all_ok && (
-                <button
-                  className="deps-install-btn"
-                  type="button"
-                  onClick={runInstall}
-                  disabled={depsInstalling}
-                  style={{ background: 'var(--accent)', marginBottom: '0.25rem' }}
-                >
-                  <Icon name="build" size={18} />
-                  {depsInstalling ? 'Installing…' : 'Server running — install missing packages'}
-                </button>
-              )}
-            </>)}
-
-            {/* Deps status (if backend reachable) */}
-            {depsStatus && (
-              <div style={{ padding: '0.25rem 0.4rem', borderRadius: 6, border: '1px solid var(--border)', marginBottom: '0.3rem', fontSize: '0.62rem' }}>
-                <div style={{ fontWeight: 600, color: 'var(--accent)', marginBottom: '0.1rem' }}>Server dependencies:</div>
-                {depsStatus.deps.map((d) => (
-                  <div key={d.pkg} style={{ display: 'flex', alignItems: 'center', gap: '0.2rem' }}>
-                    <span style={{ color: d.ok ? 'var(--accent)' : 'var(--warn)' }}>{d.ok ? '✓' : '✗'}</span>
-                    <span>{d.label}</span>
-                    {d.ok && d.version && <span style={{ color: 'var(--text-muted)' }}>{d.version}</span>}
-                  </div>
-                ))}
-                {!depsStatus.all_ok && (
-                  <button className="deps-install-btn" type="button" onClick={runInstall} disabled={depsInstalling}
-                    style={{ marginTop: '0.25rem', fontSize: '0.65rem', padding: '0.3rem 0.6rem' }}>
-                    {depsInstalling ? 'Installing…' : 'Install missing'}
+            {!depsStatus?.all_ok && (
+              <>
+                {(window as unknown as { electronBackend?: { checkPython: () => Promise<{ cmd: string; version: string } | null>; installDeps: () => Promise<{ ok: boolean; message: string }>; startServer: () => Promise<{ ok: boolean; message: string }> } }).electronBackend ? (
+                  <button
+                    className="deps-install-btn"
+                    type="button"
+                    disabled={depsInstalling}
+                    onClick={async () => {
+                      const eb = (window as unknown as { electronBackend: { checkPython: () => Promise<{ cmd: string; version: string } | null>; installDeps: () => Promise<{ ok: boolean; message: string; stderr?: string }>; startServer: () => Promise<{ ok: boolean; message: string }> } }).electronBackend
+                      setDepsInstalling(true)
+                      setInstallResult(null)
+                      try {
+                        const py = await eb.checkPython()
+                        if (!py) {
+                          setInstallResult({ ok: false, returncode: -1, stdout: '', stderr: '', message: 'Python not found. Install Python 3.9+ from python.org first.' })
+                          return
+                        }
+                        setInstallResult({ ok: true, returncode: 0, stdout: '', stderr: '', message: `Found ${py.version}. Installing…` })
+                        const inst = await eb.installDeps()
+                        if (!inst.ok) { setInstallResult({ ok: false, returncode: 1, stdout: '', stderr: inst.message, message: inst.message }); return }
+                        setInstallResult({ ok: true, returncode: 0, stdout: '', stderr: '', message: 'Starting server…' })
+                        const srv = await eb.startServer()
+                        setInstallResult({ ok: srv.ok, returncode: srv.ok ? 0 : 1, stdout: '', stderr: srv.ok ? '' : srv.message, message: srv.message })
+                        if (srv.ok) {
+                          setTimeout(() => {
+                            refreshDetector(true).then((s) => { setNotice(`Backend connected: ${s.message}`); setDepsModalOpen(false) })
+                          }, 2000)
+                        }
+                      } catch (e) {
+                        setInstallResult({ ok: false, returncode: -1, stdout: '', stderr: '', message: `${e instanceof Error ? e.message : String(e)}` })
+                      } finally { setDepsInstalling(false) }
+                    }}
+                  >
+                    <Icon name="play_arrow" size={18} />
+                    {depsInstalling ? 'Setting up…' : 'Install & start localhost backend'}
+                  </button>
+                ) : (
+                  <button
+                    className="deps-install-btn"
+                    type="button"
+                    onClick={downloadInstallScript}
+                  >
+                    <Icon name="download" size={18} />
+                    Download backend setup script ({isWindows ? '.bat' : '.sh'})
                   </button>
                 )}
+
+                <div style={{ fontSize: '0.58rem', color: 'var(--text-muted)', lineHeight: 1.45, marginTop: '0.3rem', marginBottom: '0.35rem' }}>
+                  {depsStatus
+                    ? 'Server was reached, but some backend requirements or the YuNet model are still missing.'
+                    : 'If you do not need server mode, you can ignore this section and stay in fully local browser mode.'}
+                </div>
+
+                {depsStatus && !depsStatus.all_ok && (
+                  <button
+                    className="deps-install-btn"
+                    type="button"
+                    onClick={runInstall}
+                    disabled={depsInstalling}
+                    style={{ background: 'var(--accent)', marginBottom: '0.25rem' }}
+                  >
+                    <Icon name="build" size={18} />
+                    {depsInstalling ? 'Installing…' : 'Install missing backend requirements'}
+                  </button>
+                )}
+              </>
+            )}
+
+            {depsStatus && (
+              <div style={{ padding: '0.28rem 0.4rem', borderRadius: 6, border: '1px solid var(--border)', marginBottom: '0.3rem', fontSize: '0.62rem' }}>
+                <div style={{ fontWeight: 600, color: depsStatus.all_ok ? 'var(--accent)' : 'var(--warn)', marginBottom: '0.12rem' }}>
+                  Runtime check
+                </div>
+                <div style={{ color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+                  Python environment: {depsStatus.all_ok ? 'ready' : 'needs attention'}
+                </div>
+                <div style={{ color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+                  YuNet model: {depsStatus.yunet_model_present ? 'present' : 'missing'}
+                </div>
               </div>
             )}
 
@@ -4982,7 +4967,7 @@ endlocal
             <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: '0 0 0.6rem', lineHeight: 1.5 }}>
               A community project by{' '}
               <a href="https://www.web3privacy.info" target="_blank" rel="noreferrer" className="about-link">Web3Privacy Now</a>
-              {' '}— privacy-first image and video anonymization tool. Everything runs locally in your browser.
+              {' '}— privacy-first image and video anonymization tool. Rendering and export stay in the browser; face detection can run either in-browser or through your own localhost backend.
             </p>
 
             <h3 style={{ margin: '0.7rem 0 0.3rem', fontSize: '0.82rem', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)' }}>Features</h3>
@@ -4990,7 +4975,7 @@ endlocal
               {[
                 '🎭 14+ anonymization effects — blur, pixelate, blackout, emoji, glitch, thermal, halftone, silhouette, noise, swirl, contour, diamond, and more',
                 '✏️ Brush & zone tools — paint or draw rectangles over any region, adjustable size',
-                '🤖 Auto face detection — browser-side AI (face-api.js / TensorFlow.js) + optional Python backend (OpenCV YuNet)',
+                '🤖 Auto face detection — YuNet in-browser via ONNX Runtime WebAssembly + optional localhost Python YuNet backend',
                 '🎨 Color adjustments — brightness, contrast, saturation, shadows, highlights, temperature + presets',
                 '🌀 Transform effects — halftone, glitch, pixel shift (wave / zoom / shear / ripple / mirror), color shift',
                 '🎬 Video anonymization — frame-by-frame local processing with MediaRecorder for MP4, WebM, MOV, and more',
@@ -4998,7 +4983,7 @@ endlocal
                 '📦 Export: JPEG, PNG, WebP, BMP, GIF, TIFF + ZIP for batch downloads',
                 '🖼️ SVG vectorization — convert images to SVG with 8 presets, custom parameters, and live preview',
                 '📸 Save snapshot — freeze intermediate edits as new photos in the explorer',
-                '🖥️ Desktop apps — downloadable for macOS, Windows, and Linux (Electron)',
+                '🧰 Desktop shell is kept in the codebase, but public desktop downloads are temporarily hidden until the builds are polished',
               ].map((item) => (
                 <li key={item} style={{ marginBottom: '0.22rem', fontSize: '0.76rem', color: 'var(--text-secondary)' }}>{item}</li>
               ))}
@@ -5008,11 +4993,43 @@ endlocal
             <ul style={{ margin: '0 0 0.4rem', paddingLeft: '1.1rem' }}>
               {[
                 '🔒 100% local by default — all processing runs in your browser, no uploads',
-                '🛡️ Local / Server toggle — choose fully local or optional server-assisted detection',
+                '🛡️ Local / Server toggle — choose in-browser YuNet or your own localhost Python YuNet backend',
                 '📊 CPU timing proof — shows processing time to verify local execution',
-                '🚫 No analytics, no cookies, no tracking — zero external network requests',
+                '🚫 No analytics, no cookies, no tracking — zero third-party network requests',
                 '🔤 Self-hosted fonts — Material Symbols served locally, no Google CDN',
                 '🌐 Content Security Policy — blocks unintended outbound connections',
+              ].map((item) => (
+                <li key={item} style={{ marginBottom: '0.22rem', fontSize: '0.76rem', color: 'var(--text-secondary)' }}>{item}</li>
+              ))}
+            </ul>
+
+            <h3 style={{ margin: '0.7rem 0 0.3rem', fontSize: '0.82rem', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)' }}>Operational limits</h3>
+            <ul style={{ margin: '0 0 0.4rem', paddingLeft: '1.1rem' }}>
+              {[
+                `📁 Queue limit — up to ${MAX_TOTAL_PHOTOS} media items loaded in one session`,
+                `🖼️ Image inputs — up to ${fmtBytes(MAX_FILE_SIZE)} per file in the browser queue`,
+                `🧠 Local detector — YuNet analyzes the full image plus 640 px tiles for large frames`,
+                `🖥️ Localhost detector — accepts JPEG/PNG/WebP/BMP/TIFF requests up to 25 MB and 30 megapixels`,
+                `🎞️ Video inputs — up to ${fmtBytes(VIDEO_RUNTIME_LIMITS.maxUploadBytes)} per file; accepted extensions: ${VIDEO_RUNTIME_LIMITS.acceptedExtensions.map((ext) => ext.toUpperCase()).join(', ')}`,
+                `🎯 Video detection — sampled frames are downscaled to ${VIDEO_RUNTIME_LIMITS.detectMaxDimension}px on the long edge before YuNet runs`,
+                `📼 Video export — ${Math.round(VIDEO_RUNTIME_LIMITS.videoBitrate / 1_000_000)} Mbps video + ${Math.round(VIDEO_RUNTIME_LIMITS.audioBitrate / 1000)} kbps audio; FPS defaults to ${VIDEO_RUNTIME_LIMITS.defaultFps} and is normalized into the ${VIDEO_RUNTIME_LIMITS.estimatedFpsRange.min}–${VIDEO_RUNTIME_LIMITS.estimatedFpsRange.max} range`,
+                `🧬 Batch resize — max width and height fields are clamped to 25,000 px`,
+                `🗺️ SVG preview — vectorization preview is internally capped to 1,200 px on the long edge for responsiveness`,
+              ].map((item) => (
+                <li key={item} style={{ marginBottom: '0.22rem', fontSize: '0.76rem', color: 'var(--text-secondary)' }}>{item}</li>
+              ))}
+            </ul>
+
+            <h3 style={{ margin: '0.7rem 0 0.3rem', fontSize: '0.82rem', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)' }}>Data flow & storage</h3>
+            <ul style={{ margin: '0 0 0.4rem', paddingLeft: '1.1rem' }}>
+              {[
+                '🧠 Session memory — loaded files, snapshots, original backups, zones, and video frame overrides live in memory as Blob/ObjectURL state for the current session only',
+                '🧹 Cleanup — preview ObjectURLs are revoked when media is replaced or deleted, and the remaining previews are revoked when the app unloads',
+                '💾 Persistent browser storage — only the selected theme and the Local/Server preference are written to localStorage',
+                '📦 Export behavior — files are written to disk only when you explicitly export, download, or choose overwrite-originals through the File System Access API',
+                '🏠 Server mode scope — only still images or sampled video detection frames are POSTed to your own localhost backend at 127.0.0.1:7865; the backend decodes them in memory, returns boxes, and does not save the source pixels',
+                '🗂️ Server runtime files — if you enable the localhost backend, the only persistent backend files are its virtualenv under server/.venv and the YuNet model cache under server/models/',
+                `🎬 Video path — even in Server mode, timeline building, masking, effect rendering, and final encoding stay in-browser via ${videoPipelineCapabilities.webCodecsRenderer ? 'WebCodecs + MediaRecorder' : 'MediaRecorder'}`
               ].map((item) => (
                 <li key={item} style={{ marginBottom: '0.22rem', fontSize: '0.76rem', color: 'var(--text-secondary)' }}>{item}</li>
               ))}

@@ -1,7 +1,6 @@
 """
 Face detection backend for Anonymizer.
-Uses OpenCV YuNet (FaceDetectorYN) as primary detector.
-Falls back to Haar cascades if YuNet model is not available.
+Uses OpenCV YuNet (FaceDetectorYN) as the only active detector.
 
 Run:
     cd server && uvicorn main:app --port 7865 --reload
@@ -12,10 +11,7 @@ or:
 from __future__ import annotations
 
 import importlib
-import io
-import json
 import logging
-import os
 import subprocess
 import sys
 import time
@@ -23,13 +19,10 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-import threading
-
 import cv2
 import numpy as np
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from PIL import Image
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 log = logging.getLogger(__name__)
@@ -65,7 +58,7 @@ app = FastAPI(title="Anonymizer Face Detection API", version="1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -73,9 +66,7 @@ app.add_middleware(
 # ── Detector state ────────────────────────────────────────────────────────────
 
 _yunet: cv2.FaceDetectorYN | None = None
-_haar: cv2.CascadeClassifier | None = None
 _detector_mode: str = "none"
-_haar_lock = threading.Lock()  # Haar classifier is not thread-safe
 
 
 def _download_yunet() -> bool:
@@ -109,21 +100,8 @@ def _init_yunet(width: int = 640, height: int = 640) -> cv2.FaceDetectorYN | Non
         log.warning("YuNet init failed: %s", exc)
         return None
 
-
-def _init_haar() -> cv2.CascadeClassifier | None:
-    cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-    try:
-        clf = cv2.CascadeClassifier(cascade_path)
-        if clf.empty():
-            return None
-        return clf
-    except Exception as exc:
-        log.warning("Haar init failed: %s", exc)
-        return None
-
-
 def _startup_init() -> None:
-    global _yunet, _haar, _detector_mode
+    global _yunet, _detector_mode
     yunet_ok = _download_yunet()
     if yunet_ok:
         _yunet = _init_yunet()
@@ -131,13 +109,8 @@ def _startup_init() -> None:
             _detector_mode = "yunet"
             log.info("Primary detector: YuNet (OpenCV FaceDetectorYN)")
             return
-    _haar = _init_haar()
-    if _haar:
-        _detector_mode = "haar"
-        log.info("Primary detector: Haar cascades (fallback — YuNet unavailable)")
-    else:
-        _detector_mode = "none"
-        log.warning("No face detector available!")
+    _detector_mode = "none"
+    log.warning("YuNet detector unavailable!")
 
 
 @app.on_event("startup")
@@ -271,40 +244,6 @@ def _detect_yunet(img_bgr: np.ndarray, *, robust: bool = False, score_threshold:
 
     return _nms_face_boxes(all_boxes, 0.35)
 
-
-def _detect_haar(img_bgr: np.ndarray, robust: bool = False) -> list[dict]:
-    """Detect faces with Haar cascades. Returns list of box dicts."""
-    if _haar is None:
-        return []
-    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-    gray = cv2.equalizeHist(gray)
-
-    scale = 1.05 if robust else 1.1
-    min_neighbors = 3 if robust else 5
-
-    faces = _haar.detectMultiScale(
-        gray,
-        scaleFactor=scale,
-        minNeighbors=min_neighbors,
-        minSize=(30, 30),
-        flags=cv2.CASCADE_SCALE_IMAGE,
-    )
-
-    results = []
-    if len(faces) == 0:
-        return results
-    for x, y, bw, bh in faces:
-        results.append({
-            "x": int(x),
-            "y": int(y),
-            "width": int(bw),
-            "height": int(bh),
-            "score": 1.0,
-            "source": "haar",
-        })
-    return results
-
-
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 
@@ -317,8 +256,7 @@ def get_status() -> dict:
         "yunet_model_present": YUNET_MODEL_PATH.exists(),
         "message": {
             "yunet": "YuNet (OpenCV FaceDetectorYN) — high accuracy",
-            "haar": "Haar Cascades (fallback) — moderate accuracy",
-            "none": "No detector available — check server logs",
+            "none": "YuNet unavailable — check server logs",
         }.get(_detector_mode, "Unknown"),
     }
 
@@ -441,11 +379,8 @@ async def detect_faces(
     try:
         if _detector_mode == "yunet":
             faces = _detect_yunet(img_bgr, robust=is_robust)
-        elif _detector_mode == "haar":
-            with _haar_lock:
-                faces = _detect_haar(img_bgr, robust=is_robust)
         else:
-            raise HTTPException(status_code=503, detail="No face detector available on server.")
+            raise HTTPException(status_code=503, detail="YuNet is not available on the server.")
     except HTTPException:
         raise
     except Exception as exc:

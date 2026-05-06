@@ -33,7 +33,6 @@
       "server/main.py",
       "server/requirements.txt",
       "public/fonts/**/*",
-      "public/mediapipe/**/*",
       "public/models/**/*",
       "public/vendor/**/*"
     ],
@@ -77,12 +76,7 @@
   },
   "dependencies": {
     "@9am/img-halftone": "^1.0.3",
-    "@mediapipe/tasks-vision": "^0.10.35",
-    "@tensorflow/tfjs-backend-webgl": "^4.22.0",
-    "@tensorflow/tfjs-converter": "^4.22.0",
-    "@tensorflow/tfjs-core": "^4.22.0",
     "browser-image-compression": "^2.0.2",
-    "face-api.js": "^0.22.2",
     "file-saver": "^2.0.5",
     "imagetracerjs": "^1.2.6",
     "jszip": "^3.10.1",

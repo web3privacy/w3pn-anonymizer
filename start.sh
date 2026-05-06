@@ -1,29 +1,25 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────
-# Anonymizer – start both backend and frontend
+# W3PN Anonymizer — start frontend + localhost YuNet backend
 # ──────────────────────────────────────────────────────────────
-set -e
+set -euo pipefail
+
 ROOT="$(cd "$(dirname "$0")" && pwd)"
+SERVER_DIR="$ROOT/server"
 
-# ── 1. Python backend ─────────────────────────────────────────
-PYTHON="${PYTHON:-python3}"
+if [ ! -d "$ROOT/node_modules" ]; then
+  echo "📦 Installing frontend dependencies…"
+  npm install
+fi
 
-echo "📦 Installing / verifying Python dependencies…"
-$PYTHON -m pip install -q -r "$ROOT/server/requirements.txt"
-
-echo "🚀 Starting Python detection backend on http://127.0.0.1:7865"
-cd "$ROOT/server"
-$PYTHON -m uvicorn main:app --host 127.0.0.1 --port 7865 --log-level info &
+echo "🚀 Starting localhost YuNet backend on http://127.0.0.1:7865"
+bash "$SERVER_DIR/start.sh" &
 BACKEND_PID=$!
 
+echo "🌐 Starting Vite dev server on http://127.0.0.1:5173"
 cd "$ROOT"
-
-# ── 2. Vite frontend ──────────────────────────────────────────
-echo "🌐 Starting Vite dev server…"
 npm run dev &
 FRONTEND_PID=$!
 
-# ── 3. Cleanup on exit ────────────────────────────────────────
-trap "kill $BACKEND_PID $FRONTEND_PID 2>/dev/null" EXIT
-
+trap 'kill $BACKEND_PID $FRONTEND_PID 2>/dev/null || true' EXIT
 wait
