@@ -1,8 +1,28 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
   <head>
+    <script>
+      (function () {
+        var mobile = window.matchMedia('(max-width: 1024px)').matches
+        var stored = localStorage.getItem('anonymizer-theme')
+        var theme = mobile ? 'dark' : (stored === 'light' || stored === 'dark' ? stored : 'dark')
+        document.documentElement.setAttribute('data-theme', theme)
+      })()
+    </script>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <script>
+      (function () {
+        if (!window.matchMedia('(max-width: 1024px)').matches) return
+        var meta = document.querySelector('meta[name="viewport"]')
+        if (meta) {
+          meta.setAttribute(
+            'content',
+            'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover',
+          )
+        }
+      })()
+    </script>
 
     <title>W3PN Anonymizer — Privacy-First Photo & Video Anonymization</title>
     <meta name="description" content="Free, open-source tool for anonymizing faces in photos and videos. 100% local processing — no uploads, no servers, no tracking. Blur, pixelate, emoji, and 14+ effects." />
@@ -33,9 +53,8 @@
     <meta name="apple-mobile-web-app-title" content="W3PN Anonymizer" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
-    <meta name="theme-color" content="#f2f3f5" media="(prefers-color-scheme: light)" />
-    <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#000000" />
+    <meta name="color-scheme" content="dark" />
     <meta name="mobile-web-app-capable" content="yes" />
 
     <!-- Favicons -->

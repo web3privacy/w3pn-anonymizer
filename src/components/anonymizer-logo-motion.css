@@ -1,0 +1,148 @@
+.logo-motion-wrap {
+  position: relative;
+  width: 100%;
+  display: block;
+}
+
+/* ── Idle branch: same look as today's HP ── */
+
+.logo-motion-idle {
+  width: 100%;
+  aspect-ratio: 1;
+  cursor: pointer;
+  touch-action: none;
+  will-change: transform;
+}
+
+.logo-motion-idle img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+  user-select: none;
+}
+
+.logo-motion-idle--hidden {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* ── Active branch: layered SVG ── */
+
+.logo-motion-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+}
+
+.logo-motion-layer-outer,
+.logo-motion-layer-inner {
+  will-change: transform;
+}
+
+.logo-motion-center {
+  will-change: transform;
+}
+
+.logo-motion-ghost circle {
+  will-change: opacity, filter;
+}
+
+/* ── Calibration copy ── */
+
+.logo-motion-copy {
+  text-align: center;
+  color: #fff;
+  padding-top: 12px;
+  opacity: 0;
+  transition: opacity 0.6s ease;
+  pointer-events: none;
+  user-select: none;
+}
+
+.logo-motion-copy--visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.logo-motion-copy-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #00ff78;
+  margin: 0 0 4px;
+}
+
+.logo-motion-copy-hint {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  opacity: 0.5;
+  margin: 0 0 10px;
+}
+
+.logo-motion-skip {
+  background: none;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 10px;
+  font-weight: 500;
+  padding: 5px 20px;
+  border-radius: 14px;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  transition: border-color 0.2s, color 0.2s;
+}
+
+.logo-motion-skip:hover,
+.logo-motion-skip:focus-visible {
+  border-color: rgba(255, 255, 255, 0.5);
+  color: #fff;
+}
+
+/* Completion flash */
+.logo-motion-complete {
+  text-align: center;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #00ff78;
+  padding-top: 12px;
+  opacity: 0;
+  transition: opacity 0.8s ease;
+  pointer-events: none;
+}
+
+.logo-motion-complete--visible {
+  opacity: 0.8;
+}
+
+/* Dim CTAs while calibrating */
+.logo-motion-calibrating ~ .mobile-home-v2-cta,
+.logo-motion-calibrating ~ .desktop-home-v2-actions {
+  opacity: 0.3;
+  pointer-events: none;
+  transition: opacity 0.5s ease;
+}
+
+/* ── prefers-reduced-motion ── */
+
+@media (prefers-reduced-motion: reduce) {
+  .logo-motion-idle {
+    animation: none !important;
+    will-change: auto;
+  }
+
+  .logo-motion-svg,
+  .logo-motion-layer-outer,
+  .logo-motion-layer-inner,
+  .logo-motion-center,
+  .logo-motion-ghost {
+    animation: none !important;
+    will-change: auto;
+  }
+}

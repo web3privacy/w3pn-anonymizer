@@ -16,15 +16,20 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     headers: isolationHeaders,
-    proxy: {
-      '/api': {
-        target: 'http://127.0.0.1:7865',
-        changeOrigin: true,
-      },
-    },
   },
   preview: {
     headers: isolationHeaders,
   },
   envPrefix: ['VITE_', 'TAURI_'],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          vendor: ['react', 'react-dom'],
+          onnx: ['onnxruntime-web'],
+          zip: ['jszip'],
+        },
+      },
+    },
+  },
 })

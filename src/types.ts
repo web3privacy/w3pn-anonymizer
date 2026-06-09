@@ -16,12 +16,50 @@ export type AnonymizeEffectId =
   | 'thermal'
   | 'static'
   | 'zoom-blur'
+  | 'custom-image'
+
+export type CustomImageSource =
+  | 'custom'
+  | 'ui-faces-human'
+  | 'ui-faces-abstract'
+  | 'cryptopunks'
+  | 'aavegotchi'
+  | 'celebrities'
+
+export interface CustomImageAsset {
+  id: string
+  name: string
+  blob: Blob
+  objectUrl: string
+  imageBitmap?: ImageBitmap
+}
+
+export interface EffectRenderOptions {
+  customImages?: CustomImageAsset[]
+  customImageSource?: CustomImageSource
+  customImageAssetId?: string
+  zoneId?: string
+  seed?: string | number
+}
+
+export interface EffectParamMeta {
+  key: string
+  label: string
+  min: number
+  max: number
+  default: number
+  unit?: string
+}
 
 export interface EffectDefinition {
   id: AnonymizeEffectId
   label: string
   description: string
   icon: string  // Material Symbol name
+  /** User-facing name for the main "strength" slider (default "Intensity"). */
+  strengthLabel?: string
+  /** Additional meaningful parameters (beyond the strength slider). */
+  params?: EffectParamMeta[]
 }
 
 export interface FaceBox {
@@ -40,6 +78,13 @@ export interface Zone {
   height: number
   effect: AnonymizeEffectId
   emoji: string
+  customImageAssetId?: string
+  maskShape?: 'rectangle' | 'circle' | 'path'
+  /** Raw YuNet detection box (normalized); face-offset slider expands from these. */
+  detectX?: number
+  detectY?: number
+  detectWidth?: number
+  detectHeight?: number
 }
 
 export interface PhotoItem {
@@ -61,9 +106,12 @@ export interface PhotoItem {
 }
 
 export interface DetectorStatus {
-  mode: 'backend' | 'yunet-wasm' | 'unavailable'
+  mode: 'yunet-wasm' | 'unavailable'
   message: string
 }
+
+/** What the detector scans for. Only 'faces' is wired to a local model today. */
+export type DetectionTarget = 'faces' | 'plates' | 'documents' | 'text'
 
 export type NormalizeFormat = 'image/jpeg' | 'image/png' | 'image/webp' | 'image/bmp' | 'image/gif' | 'image/tiff'
 export type NormalizeResizeMode = 'keep' | 'max-bound' | 'exact'

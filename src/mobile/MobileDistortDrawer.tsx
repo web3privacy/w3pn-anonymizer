@@ -1,0 +1,245 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Icon } from '../components/Icon'
+import {
+  DEFAULT_DISTORT_STRENGTHS,
+  DISTORT_EFFECT_META,
+  DISTORT_EFFECT_ORDER,
+  type DistortEffectId,
+} from '../lib/distort-effects'
+import type { AppMobileBindings } from './bindings'
+import { MobileToolDrawer } from './MobileToolDrawer'
+
+interface MobileDistortDrawerProps {
+  b: AppMobileBindings
+  liveMode?: boolean
+}
+
+function DistortSettingsPanel({
+  id,
+  b,
+  liveMode,
+}: {
+  id: DistortEffectId
+  b: AppMobileBindings
+  liveMode: boolean
+}) {
+  const strength = b.distortStrengthByEffect[id] ?? DEFAULT_DISTORT_STRENGTHS[id]
+
+  return (
+    <div className="mobile-distort-settings mobile-distort-settings-v2">
+      {id === 'halftone' && (
+        <>
+          {([['Dot size', 'dotSize', 2, 30], ['Contrast', 'halftoneContrast', 0, 100], ['Angle', 'halftoneAngle', 0, 360]] as const).map(([label, key, min, max]) => (
+            <div key={key} className="mobile-slider-row-v2">
+              <span className="mobile-slider-row-v2-label">{label}</span>
+              <input type="range" min={min} max={max} value={b.adjTransformParams[key]} onChange={(e) => b.setAdjParam(key, Number(e.target.value))} />
+              <span className="mobile-slider-row-v2-val">{b.adjTransformParams[key]}</span>
+            </div>
+          ))}
+        </>
+      )}
+      {id === 'glitch' && (
+        <div className="mobile-slider-row-v2">
+          <span className="mobile-slider-row-v2-label">Shift</span>
+          <input type="range" min={1} max={40} value={b.adjTransformParams.glitchShift} onChange={(e) => b.setAdjParam('glitchShift', Number(e.target.value))} />
+          <span className="mobile-slider-row-v2-val">{b.adjTransformParams.glitchShift}</span>
+        </div>
+      )}
+      {id === 'pixel-shift' && (
+        <>
+          <div className="mobile-slider-row-v2 mobile-slider-row-v2--segmented">
+            <span className="mobile-slider-row-v2-label">Type</span>
+            <div className="mobile-segmented" role="group" aria-label="Pixel shift type">
+              {(['wave', 'shear', 'ripple', 'mirror'] as const).map((opt) => (
+                <button
+                  key={opt}
+                  type="button"
+                  className={`mobile-segmented-btn${b.adjPixelShiftType === opt ? ' active' : ''}`}
+                  onClick={() => b.setAdjPixelShiftType(opt)}
+                >
+                  {opt}
+                </button>
+              ))}
+            </div>
+          </div>
+          {([['X shift', 'pixelShiftX', 1, 60], ['Y shift', 'pixelShiftY', 1, 60]] as const).map(([label, key, min, max]) => (
+            <div key={key} className="mobile-slider-row-v2">
+              <span className="mobile-slider-row-v2-label">{label}</span>
+              <input type="range" min={min} max={max} value={b.adjTransformParams[key]} onChange={(e) => b.setAdjParam(key, Number(e.target.value))} />
+              <span className="mobile-slider-row-v2-val">{b.adjTransformParams[key]}</span>
+            </div>
+          ))}
+        </>
+      )}
+      {id === 'color-shift' && (
+        <>
+          {([['Hue', 'colorShiftHue', 0, 360], ['Sat', 'colorShiftSat', 0, 100]] as const).map(([label, key, min, max]) => (
+            <div key={key} className="mobile-slider-row-v2">
+              <span className="mobile-slider-row-v2-label">{label}</span>
+              <input type="range" min={min} max={max} value={b.adjTransformParams[key]} onChange={(e) => b.setAdjParam(key, Number(e.target.value))} />
+              <span className="mobile-slider-row-v2-val">{b.adjTransformParams[key]}</span>
+            </div>
+          ))}
+        </>
+      )}
+      <div className="mobile-slider-row-v2">
+        <span className="mobile-slider-row-v2-label">Strength</span>
+        <input
+          type="range"
+          min={1}
+          max={80}
+          value={strength}
+          onChange={(e) => b.setDistortStrength(id, Number(e.target.value))}
+        />
+        <span className="mobile-slider-row-v2-val">{strength}</span>
+      </div>
+      {!liveMode && (
+        <button
+          className="mobile-distort-apply-btn"
+          type="button"
+          onClick={() => b.commitAdjTransform()}
+          disabled={!b.activePhoto || !b.enabledDistorts.includes(id)}
+        >
+          APPLY
+        </button>
+      )}
+    </div>
+  )
+}
+
+const DISTORT_SLIDE_MS = 220
+
+export function MobileDistortDrawer({ b, liveMode = false }: MobileDistortDrawerProps) {
+  const open = b.mobilePanel === 'tool-distort'
+  const [settingsView, setSettingsView] = useState<DistortEffectId | null>(null)
+  const [slideToSettings, setSlideToSettings] = useState(false)
+  const slideTimerRef = useRef<ReturnType<typeof setTimeout>>()
+
+  const clearSlideTimer = useCallback(() => {
+    if (slideTimerRef.current) {
+      clearTimeout(slideTimerRef.current)
+      slideTimerRef.current = undefined
+    }
+  }, [])
+
+  const openSettings = useCallback((id: DistortEffectId) => {
+    clearSlideTimer()
+    setSettingsView(id)
+    setSlideToSettings(false)
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => setSlideToSettings(true))
+    })
+  }, [clearSlideTimer])
+
+  const backToList = useCallback(() => {
+    clearSlideTimer()
+    setSlideToSettings(false)
+    slideTimerRef.current = setTimeout(() => setSettingsView(null), DISTORT_SLIDE_MS)
+  }, [clearSlideTimer])
+
+  useEffect(() => {
+    if (!open) {
+      clearSlideTimer()
+      setSettingsView(null)
+      setSlideToSettings(false)
+    }
+  }, [open, clearSlideTimer])
+
+  useEffect(() => () => clearSlideTimer(), [clearSlideTimer])
+
+  const close = () => {
+    clearSlideTimer()
+    setSettingsView(null)
+    setSlideToSettings(false)
+    b.setMobilePanel(null)
+  }
+
+  const settingsMeta = settingsView ? DISTORT_EFFECT_META[settingsView] : null
+  const inSettings = settingsView !== null
+
+  const header = inSettings && settingsMeta ? (
+    <div className="mobile-drawer-header-v2">
+      <button type="button" className="mobile-drawer-header-v2-btn" onClick={backToList} aria-label="Back">
+        <Icon name="arrow_back" size={20} />
+      </button>
+      <h2 className="mobile-drawer-header-v2-title">{settingsMeta.label.toUpperCase()}</h2>
+      <button type="button" className="mobile-drawer-header-v2-btn mobile-drawer-header-v2-close" onClick={close} aria-label="Close">
+        <Icon name="close" size={20} />
+      </button>
+    </div>
+  ) : undefined
+
+  return (
+    <MobileToolDrawer
+      open={open}
+      onClose={close}
+      title={inSettings ? (settingsMeta?.label.toUpperCase() ?? 'DISTORT') : 'DISTORT FX'}
+      variant="tool"
+      header={header}
+    >
+      <div className="mobile-distort-viewport">
+        <div className={`mobile-distort-panels${slideToSettings ? ' show-settings' : ''}`}>
+          <div className="mobile-distort-panel mobile-distort-panel-list">
+            <div className="mobile-distort-list">
+              {DISTORT_EFFECT_ORDER.map((id) => {
+                const meta = DISTORT_EFFECT_META[id]
+                const enabled = b.enabledDistorts.includes(id)
+                return (
+                  <div
+                    key={id}
+                    className={`mobile-distort-list-row${enabled ? ' active' : ''}`}
+                  >
+                    <button
+                      type="button"
+                      className="mobile-distort-toggle"
+                      onClick={() => b.toggleDistortEffect(id)}
+                      aria-pressed={enabled}
+                    >
+                      <span className={`mobile-distort-check${enabled ? ' on' : ''}`} aria-hidden="true">
+                        {enabled && <Icon name="check" size={12} />}
+                      </span>
+                      <Icon name={meta.icon} size={16} />
+                      <span className="mobile-distort-name">{meta.label.toUpperCase()}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="mobile-distort-settings-open"
+                      onClick={() => openSettings(id)}
+                      aria-label={`${meta.label} settings`}
+                    >
+                      <span className="mobile-distort-settings-hint">Settings</span>
+                      <Icon name="chevron_right" size={18} />
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+            <div className="mobile-distort-list-actions">
+              <button className="mobile-distort-reset-btn" type="button" onClick={b.resetAdjTransformPreview}>
+                RESET ALL
+              </button>
+              {!liveMode && (
+                <button
+                  className="mobile-distort-apply-btn"
+                  type="button"
+                  onClick={() => { b.commitAdjTransform(); close() }}
+                  disabled={!b.activePhoto || b.enabledDistorts.length === 0}
+                >
+                  APPLY ALL
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="mobile-distort-panel mobile-distort-panel-settings">
+            {settingsView ? (
+              <DistortSettingsPanel id={settingsView} b={b} liveMode={liveMode} />
+            ) : (
+              <div className="mobile-distort-settings-placeholder" aria-hidden="true" />
+            )}
+          </div>
+        </div>
+      </div>
+    </MobileToolDrawer>
+  )
+}

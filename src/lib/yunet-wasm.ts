@@ -25,6 +25,62 @@ const TOP_K = 5000
 let session: ort.InferenceSession | null = null
 let initPromise: Promise<boolean> | null = null
 
+export interface DetectorLoadProgress {
+  loaded: number
+  total: number
+  /** download = fetching files; init = compiling WASM / creating session; ready = done */
+  phase: 'download' | 'init' | 'ready'
+}
+
+let onLoadProgress: ((p: DetectorLoadProgress) => void) | null = null
+
+export function setYuNetLoadProgressCallback(cb: ((p: DetectorLoadProgress) => void) | null): void {
+  onLoadProgress = cb
+}
+
+const reportLoad = (p: DetectorLoadProgress) => onLoadProgress?.(p)
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
+    }),
+  ])
+}
+
+/** Fetch a URL while reporting byte progress; resolves to the downloaded bytes. */
+async function fetchWithProgress(
+  url: string,
+  onChunk: (deltaBytes: number, totalForThisFile: number) => void,
+): Promise<ArrayBuffer> {
+  const res = await fetch(url)
+  if (!res.ok || !res.body) {
+    // Fall back to a plain fetch so init still proceeds even without streaming.
+    return res.arrayBuffer()
+  }
+  const total = Number(res.headers.get('Content-Length')) || 0
+  const reader = res.body.getReader()
+  const chunks: Uint8Array[] = []
+  let loaded = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    if (value) {
+      chunks.push(value)
+      loaded += value.length
+      onChunk(value.length, total)
+    }
+  }
+  const buf = new Uint8Array(loaded)
+  let offset = 0
+  for (const c of chunks) {
+    buf.set(c, offset)
+    offset += c.length
+  }
+  return buf.buffer
+}
+
 // ── Public API ───────────────────────────────────────────────────────────────
 
 export async function initYuNet(): Promise<boolean> {
@@ -36,29 +92,44 @@ export async function initYuNet(): Promise<boolean> {
     const modelUrl = `${base}models/face_detection_yunet_2023mar.onnx`
     ort.env.wasm.wasmPaths = `${base}onnx/`
 
-    const tryCreate = async (threads: number): Promise<ort.InferenceSession> => {
-      ort.env.wasm.numThreads = threads
-      return ort.InferenceSession.create(modelUrl, { executionProviders: ['wasm'] })
+    // Pre-fetch the model (small, ~227 KB) with byte progress. ORT loads the
+    // ~10 MB WASM runtime itself from wasmPaths and compiles it — that compile
+    // step is the only real "init" cost (no byte progress, browser-cached after).
+    let modelBuffer: ArrayBuffer | null = null
+    try {
+      let loaded = 0
+      let total = 0
+      modelBuffer = await fetchWithProgress(modelUrl, (delta, fileTotal) => {
+        loaded += delta
+        if (fileTotal > 0) total = fileTotal
+        reportLoad({ loaded, total, phase: 'download' })
+      })
+    } catch {
+      modelBuffer = null
     }
 
+    reportLoad({ loaded: 0, total: 0, phase: 'init' })
+
+    // Single-thread WASM: reliable and fast to initialize (no SharedArrayBuffer /
+    // cross-origin isolation requirement, no worker-spawn step that can hang).
+    // Inference stays fast because we detect on small frames; live mode further
+    // shrinks the detect resolution. A timeout guards against a stuck compile.
+    ort.env.wasm.numThreads = 1
+    const create = modelBuffer
+      ? ort.InferenceSession.create(new Uint8Array(modelBuffer), { executionProviders: ['wasm'] })
+      : ort.InferenceSession.create(modelUrl, { executionProviders: ['wasm'] })
+
     try {
-      const threads = navigator.hardwareConcurrency ? Math.min(navigator.hardwareConcurrency, 4) : 2
-      console.log('[yunet-wasm] Loading ONNX model from', modelUrl)
-      console.log('[yunet-wasm] WASM path:', ort.env.wasm.wasmPaths, `threads=${threads}`)
-      session = await tryCreate(threads)
-      console.log('[yunet-wasm] Session created, inputs:', session.inputNames, 'outputs:', session.outputNames)
+      console.log('[yunet-wasm] Creating session…', modelUrl)
+      session = await withTimeout(create, 30000, 'ONNX session')
+      console.log('[yunet-wasm] Session ready, inputs:', session.inputNames)
+      reportLoad({ loaded: 0, total: 0, phase: 'ready' })
       return true
     } catch (err) {
-      console.warn('[yunet-wasm] YuNet init failed (multi-thread WASM), retrying single-threaded…', err)
-      try {
-        session = await tryCreate(1)
-        console.log('[yunet-wasm] Session created (1 thread), inputs:', session.inputNames, 'outputs:', session.outputNames)
-        return true
-      } catch (err2) {
-        console.error('[yunet-wasm] Failed to create ONNX session:', err2)
-        session = null
-        return false
-      }
+      console.error('[yunet-wasm] Failed to create ONNX session:', err)
+      session = null
+      reportLoad({ loaded: 0, total: 0, phase: 'ready' })
+      return false
     } finally {
       initPromise = null
     }

@@ -11,13 +11,42 @@ import { createPortal } from 'react-dom'
 import JSZip from 'jszip'
 import { saveAs } from 'file-saver'
 import './App.css'
-import { detectFaces, initializeDetector, resetDetectorStatus, getDetectorStatus, checkDeps, triggerInstall, setForceLocal, setDetectionProgressCallback } from './lib/detector'
-import type { DepsStatus, InstallResult } from './lib/detector'
+import './mobile/mobile-redesign.css'
+import './desktop/desktop-v2.css'
+import { DesktopHomeDefault } from './desktop/DesktopHomeDefault'
+import { Icon } from './components/Icon'
+import { EffectPickerDialog } from './components/EffectPickerDialog'
+import { DetectionSettingsDrawer } from './components/DetectionSettingsDrawer'
+import { useHoldRepeat } from './lib/useHoldRepeat'
+import { useIsMobile } from './mobile/useIsMobile'
+import { usePinchZoom } from './mobile/usePinchZoom'
+import { usePhotoSwipeNav } from './mobile/usePhotoSwipeNav'
+import { useLockMobileViewport } from './mobile/useLockMobileViewport'
+import { MobileAbout } from './mobile/MobileAbout'
+import { MobileLiveMode } from './mobile/MobileLiveMode'
+import { MobileShell } from './mobile/MobileShell'
+import { MobileToast } from './mobile/MobileToast'
+import { MobileImageCanvasControls } from './mobile/MobileImageCanvasControls'
+import { MobileVideoCanvasControls } from './mobile/MobileVideoCanvasControls'
+import { MobileVideoProgress } from './mobile/MobileVideoProgress'
+import type { AppMobileBindings } from './mobile/bindings'
+import { bakePhotoToCanvas } from './lib/bake-photo-export'
+import { exportCanvasToBlob as exportCanvasToBlobLib } from './lib/export-canvas'
+import type { MobileMode, MobilePanel, MobileToolCategory } from './mobile/types'
+import { CROP_TOOLS, EFFECT_TOOL_ORDER, FACE_TOOLS, panelForCategory, ZONE_TOOLS } from './mobile/toolRotation'
+import type { AdjustToolId, CropToolId, EffectToolId, FaceToolId, ZoneToolId } from './mobile/toolRotation'
+import { detectFaces, initializeDetector, resetDetectorStatus, getDetectorStatus, setDetectionProgressCallback, setDetectorLoadProgressCallback, getDetectorLoadProgress, type DetectorLoadProgress } from './lib/detector'
+import { CLEAR_DETECT_FIELDS, expandPixelBox, faceOffsetPads, zonesWithFaceOffset } from './lib/face-offset'
+import {
+  applyDistortPipeline,
+  DEFAULT_DISTORT_STRENGTHS,
+  type DistortEffectId,
+} from './lib/distort-effects'
 import { EFFECTS, applyColorAdjustments, applyEffectBrush, applyEffectRect, applyGlitchEffect, pickRandomEmoji, pickUniqueEmojis, previewEffectBrush } from './lib/effects'
 import type { PixelShiftType } from './lib/effects'
 import { canvasToBmpBlob, canvasToGifBlob, canvasToTiffBlob, FORMAT_EXT, isLosslessFormat } from './lib/image-encoders'
 import { canvasToSvg, canvasToSvgBlob, VECTORIZE_PRESETS, DEFAULT_VECTORIZE_PARAMS, type VectorizeParams, type VectorizePreset } from './lib/vectorize'
-import { VIDEO_RUNTIME_LIMITS, extractPosterFrame, getSupportedVideoExportOptions, getVideoMetadata, getVideoPipelineCapabilities, mimeTypeToVideoExtension, processVideo, type VideoExportFormatId, type VideoFrameOverride, type VideoProcessingPhase, type VideoTimedZone } from './lib/video'
+import { extractPosterFrame, getSupportedVideoExportOptions, getVideoMetadata, getVideoPipelineCapabilities, mimeTypeToVideoExtension, processVideo, type VideoExportFormatId, type VideoFrameOverride, type VideoProcessingPhase, type VideoTimedZone } from './lib/video'
 import {
   detectFrameCropFromBlob,
   getCropRectNormalized,
@@ -29,7 +58,11 @@ import type {
   BatchTaskId,
   ColorAdjustments,
   ColorPresetId,
+  CustomImageAsset,
+  CustomImageSource,
   DetectorStatus,
+  DetectionTarget,
+  EffectRenderOptions,
   GlitchSubEffect,
   NormalizedRect,
   NormalizeCodecEngine,
@@ -45,17 +78,6 @@ import type {
 } from './types'
 import { COLOR_PRESETS, DEFAULT_COLOR_ADJUSTMENTS } from './types'
 
-// Material Symbol icon helper
-const Icon = ({ name, filled = false, size = 20 }: { name: string; filled?: boolean; size?: number }) => (
-  <span
-    className={`material-symbols-outlined${filled ? ' ms-filled' : ''}`}
-    style={{ fontSize: size }}
-    aria-hidden="true"
-  >
-    {name}
-  </span>
-)
-
 interface DrawTransform {
   drawX: number
   drawY: number
@@ -64,6 +86,9 @@ interface DrawTransform {
   imageWidth: number
   imageHeight: number
   scale: number
+  rotation?: number
+  centerX?: number
+  centerY?: number
 }
 
 interface PointerMap {
@@ -96,25 +121,13 @@ const DEFAULT_TRANSFORM: DrawTransform = {
   imageWidth: 0, imageHeight: 0, scale: 1,
 }
 
-const DEMO_IMAGES = [
+const DEMO_MEDIA = [
   './demo/demo-1.webp',
   './demo/demo-2.webp',
   './demo/demo-3.jpg',
   './demo/demo-4.png',
   './demo/demo-5.png',
-]
-
-const OPEN_SOURCE_CANDIDATES = [
-  { name: 'opencv/opencv (YuNet)', url: 'https://github.com/opencv/opencv', note: 'Face detection model used in both local WASM mode and the optional localhost Python backend.' },
-  { name: 'microsoft/onnxruntime', url: 'https://github.com/microsoft/onnxruntime', note: 'Runs the local YuNet ONNX model directly in the browser via WebAssembly.' },
-  { name: 'imagetracer.js', url: 'https://github.com/nicholasgasior/imagetracerjs', note: 'Raster-to-SVG vectorization with configurable presets — fully browser-based.' },
-  { name: 'nodeca/pica', url: 'https://github.com/nodeca/pica', note: 'High-quality in-browser image resizing (Lanczos filter, Web Workers).' },
-  { name: 'Donaldcwl/browser-image-compression', url: 'https://github.com/Donaldcwl/browser-image-compression', note: 'Worker-based JPEG/WebP compression in batch mode.' },
-  { name: 'jwagner/smartcrop.js', url: 'https://github.com/jwagner/smartcrop.js', note: 'Content-aware smart crop suggestion.' },
-  { name: '9am/img-halftone', url: 'https://github.com/9am/img-halftone', note: 'Canvas-based halftone pattern effect.' },
-  { name: 'Stuk/jszip', url: 'https://github.com/Stuk/jszip', note: 'Client-side ZIP archive creation for batch export.' },
-  { name: 'eligrey/FileSaver.js', url: 'https://github.com/eligrey/FileSaver.js', note: 'File download trigger for browsers.' },
-  { name: 'Electron', url: 'https://www.electronjs.org', note: 'Desktop app shell for macOS, Windows, and Linux builds.' },
+  './demo/live-capture-demo.webm',
 ]
 
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v))
@@ -135,10 +148,32 @@ const createId = () =>
     ? crypto.randomUUID()
     : `${Date.now()}-${Math.random().toString(16).slice(2)}`
 
+const hashString = (value: string | number | undefined) => {
+  const text = String(value ?? 'custom-image')
+  let hash = 2166136261
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i)
+    hash = Math.imul(hash, 16777619)
+  }
+  return hash >>> 0
+}
+
+const pickCustomImageAssetId = (assets: CustomImageAsset[], seed: string | number) => {
+  if (assets.length === 0) return undefined
+  return assets[Math.abs(hashString(seed)) % assets.length]?.id
+}
+
+import { MOBILE_BREAKPOINT_PX } from './mobile/types'
+
+const MOBILE_THEME_QUERY = `(max-width: ${MOBILE_BREAKPOINT_PX}px)`
+
 const getInitialTheme = (): ThemeMode => {
+  if (typeof window !== 'undefined' && window.matchMedia(MOBILE_THEME_QUERY).matches) {
+    return 'dark'
+  }
   const s = localStorage.getItem('anonymizer-theme')
   if (s === 'light' || s === 'dark') return s
-  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+  return 'dark'
 }
 
 const DEFAULT_NORMALIZE_SETTINGS: NormalizeSettings = {
@@ -172,56 +207,80 @@ const EFFECT_ICONS: Record<AnonymizeEffectId, string> = {
   contour:      'pentagon',
   thermal:      'thermostat',
   static:       'tv',
+  'custom-image': 'image',
 }
 
 
-const zoneToCanvasRect = (zone: Zone, t: DrawTransform) => ({
-  x: t.drawX + zone.x * t.drawWidth,
-  y: t.drawY + zone.y * t.drawHeight,
-  width: zone.width * t.drawWidth,
-  height: zone.height * t.drawHeight,
+const localToCanvas = (lx: number, ly: number, t: DrawTransform) => {
+  const rot = t.rotation ?? 0
+  const cx = t.centerX ?? t.drawX + t.drawWidth / 2
+  const cy = t.centerY ?? t.drawY + t.drawHeight / 2
+  if (Math.abs(rot) < 0.001) return { x: cx + lx, y: cy + ly }
+  const cos = Math.cos(rot)
+  const sin = Math.sin(rot)
+  return { x: cx + lx * cos - ly * sin, y: cy + lx * sin + ly * cos }
+}
+
+const normalizedToLocal = (nx: number, ny: number, t: DrawTransform) => ({
+  lx: -t.drawWidth / 2 + nx * t.drawWidth,
+  ly: -t.drawHeight / 2 + ny * t.drawHeight,
 })
 
-const normalizedRectToCanvasRect = (rect: NormalizedRect, t: DrawTransform) => ({
-  x: t.drawX + rect.x * t.drawWidth,
-  y: t.drawY + rect.y * t.drawHeight,
-  width: rect.width * t.drawWidth,
-  height: rect.height * t.drawHeight,
-})
+const zoneToCanvasRect = (zone: Zone, t: DrawTransform) => {
+  const corners = [
+    normalizedToLocal(zone.x, zone.y, t),
+    normalizedToLocal(zone.x + zone.width, zone.y, t),
+    normalizedToLocal(zone.x, zone.y + zone.height, t),
+    normalizedToLocal(zone.x + zone.width, zone.y + zone.height, t),
+  ].map(({ lx, ly }) => localToCanvas(lx, ly, t))
+  const xs = corners.map((c) => c.x)
+  const ys = corners.map((c) => c.y)
+  const x = Math.min(...xs)
+  const y = Math.min(...ys)
+  return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y }
+}
 
-const drawNormalizeCropOverlay = (ctx: CanvasRenderingContext2D, rect: NormalizedRect, t: DrawTransform, isDraft: boolean) => {
-  const cr = normalizedRectToCanvasRect(rect, t)
-  const x = Math.max(t.drawX, cr.x)
-  const y = Math.max(t.drawY, cr.y)
-  const maxX = Math.min(t.drawX + t.drawWidth, cr.x + cr.width)
-  const maxY = Math.min(t.drawY + t.drawHeight, cr.y + cr.height)
-  const w = Math.max(1, maxX - x)
-  const h = Math.max(1, maxY - y)
+const zoneContainsNormalized = (zone: Zone, nx: number, ny: number) =>
+  nx >= zone.x && nx <= zone.x + zone.width && ny >= zone.y && ny <= zone.y + zone.height
+
+const drawNormalizeCropInView = (
+  ctx: CanvasRenderingContext2D,
+  rect: NormalizedRect,
+  drawWidth: number,
+  drawHeight: number,
+  isDraft: boolean,
+) => {
+  const x = -drawWidth / 2 + rect.x * drawWidth
+  const y = -drawHeight / 2 + rect.y * drawHeight
+  const w = rect.width * drawWidth
+  const h = rect.height * drawHeight
   ctx.save()
-  ctx.fillStyle = 'rgba(0,0,0,0.42)'
-  ctx.fillRect(t.drawX, t.drawY, t.drawWidth, y - t.drawY)
-  ctx.fillRect(t.drawX, y, x - t.drawX, h)
-  ctx.fillRect(x + w, y, t.drawX + t.drawWidth - (x + w), h)
-  ctx.fillRect(t.drawX, y + h, t.drawWidth, t.drawY + t.drawHeight - (y + h))
-  ctx.strokeStyle = isDraft ? '#f59e0b' : '#64a7ff'
+  ctx.strokeStyle = isDraft ? '#ff7a1a' : '#2f81f7'
   ctx.lineWidth = isDraft ? 2.6 : 2
   ctx.strokeRect(x, y, w, h)
   ctx.restore()
 }
 
-// Outline-only zones: no fill, no label text
-const drawZoneOutline = (ctx: CanvasRenderingContext2D, zone: Zone, t: DrawTransform, selected: boolean) => {
-  const rect = zoneToCanvasRect(zone, t)
+const drawZoneInView = (
+  ctx: CanvasRenderingContext2D,
+  zone: Zone,
+  drawWidth: number,
+  drawHeight: number,
+  selected: boolean,
+) => {
+  const zx = -drawWidth / 2 + zone.x * drawWidth
+  const zy = -drawHeight / 2 + zone.y * drawHeight
+  const zw = zone.width * drawWidth
+  const zh = zone.height * drawHeight
   ctx.save()
   ctx.strokeStyle = selected ? '#ff7a1a' : '#2f81f7'
   ctx.lineWidth = selected ? 2.5 : 1.8
   ctx.setLineDash(selected ? [] : [])
-  ctx.strokeRect(rect.x, rect.y, rect.width, rect.height)
-  // Resize handle square at bottom-right corner (selected only)
+  ctx.strokeRect(zx, zy, zw, zh)
   if (selected) {
     const hs = 8
     ctx.fillStyle = '#ff7a1a'
-    ctx.fillRect(rect.x + rect.width - hs / 2, rect.y + rect.height - hs / 2, hs, hs)
+    ctx.fillRect(zx + zw - hs / 2, zy + zh - hs / 2, hs, hs)
   }
   ctx.restore()
 }
@@ -352,40 +411,73 @@ const ElapsedTimer = () => {
   return <span style={{ fontSize: '0.55rem', color: 'var(--text-muted)', fontVariantNumeric: 'tabular-nums' }}>{sec}s elapsed</span>
 }
 
-// Closed-eye SVG icon for brand
-const EyeClosedIcon = () => (
-  <svg viewBox="0 0 24 24" aria-hidden="true">
-    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/>
-    <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/>
-    <line x1="1" y1="1" x2="23" y2="23"/>
-  </svg>
-)
-
 function App() {
+  const isMobile = useIsMobile()
   const [photos, setPhotos] = useState<PhotoItem[]>([])
   const [activePhotoId, setActivePhotoId] = useState<string | null>(null)
+  const activePhotoIdRef = useRef<string | null>(null)
   const [zonesByPhoto, setZonesByPhoto] = useState<Record<string, Zone[]>>({})
   const [dirtyByPhoto, setDirtyByPhoto] = useState<Record<string, boolean>>({})
   const [selectedZoneId, setSelectedZoneId] = useState<string | null>(null)
   const [toolMode, setToolMode] = useState<ToolMode>('brush')
   const [selectedEffect, setSelectedEffect] = useState<AnonymizeEffectId>('pixelate')
+  const [lastZoneTool, setLastZoneTool] = useState<'brush' | 'rectangle'>('brush')
+  const [customImageSource, setCustomImageSource] = useState<CustomImageSource>('custom')
+  const [customImageAssets, setCustomImageAssets] = useState<CustomImageAsset[]>([])
+  const [customImagePresetLoading, setCustomImagePresetLoading] = useState(false)
+  const customImageAssetsRef = useRef<CustomImageAsset[]>([])
+  // Emoji / custom-image picker dialog + chosen-vs-random selection.
+  const [effectPickerOpen, setEffectPickerOpen] = useState<'emoji' | 'custom-image' | null>(null)
+  const [emojiRandom, setEmojiRandom] = useState(true)
+  const [selectedEmoji, setSelectedEmoji] = useState<string | null>(null)
+  const [customImageRandom, setCustomImageRandom] = useState(true)
+  const [selectedCustomImageId, setSelectedCustomImageId] = useState<string | null>(null)
+  const emojiRandomRef = useRef(true)
+  const selectedEmojiRef = useRef<string | null>(null)
+  const customImageRandomRef = useRef(true)
+  const selectedCustomImageIdRef = useRef<string | null>(null)
+  emojiRandomRef.current = emojiRandom
+  selectedEmojiRef.current = selectedEmoji
+  customImageRandomRef.current = customImageRandom
+  selectedCustomImageIdRef.current = selectedCustomImageId
+  // Resolve the emoji to assign to a zone, honoring the picker selection.
+  const resolveEmoji = useCallback(() => (
+    !emojiRandomRef.current && selectedEmojiRef.current ? selectedEmojiRef.current : pickRandomEmoji()
+  ), [])
+  // Resolve the custom-image asset id for a zone, honoring the picker selection.
+  const resolveCustomImageAssetId = useCallback((seed: string | number) => (
+    !customImageRandomRef.current && selectedCustomImageIdRef.current
+      ? selectedCustomImageIdRef.current
+      : pickCustomImageAssetId(customImageAssetsRef.current, seed)
+  ), [])
   const [brushSize, setBrushSize] = useState(52)
   const [brushStrength, setBrushStrength] = useState(0.48)
+  const brushStrengthRef = useRef(brushStrength)
+  brushStrengthRef.current = brushStrength
+  // Tracks whether the anonymization effect is currently baked onto the work
+  // canvas, so offset/strength changes know to re-bake from the original.
+  const previewBakedRef = useRef(false)
   const [theme, setTheme] = useState<ThemeMode>(getInitialTheme)
+  const effectiveTheme: ThemeMode = isMobile ? 'dark' : theme
   const [detector, setDetector] = useState<DetectorStatus>({ mode: 'unavailable', message: 'Initializing...' })
-  const [, setDetectorLoading] = useState(true)
-  const [depsModalOpen, setDepsModalOpen] = useState(false)
-  const [depsStatus, setDepsStatus] = useState<DepsStatus | null>(null)
-  const [depsInstalling, setDepsInstalling] = useState(false)
-  const [installResult, setInstallResult] = useState<InstallResult | null>(null)
+  const [detectorLoading, setDetectorLoading] = useState(true)
+  const [modelLoadProgress, setModelLoadProgress] = useState<DetectorLoadProgress | null>(() => getDetectorLoadProgress())
   const [autoDetect, setAutoDetect] = useState(true)   // auto-detect faces on photo open
-  const [processingLocal, setProcessingLocal] = useState(() => {
-    const saved = localStorage.getItem('anonymizer-processing-local')
-    const val = saved === null ? true : saved === 'true'
-    if (val) setForceLocal(true)
-    return val
-  })
   const [showBoxes, setShowBoxes] = useState(true)     // show/hide zone outlines
+  // Editable detection settings (exposed via the detection settings drawer).
+  const [detectSettingsOpen, setDetectSettingsOpen] = useState(false)
+  const [detectTarget, setDetectTarget] = useState<DetectionTarget>('faces')
+  const [detectSensitivity, setDetectSensitivity] = useState(1) // 0..100 — low default reduces false positives
+  const [detectThorough, setDetectThorough] = useState(false)
+  // How far the anonymization box is grown around the detected face. The slider
+  // reads 0–100 % but maps to a 0…0.5 padding fraction (see faceOffsetPads), so
+  // "100 %" = +50 % of the face per side. Default covers the full head.
+  const [detectFaceOffset, setDetectFaceOffset] = useState(40) // 0..100 (display)
+  // Sensitivity → YuNet confidence threshold (higher sensitivity ⇒ lower bar).
+  const detectConfidence = 0.7 - (detectSensitivity / 100) * 0.4
+  const detectSettingsRef = useRef({ confidence: detectConfidence, thorough: detectThorough, faceOffset: detectFaceOffset })
+  detectSettingsRef.current = { confidence: detectConfidence, thorough: detectThorough, faceOffset: detectFaceOffset }
+  const faceOffsetFrac = faceOffsetPads(detectFaceOffset).padX
   const [exportFormat, setExportFormat] = useState<NormalizeFormat>('image/jpeg')
   const [exportQuality, setExportQuality] = useState(92)
   const [exportPngDepth, setExportPngDepth] = useState<PngDepth>('full')
@@ -395,6 +487,14 @@ function App() {
   // resEditOpen removed — inputs are always visible now
   const [resEditW, setResEditW] = useState(0)
   const [resEditH, setResEditH] = useState(0)
+  const [mobileExportDraft, setMobileExportDraft] = useState<{
+    width: number
+    height: number
+    format: NormalizeFormat
+    quality: number
+  } | null>(null)
+  const mobileExportDraftRef = useRef(mobileExportDraft)
+  useEffect(() => { mobileExportDraftRef.current = mobileExportDraft }, [mobileExportDraft])
   const [isBusy, setIsBusy] = useState(false)
   const [isDetecting, setIsDetecting] = useState(false)
   const [detectionStep, setDetectionStep] = useState('')
@@ -427,6 +527,25 @@ function App() {
   const [batchPanelOpen, setBatchPanelOpen] = useState(false)   // replaces normPanelOpen
   const [aboutOpen, setAboutOpen] = useState(false)
   const [feedbackOpen, setFeedbackOpen] = useState(false)
+  const [mobileMode, setMobileMode] = useState<MobileMode>('home')
+  const [mobileEditorSlideIn, setMobileEditorSlideIn] = useState(false)
+  const [desktopLiveOpen, setDesktopLiveOpen] = useState(false)
+  const [mobilePanel, setMobilePanel] = useState<MobilePanel>(null)
+  const [galleryBatchSelect, setGalleryBatchSelect] = useState(false)
+  const [liveDetectEnabled, setLiveDetectEnabled] = useState(true)
+  const [mobileViewZoom, setMobileViewZoom] = useState(1)
+  const mobileViewZoomRef = useRef(1)
+  const [mobileViewPan, setMobileViewPan] = useState({ x: 0, y: 0 })
+  const mobileViewPanRef = useRef({ x: 0, y: 0 })
+  const [mobileViewRotation, setMobileViewRotation] = useState(0)
+  const mobileViewRotationRef = useRef(0)
+  const [mobileViewTransformDirty, setMobileViewTransformDirty] = useState(false)
+  const [activeCategory, setActiveCategory] = useState<MobileToolCategory>('face')
+  const [categoryIndices, setCategoryIndices] = useState<Record<MobileToolCategory, number>>({
+    face: 0, gallery: 0, zone: 0, crop: 0, adjust: 0, distort: 0, effects: 0, more: 0,
+  })
+  const [mobileToast, setMobileToast] = useState<{ message: string; action?: { label: string; onClick: () => void } } | null>(null)
+  const [exportLibraryProgress, setExportLibraryProgress] = useState<{ done: number; total: number } | null>(null)
   const [feedbackMsg, setFeedbackMsg] = useState('')
   const [isDragOver, setIsDragOver] = useState(false)
   const [folderScanState, setFolderScanState] = useState<{ found: number } | null>(null)
@@ -451,16 +570,29 @@ function App() {
   const [videoFrameOverridesByPhoto, setVideoFrameOverridesByPhoto] = useState<Record<string, VideoFrameOverride[]>>({})
   const [videoTimedZonesByPhoto, setVideoTimedZonesByPhoto] = useState<Record<string, VideoTimedZone[]>>({})
   const [videoMaskDrawActive, setVideoMaskDrawActive] = useState(false)
+  const [videoMaskShape, setVideoMaskShape] = useState<'rectangle' | 'circle' | 'path'>('rectangle')
+  const [imageMaskDrawActive, setImageMaskDrawActive] = useState(false)
+  const [eraserActive, setEraserActive] = useState(false)
+  const eraserActiveRef = useRef(false)
+  const eraserSourceCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  const eraserSourcePhotoIdRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (imageMaskDrawActive && toolMode !== 'zone' && toolMode !== 'brush') {
+      setToolMode('zone')
+    }
+  }, [imageMaskDrawActive, toolMode])
+  useEffect(() => { eraserActiveRef.current = eraserActive }, [eraserActive])
   const [videoMaskRangeSec, setVideoMaskRangeSec] = useState(3)
   const [activeVideoTime, setActiveVideoTime] = useState(0)
+  const [activeVideoFrameLabel, setActiveVideoFrameLabel] = useState<string | null>(null)
   const [videoDraftZone, setVideoDraftZone] = useState<Zone | null>(null)
   const videoMaskPointerStartRef = useRef<{ x: number; y: number } | null>(null)
+  const videoFrameLabelTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // New UI state
   const [effectFlyoutOpen, setEffectFlyoutOpen] = useState(false)
   const [adjFlyoutOpen, setAdjFlyoutOpen] = useState(false)
-  // colorPanelOpen mirrors adjFlyoutOpen — enables live preview in renderCanvas without committing
-  const colorPanelOpen = adjFlyoutOpen
   const [folderTreeOpen, setFolderTreeOpen] = useState(false)
   const [currentFolderPrefix, setCurrentFolderPrefix] = useState('')
   // Refs for flyout anchor buttons (to compute fixed position)
@@ -472,6 +604,9 @@ function App() {
   const [adjFlyoutAnchor, setAdjFlyoutAnchor] = useState<{ top: number; left: number } | null>(null)
   const [transformFlyoutOpen, setTransformFlyoutOpen] = useState(false)
   const [transformFlyoutAnchor, setTransformFlyoutAnchor] = useState<{ top: number; left: number } | null>(null)
+  // colorPanelOpen / transformPanelOpen enable live preview in renderCanvas without committing
+  const colorPanelOpen = adjFlyoutOpen || (isMobile && mobilePanel === 'tool-adjust')
+  const transformPanelOpen = transformFlyoutOpen || (isMobile && mobilePanel === 'tool-distort')
   const [effectFlyoutAnchor, setEffectFlyoutAnchor] = useState<{ top: number; left: number } | null>(null)
   const [adjTransform, setAdjTransform] = useState<string>('none')   // none | glitch | halftone | pixel-shift | color-shift
   const [adjTransformStrength, setAdjTransformStrength] = useState(35)
@@ -484,14 +619,29 @@ function App() {
   })
   const setAdjParam = (key: keyof typeof adjTransformParams, value: number) =>
     setAdjTransformParams((p) => ({ ...p, [key]: value }))
+
   const [adjPixelShiftType, setAdjPixelShiftType] = useState<'wave' | 'shear' | 'ripple' | 'mirror'>('wave')
-  // Error flyout for floppy-save when no file permissions
-  const [saveErrorVisible, setSaveErrorVisible] = useState(false)
-  const saveErrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [enabledDistorts, setEnabledDistorts] = useState<DistortEffectId[]>([])
+  const [distortStrengthByEffect, setDistortStrengthByEffect] = useState(DEFAULT_DISTORT_STRENGTHS)
+
+  const getActiveDistorts = useCallback((): DistortEffectId[] => {
+    if (isMobile) return enabledDistorts
+    return adjTransform !== 'none' ? [adjTransform as DistortEffectId] : []
+  }, [adjTransform, enabledDistorts, isMobile])
+
+  const toggleDistortEffect = useCallback((id: DistortEffectId) => {
+    setEnabledDistorts((cur) => {
+      const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]
+      setAdjTransform(next.length > 0 ? next[next.length - 1] : 'none')
+      return next
+    })
+  }, [])
+
+  const setDistortStrength = useCallback((id: DistortEffectId, value: number) => {
+    setDistortStrengthByEffect((cur) => ({ ...cur, [id]: value }))
+    setAdjTransformStrength(value)
+  }, [])
   const showSaveError = (msg: string) => {
-    setSaveErrorVisible(true)
-    if (saveErrorTimerRef.current) clearTimeout(saveErrorTimerRef.current)
-    saveErrorTimerRef.current = setTimeout(() => setSaveErrorVisible(false), 3500)
     setNotice(msg)
   }
 
@@ -533,11 +683,13 @@ function App() {
   const renderRafRef = useRef<number | null>(null)
   const transformRef = useRef<DrawTransform>(DEFAULT_TRANSFORM)
   const pointerSessionRef = useRef<PointerSession>({ mode: 'idle' })
+  const mobileCanvasEditRef = useRef(false)
   const brushRafRef = useRef<number | null>(null)
   const brushActiveRef = useRef(false)
   const brushLastApplyRef = useRef(0)
   const brushEmojiRef = useRef('')
   const photosRef = useRef<PhotoItem[]>([])
+  const lastAddedPhotoIdRef = useRef<string | null>(null)
   const normalizeCancelRef = useRef(false)
   const dragCounterRef = useRef(0)
   const sidebarResizingRef = useRef(false)
@@ -545,6 +697,7 @@ function App() {
   const sidebarResizeStartWRef = useRef(220)
   const colorPreviewCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const qualityPreviewCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  const previewScaleCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const batchPreviewCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const batchPreviewDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const computeBatchPreviewRef = useRef<(() => Promise<void>) | null>(null)
@@ -553,7 +706,20 @@ function App() {
   const transformPreviewGenRef = useRef(0)   // increments each call; used to discard stale async results
   const activeVideoRef = useRef<HTMLVideoElement | null>(null)
 
-  const activePhoto = useMemo(() => photos.find((p) => p.id === activePhotoId) ?? null, [photos, activePhotoId])
+  const activePhoto = useMemo(() => {
+    if (!activePhotoId) return null
+    return photos.find((p) => p.id === activePhotoId)
+      ?? photosRef.current.find((p) => p.id === activePhotoId)
+      ?? null
+  }, [photos, activePhotoId])
+  useEffect(() => { activePhotoIdRef.current = activePhotoId }, [activePhotoId])
+  // Live refs for the async zone re-bake pipeline (stable callback identity).
+  const activePhotoRef = useRef(activePhoto)
+  activePhotoRef.current = activePhoto
+  const zonesByPhotoRef = useRef(zonesByPhoto)
+  zonesByPhotoRef.current = zonesByPhoto
+  const originalBlobByPhotoRef = useRef(originalBlobByPhoto)
+  originalBlobByPhotoRef.current = originalBlobByPhoto
   const sourceVideoPhoto = useMemo(
     () => activePhoto?.derivedFromVideoId ? (photos.find((p) => p.id === activePhoto.derivedFromVideoId) ?? null) : null,
     [activePhoto, photos],
@@ -572,12 +738,22 @@ function App() {
   }, [videoExportFormat, videoExportOptions])
   useEffect(() => {
     setVideoMaskDrawActive(false)
+    setVideoMaskShape('rectangle')
     setVideoDraftZone(null)
     setActiveVideoTime(0)
+    setActiveVideoFrameLabel(null)
+    if (videoFrameLabelTimerRef.current) {
+      clearTimeout(videoFrameLabelTimerRef.current)
+      videoFrameLabelTimerRef.current = null
+    }
     videoMaskPointerStartRef.current = null
   }, [activePhotoId])
 
   const activeZones = useMemo(() => (activePhotoId ? zonesByPhoto[activePhotoId] ?? [] : []), [zonesByPhoto, activePhotoId])
+  const effectiveZones = useMemo(
+    () => zonesWithFaceOffset(activeZones, detectFaceOffset),
+    [activeZones, detectFaceOffset],
+  )
   const activeVideoTimedZones = useMemo(
     () => activePhotoId ? (videoTimedZonesByPhoto[activePhotoId] ?? []) : [],
     [activePhotoId, videoTimedZonesByPhoto],
@@ -618,6 +794,147 @@ function App() {
     // Clear quality preview so user sees actual edits
     if (isDirty && qualityPreviewCanvasRef.current) { qualityPreviewCanvasRef.current.width = 0 }
   }, [activePhotoId])
+
+  const customEffectOptions = useCallback((zone?: Zone | null, seed?: string | number): EffectRenderOptions => ({
+    customImages: customImageAssets,
+    customImageSource,
+    customImageAssetId: zone?.customImageAssetId,
+    zoneId: zone?.id,
+    seed: seed ?? zone?.id ?? activePhotoId ?? 'custom-image',
+  }), [activePhotoId, customImageAssets, customImageSource])
+
+  const createCustomImageAssets = useCallback(async (files: File[] | Blob[], names?: string[]) => {
+    const accepted = files.filter((file) => file.type.startsWith('image/'))
+    if (accepted.length === 0) {
+      setNotice('No usable images selected.')
+      return []
+    }
+    const assets = await Promise.all(accepted.map(async (file, index) => {
+      const blob = file instanceof File ? file : new Blob([file], { type: file.type || 'image/png' })
+      const objectUrl = URL.createObjectURL(blob)
+      let imageBitmap: ImageBitmap | undefined
+      try {
+        imageBitmap = await createImageBitmap(blob)
+      } catch {
+        URL.revokeObjectURL(objectUrl)
+        return null
+      }
+      return {
+        id: createId(),
+        name: file instanceof File ? file.name : names?.[index] ?? `custom-image-${index + 1}.png`,
+        blob,
+        objectUrl,
+        imageBitmap,
+      } satisfies CustomImageAsset
+    }))
+    const ready = assets.filter(Boolean) as CustomImageAsset[]
+    if (ready.length > 0) {
+      setCustomImageAssets((cur) => [...cur, ...ready])
+      setNotice(`Loaded ${ready.length} custom image${ready.length === 1 ? '' : 's'}.`)
+    }
+    return ready
+  }, [])
+
+  const openCustomImagePicker = useCallback(() => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = 'image/*'
+    input.multiple = true
+    input.onchange = () => {
+      void createCustomImageAssets(Array.from(input.files ?? [])).then((ready) => {
+        if (ready.length > 0) setCustomImageSource('custom')
+      })
+    }
+    input.click()
+  }, [createCustomImageAssets])
+
+  const loadCustomImagePreset = useCallback(async (source: CustomImageSource) => {
+    setCustomImageSource(source)
+    if (source === 'custom') {
+      setCustomImageAssets((cur) => {
+        cur.forEach((a) => {
+          URL.revokeObjectURL(a.objectUrl)
+          try { a.imageBitmap?.close() } catch { /* ignore */ }
+        })
+        return []
+      })
+      return
+    }
+    const folderBySource: Partial<Record<CustomImageSource, string>> = {
+      'ui-faces-human': 'human',
+      'ui-faces-abstract': 'abstract',
+      cryptopunks: 'punks',
+      aavegotchi: 'aavegotchi',
+      celebrities: 'celebrities',
+    }
+    const folder = folderBySource[source]
+    if (!folder) return
+    const base = `/custom-images/${folder}`
+    setCustomImagePresetLoading(true)
+    try {
+      setCustomImageAssets((cur) => {
+        cur.forEach((a) => {
+          URL.revokeObjectURL(a.objectUrl)
+          try { a.imageBitmap?.close() } catch { /* ignore */ }
+        })
+        return []
+      })
+      const manifestRes = await fetch(`${base}/manifest.json`)
+      if (!manifestRes.ok) throw new Error(`HTTP ${manifestRes.status}`)
+      const manifest = await manifestRes.json() as { files: string[] }
+      const files = manifest.files.slice(0, 100)
+      const fetched = await Promise.all(files.map(async (file) => {
+        const res = await fetch(`${base}/${file}`)
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const blob = await res.blob()
+        return new File([blob], file, { type: blob.type || 'image/png' })
+      }))
+      const ready = await createCustomImageAssets(fetched)
+      if (ready.length === 0) throw new Error('No preset images loaded.')
+      setCustomImageSource(source)
+    } catch (err) {
+      console.warn('Custom image preset failed:', err)
+      setNotice('Preset images could not be loaded. Uploaded images remain available.')
+    } finally {
+      setCustomImagePresetLoading(false)
+    }
+  }, [createCustomImageAssets])
+
+  // ── Emoji / custom-image picker dialog handlers ──────────────────
+  const handleToggleEmojiRandom = useCallback((random: boolean) => {
+    setEmojiRandom(random)
+    emojiRandomRef.current = random
+    if (random) {
+      setActiveZones((zs) => zs.map((z) => (z.effect === 'emoji' ? { ...z, emoji: pickRandomEmoji() } : z)))
+    } else if (selectedEmojiRef.current) {
+      const emoji = selectedEmojiRef.current
+      setActiveZones((zs) => zs.map((z) => (z.effect === 'emoji' ? { ...z, emoji } : z)))
+    }
+  }, [])
+
+  const handlePickEmoji = useCallback((emoji: string) => {
+    setEmojiRandom(false)
+    setSelectedEmoji(emoji)
+    emojiRandomRef.current = false
+    selectedEmojiRef.current = emoji
+    setActiveZones((zs) => zs.map((z) => (z.effect === 'emoji' ? { ...z, emoji } : z)))
+  }, [])
+
+  const handleToggleCustomRandom = useCallback((random: boolean) => {
+    setCustomImageRandom(random)
+    customImageRandomRef.current = random
+    setActiveZones((zs) => zs.map((z) => (z.effect === 'custom-image'
+      ? { ...z, customImageAssetId: random ? pickCustomImageAssetId(customImageAssetsRef.current, z.id) : (selectedCustomImageIdRef.current ?? z.customImageAssetId) }
+      : z)))
+  }, [])
+
+  const handlePickCustomImage = useCallback((assetId: string) => {
+    setCustomImageRandom(false)
+    setSelectedCustomImageId(assetId)
+    customImageRandomRef.current = false
+    selectedCustomImageIdRef.current = assetId
+    setActiveZones((zs) => zs.map((z) => (z.effect === 'custom-image' ? { ...z, customImageAssetId: assetId } : z)))
+  }, [])
 
   const updateNormalizeSetting = useCallback(<K extends keyof NormalizeSettings>(key: K, value: NormalizeSettings[K]) => {
     setNormalizeSettings((cur) => ({ ...cur, [key]: value }))
@@ -675,10 +992,25 @@ function App() {
     const bounds = canvas.getBoundingClientRect()
     const canvasX = clientX - bounds.left
     const canvasY = clientY - bounds.top
-    const outsideImage = canvasX < t.drawX || canvasX > t.drawX + t.drawWidth || canvasY < t.drawY || canvasY > t.drawY + t.drawHeight
+    let normalizedX: number
+    let normalizedY: number
+    if (t.rotation != null && t.centerX != null && t.centerY != null) {
+      const lx = canvasX - t.centerX
+      const ly = canvasY - t.centerY
+      const cos = Math.cos(-t.rotation)
+      const sin = Math.sin(-t.rotation)
+      const rx = lx * cos - ly * sin
+      const ry = lx * sin + ly * cos
+      normalizedX = (rx + t.drawWidth / 2) / t.drawWidth
+      normalizedY = (ry + t.drawHeight / 2) / t.drawHeight
+    } else {
+      normalizedX = (canvasX - t.drawX) / t.drawWidth
+      normalizedY = (canvasY - t.drawY) / t.drawHeight
+    }
+    const outsideImage = normalizedX < 0 || normalizedX > 1 || normalizedY < 0 || normalizedY > 1
     if (outsideImage && !clampToBounds) return null
-    const normalizedX = clamp((canvasX - t.drawX) / t.drawWidth, 0, 1)
-    const normalizedY = clamp((canvasY - t.drawY) / t.drawHeight, 0, 1)
+    normalizedX = clamp(normalizedX, 0, 1)
+    normalizedY = clamp(normalizedY, 0, 1)
     return { canvasX, canvasY, imageX: normalizedX * t.imageWidth, imageY: normalizedY * t.imageHeight, normalizedX, normalizedY }
   }, [])
 
@@ -715,7 +1047,7 @@ function App() {
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     ctx.clearRect(0, 0, cssWidth, cssHeight)
-    ctx.fillStyle = theme === 'dark' ? '#080808' : '#e8e9ec'
+    ctx.fillStyle = effectiveTheme === 'dark' ? '#080808' : '#e8e9ec'
     ctx.fillRect(0, 0, cssWidth, cssHeight)
 
     if (source.width === 0 || source.height === 0 || !activePhoto) {
@@ -735,12 +1067,13 @@ function App() {
     } else {
       // Transform preview (halftone/glitch etc.) from adj or transform flyout
       const tc = transformPreviewCanvasRef.current
-      if (tc && tc.width > 0 && (adjFlyoutOpen || transformFlyoutOpen)) {
+      if (tc && tc.width > 0 && (adjFlyoutOpen || transformPanelOpen)) {
         drawSource = tc
       // Quality preview shows compressed visual
       } else {
         const qc = qualityPreviewCanvasRef.current
-        if (qc && qc.width > 0 && !isLosslessFormat(exportFormat)) {
+        const previewFmt = mobileExportDraft?.format ?? exportFormat
+        if (qc && qc.width > 0 && !isLosslessFormat(previewFmt)) {
           drawSource = qc
         }
       }
@@ -762,33 +1095,56 @@ function App() {
       }
     }
 
-    const scale = Math.min(cssWidth / source.width, cssHeight / source.height)
+    const baseScale = Math.min(cssWidth / source.width, cssHeight / source.height)
+    const viewZoom = mobileViewZoomRef.current
+    const scale = baseScale * viewZoom
     const drawWidth = source.width * scale
     const drawHeight = source.height * scale
-    const drawX = (cssWidth - drawWidth) / 2
-    const drawY = (cssHeight - drawHeight) / 2
+    const pan = mobileViewPanRef.current
+    const viewRot = mobileViewRotationRef.current
+    const centerX = cssWidth / 2 + pan.x
+    const centerY = cssHeight / 2 + pan.y
+    const absCos = Math.abs(Math.cos(viewRot))
+    const absSin = Math.abs(Math.sin(viewRot))
+    const aabbW = drawWidth * absCos + drawHeight * absSin
+    const aabbH = drawWidth * absSin + drawHeight * absCos
+    const drawX = centerX - aabbW / 2
+    const drawY = centerY - aabbH / 2
 
-    transformRef.current = { drawX, drawY, drawWidth, drawHeight, imageWidth: source.width, imageHeight: source.height, scale }
-    ctx.drawImage(drawSource, drawX, drawY, drawWidth, drawHeight)
-
-    // Draw zone outlines (if visible) — hide during color/transform preview to reduce clutter
-    const previewing = ((adjFlyoutOpen || transformFlyoutOpen) && adjTransform !== 'none') || (!isColorNoop && colorPanelOpen)
-    if (showBoxes && !previewing) {
-      activeZones.forEach((zone) => drawZoneOutline(ctx, zone, transformRef.current, zone.id === selectedZoneId))
-      if (draftZone) drawZoneOutline(ctx, draftZone, transformRef.current, true)
+    transformRef.current = {
+      drawX, drawY, drawWidth, drawHeight,
+      imageWidth: source.width, imageHeight: source.height, scale,
+      rotation: viewRot, centerX, centerY,
     }
 
-    // Draw normalize crop overlay when batch panel open
+    ctx.save()
+    ctx.translate(centerX, centerY)
+    ctx.rotate(viewRot)
+    ctx.drawImage(drawSource, -drawWidth / 2, -drawHeight / 2, drawWidth, drawHeight)
+
+    const hasDistortPreview = isMobile ? enabledDistorts.length > 0 : adjTransform !== 'none'
+    const previewing = ((adjFlyoutOpen || transformPanelOpen) && hasDistortPreview) || (!isColorNoop && colorPanelOpen)
+    if (showBoxes && !previewing) {
+      effectiveZones.forEach((zone) => drawZoneInView(ctx, zone, drawWidth, drawHeight, zone.id === selectedZoneId))
+      if (draftZone) drawZoneInView(ctx, draftZone, drawWidth, drawHeight, true)
+    }
+
     if (batchPanelOpen) {
       const cropPreview = normalizeCropDraft || activeNormalizeCrop
       if (cropPreview && (normalizeSettings.cropMode !== 'none' || normalizeCropDraft)) {
-        drawNormalizeCropOverlay(ctx, cropPreview, transformRef.current, Boolean(normalizeCropDraft || isNormalizeCropPicking))
+        drawNormalizeCropInView(
+          ctx, cropPreview, drawWidth, drawHeight,
+          Boolean(normalizeCropDraft || isNormalizeCropPicking),
+        )
       }
     }
+
+    ctx.restore()
+
   }, [
-    activePhoto, activeNormalizeCrop, activeZones, adjFlyoutOpen, adjTransform, batchPanelOpen,
-    colorAdj, colorPanelOpen, draftZone, exportFormat, isNormalizeCropPicking, transformFlyoutOpen,
-    normalizeCropDraft, normalizeSettings.cropMode, selectedZoneId, showBoxes, theme,
+    activePhoto, activeNormalizeCrop, effectiveZones, adjFlyoutOpen, adjTransform, batchPanelOpen,
+    colorAdj, colorPanelOpen, draftZone, enabledDistorts, exportFormat, isMobile, isNormalizeCropPicking, transformPanelOpen,
+    normalizeCropDraft, normalizeSettings.cropMode, selectedZoneId, showBoxes, effectiveTheme, mobileViewZoom, mobileViewPan, mobileViewRotation, transformPanelOpen, mobileExportDraft,
   ])
 
   const renderCanvasRef = useRef(renderCanvas)
@@ -803,6 +1159,63 @@ function App() {
     return workCtxRef.current
   }, [])
 
+  const getEraserSourceCanvas = useCallback(async (): Promise<HTMLCanvasElement | null> => {
+    if (!activePhoto || activePhoto.isVideo) return null
+    if (eraserSourcePhotoIdRef.current === activePhoto.id && eraserSourceCanvasRef.current) {
+      return eraserSourceCanvasRef.current
+    }
+    const sourceBlob = originalBlobByPhoto[activePhoto.id] ?? activePhoto.blob
+    const bmp = await createImageBitmap(sourceBlob)
+    const sourceCanvas = document.createElement('canvas')
+    sourceCanvas.width = bmp.width
+    sourceCanvas.height = bmp.height
+    const sourceCtx = sourceCanvas.getContext('2d')
+    if (!sourceCtx) {
+      bmp.close()
+      return null
+    }
+    sourceCtx.drawImage(bmp, 0, 0)
+    bmp.close()
+    eraserSourceCanvasRef.current = sourceCanvas
+    eraserSourcePhotoIdRef.current = activePhoto.id
+    return sourceCanvas
+  }, [activePhoto, originalBlobByPhoto])
+
+  const applyOriginalEraserAtPointer = useCallback((pointer: PointerMap) => {
+    const workCanvas = workCanvasRef.current
+    if (!activePhoto || !workCanvas || workCanvas.width === 0) return
+    const ctx = getWorkCtx()
+    if (!ctx) return
+    const t = transformRef.current
+    if (t.scale <= 0) return
+    const radius = Math.max(4, brushSizeRef.current / t.scale)
+
+    const drawFromSource = (sourceCanvas: HTMLCanvasElement | null) => {
+      if (!sourceCanvas) return
+      const x0 = Math.max(0, Math.floor(pointer.imageX - radius))
+      const y0 = Math.max(0, Math.floor(pointer.imageY - radius))
+      const x1 = Math.min(workCanvas.width, Math.ceil(pointer.imageX + radius))
+      const y1 = Math.min(workCanvas.height, Math.ceil(pointer.imageY + radius))
+      const w = Math.max(1, x1 - x0)
+      const h = Math.max(1, y1 - y0)
+      ctx.save()
+      ctx.beginPath()
+      ctx.arc(pointer.imageX, pointer.imageY, radius, 0, Math.PI * 2)
+      ctx.clip()
+      ctx.drawImage(sourceCanvas, x0, y0, w, h, x0, y0, w, h)
+      ctx.restore()
+      setActiveDirty(true)
+      renderCanvasRef.current()
+    }
+
+    const cached = eraserSourcePhotoIdRef.current === activePhoto.id ? eraserSourceCanvasRef.current : null
+    if (cached) {
+      drawFromSource(cached)
+      return
+    }
+    void getEraserSourceCanvas().then(drawFromSource).catch(() => setNotice('Eraser source is not ready.'))
+  }, [activePhoto, getEraserSourceCanvas, getWorkCtx, setActiveDirty])
+
   const applyBrushAtPointer = useCallback((pointer: PointerMap) => {
     const workCanvas = workCanvasRef.current
     if (!activePhoto || !workCanvas || workCanvas.width === 0) return
@@ -811,10 +1224,23 @@ function App() {
     const t = transformRef.current
     if (t.scale <= 0) return
     const radius = Math.max(4, brushSizeRef.current / t.scale)
-    applyEffectBrush(ctx, selectedEffect, pointer.imageX, pointer.imageY, radius, brushStrength, brushEmojiRef.current)
+    if (eraserActiveRef.current) {
+      applyOriginalEraserAtPointer(pointer)
+      return
+    }
+    applyEffectBrush(
+      ctx,
+      selectedEffect,
+      pointer.imageX,
+      pointer.imageY,
+      radius,
+      brushStrength,
+      brushEmojiRef.current,
+      customEffectOptions(null, `${activePhoto.id}:${Math.round(pointer.imageX)}:${Math.round(pointer.imageY)}`),
+    )
     setActiveDirty(true)
     renderCanvasRef.current()
-  }, [activePhoto, brushStrength, getWorkCtx, selectedEffect, setActiveDirty])
+  }, [activePhoto, applyOriginalEraserAtPointer, brushStrength, customEffectOptions, getWorkCtx, selectedEffect, setActiveDirty])
 
   const drawBrushPreview = useCallback((pointer: PointerMap | null) => {
     const overlay = overlayCanvasRef.current
@@ -833,15 +1259,18 @@ function App() {
     const t = transformRef.current
     const sz = brushSizeRef.current
 
-    previewEffectBrush(
-      octx, workCanvas,
-      selectedEffect,
-      pointer.canvasX, pointer.canvasY,
-      sz,
-      brushStrength,
-      brushEmojiRef.current,
-      t.scale, t.drawX, t.drawY,
-    )
+    if (!eraserActiveRef.current) {
+      previewEffectBrush(
+        octx, workCanvas,
+        selectedEffect,
+        pointer.canvasX, pointer.canvasY,
+        sz,
+        brushStrength,
+        brushEmojiRef.current,
+        t,
+        customEffectOptions(null, activePhoto.id),
+      )
+    }
 
     octx.save()
     octx.strokeStyle = 'rgba(255,255,255,0.9)'
@@ -857,7 +1286,7 @@ function App() {
     octx.arc(pointer.canvasX, pointer.canvasY, sz, 0, Math.PI * 2)
     octx.stroke()
     octx.restore()
-  }, [activePhoto, brushStrength, selectedEffect, toolMode])
+  }, [activePhoto, brushStrength, customEffectOptions, selectedEffect, toolMode])
 
   const pushUndo = useCallback(() => {
     const wc = workCanvasRef.current
@@ -882,7 +1311,6 @@ function App() {
     setActiveDirty(true)
     renderCanvas()
   }, [getWorkCtx, renderCanvas, setActiveDirty])
-  void undo  // available as keyboard shortcut via Ctrl+Z if needed
 
   const stopBrushLoop = useCallback(() => {
     brushActiveRef.current = false
@@ -934,15 +1362,17 @@ function App() {
     }
     setPhotos((cur) => {
       const next = [...cur, ...incoming]
+      photosRef.current = next
       if (!activePhotoId && incoming.length > 0) setActivePhotoId(incoming[0].id)
       if (next.length > 700) setSidebarView('list')
       return next
     })
+    if (incoming.length > 0) lastAddedPhotoIdRef.current = incoming[incoming.length - 1].id
     setSelectedForBatch((cur) => { const next = new Set(cur); incoming.forEach((p) => next.add(p.id)); return next })
     setNormalizeResults({})
     setNormalizePreviewIds([])
     setPhotoListLimit((cur) => Math.max(cur, Math.min(400, cur + incoming.length)))
-    setNotice(`Loaded ${incoming.length} photo${incoming.length === 1 ? '' : 's'}.`)
+    setNotice(`Loaded ${incoming.length} media file${incoming.length === 1 ? '' : 's'}.`)
   }, [activePhotoId])
 
   // ── Drag & drop helpers ──────────────────────────────────────────
@@ -1039,13 +1469,13 @@ function App() {
   const loadDemoPhotos = useCallback(async () => {
     setIsBusy(true)
     try {
-      const fetched = await Promise.all(DEMO_IMAGES.map(async (url, i) => {
+      const fetched = await Promise.all(DEMO_MEDIA.map(async (url, i) => {
         const res = await fetch(url)
         if (!res.ok) throw new Error(`Demo ${url} failed`)
         const blob = await res.blob()
         const ext = url.split('.').pop() ?? 'jpg'
-        const name = `demo-${i + 1}.${ext}`
-        const mime = blob.type || (ext === 'webp' ? 'image/webp' : ext === 'png' ? 'image/png' : 'image/jpeg')
+        const name = ext === 'webm' ? 'demo-video.webm' : `demo-${i + 1}.${ext}`
+        const mime = blob.type || (ext === 'webm' ? 'video/webm' : ext === 'webp' ? 'image/webp' : ext === 'png' ? 'image/png' : 'image/jpeg')
         return { file: new File([blob], name, { type: mime }), name, source: 'upload' as const }
       }))
       addRecords(fetched)
@@ -1071,6 +1501,9 @@ function App() {
 
   const selectPhoto = useCallback(async (photoId: string) => {
     if (photoId === activePhotoId) return
+    detectingRef.current = false
+    setIsDetecting(false)
+    setDetectionStep('')
     if (activePhotoId && (dirtyByPhoto[activePhotoId] ?? false)) {
       await commitWorkCanvasToBlob(activePhotoId)
       setActiveDirty(false)
@@ -1084,11 +1517,22 @@ function App() {
     undoStackRef.current = []
     setUndoCount(0)
     setZonesAnonymized(false)
+    previewBakedRef.current = false
     setEffectFlyoutOpen(false)
     setLocalProcessingMs(null)
     setLastDetectFailed(false)
     setAdjFlyoutOpen(false)
     setTransformFlyoutOpen(false)
+    if (isMobile) {
+      setMobileViewZoom(1)
+      setMobileViewPan({ x: 0, y: 0 })
+      setMobileViewRotation(0)
+      mobileViewZoomRef.current = 1
+      mobileViewPanRef.current = { x: 0, y: 0 }
+      mobileViewRotationRef.current = 0
+      setMobileViewTransformDirty(false)
+      mobileCanvasEditRef.current = false
+    }
     const saved = colorAdjByPhoto[photoId]
     setColorAdj(saved ? { ...saved } : DEFAULT_COLOR_ADJUSTMENTS)
     // Reset export format to photo's native format
@@ -1097,7 +1541,7 @@ function App() {
       const fmt = photo.mimeType as NormalizeFormat
       if (['image/jpeg', 'image/png', 'image/webp', 'image/bmp', 'image/gif', 'image/tiff'].includes(fmt)) setExportFormat(fmt)
     }
-  }, [activePhotoId, colorAdjByPhoto, commitWorkCanvasToBlob, dirtyByPhoto, photos, setActiveDirty])
+  }, [activePhotoId, colorAdjByPhoto, commitWorkCanvasToBlob, dirtyByPhoto, isMobile, photos, setActiveDirty])
 
   // ── Unified picker: opens files OR folder depending on browser support ──
   const openUnifiedPicker = useCallback(async () => {
@@ -1177,7 +1621,11 @@ function App() {
   const detectingRef = useRef(false)
   const detectFacesOnActiveImage = useCallback(async (robust = false) => {
     if (!activePhoto) return
+    // Videos are detected frame-by-frame during processing, never on the (stale)
+    // work canvas — otherwise the previous photo's faces leak onto the video.
+    if (activePhoto.isVideo) return
     if (detectingRef.current) return
+    const photoId = activePhoto.id
     const workCanvas = workCanvasRef.current
     if (!workCanvas || workCanvas.width === 0) return
     detectingRef.current = true
@@ -1188,7 +1636,9 @@ function App() {
     setDetectionProgressCallback((step) => setDetectionStep(step))
     const t0 = performance.now()
     try {
-      const boxes = await detectFaces(workCanvas, robust)
+      const { confidence, thorough } = detectSettingsRef.current
+      const boxes = await detectFaces(workCanvas, robust || thorough, confidence)
+      if (activePhotoIdRef.current !== photoId) return
       const elapsed = Math.round(performance.now() - t0)
       setLocalProcessingMs(elapsed)
       if (boxes.length === 0) {
@@ -1198,23 +1648,41 @@ function App() {
       }
       setLastDetectFailed(false)
       const emojis = pickUniqueEmojis(boxes.length)
-      const zones: Zone[] = boxes.map((b, i) => ({
-        id: createId(),
-        x: clamp(b.x / workCanvas.width, 0, 1),
-        y: clamp(b.y / workCanvas.height, 0, 1),
-        width: clamp(b.width / workCanvas.width, 0.02, 1),
-        height: clamp(b.height / workCanvas.height, 0.02, 1),
-        effect: selectedEffect,
-        emoji: emojis[i],
+      const W = workCanvas.width
+      const H = workCanvas.height
+      const offsetPct = detectSettingsRef.current.faceOffset
+      const zones: Zone[] = boxes.map((b, i) => {
+        const detectX = b.x / W
+        const detectY = b.y / H
+        const detectWidth = b.width / W
+        const detectHeight = b.height / H
+        const expanded = expandPixelBox(b.x, b.y, b.width, b.height, W, H, offsetPct)
+        return {
+          id: createId(),
+          ...expanded,
+          detectX,
+          detectY,
+          detectWidth,
+          detectHeight,
+          effect: selectedEffect,
+          emoji: emojiRandomRef.current ? emojis[i] : (selectedEmojiRef.current ?? emojis[i]),
+        }
+      }).map((zone) => ({
+        ...zone,
+        customImageAssetId: selectedEffect === 'custom-image'
+          ? resolveCustomImageAssetId(zone.id)
+          : undefined,
       }))
-      setActiveZones(() => zones)
-      setSelectedZoneId(zones[0]?.id ?? null)
+      setZonesByPhoto((cur) => ({ ...cur, [photoId]: zones }))
+      setZonesAnonymized(false)
+      previewBakedRef.current = false
+      if (activePhotoId === photoId) {
+        setSelectedZoneId(zones[0]?.id ?? null)
+      }
       const src = getDetectorStatus()
-      const detSrc = src?.mode === 'backend'
-        ? `via ${(src as { backendDetector?: string }).backendDetector ?? 'backend'}`
-        : src?.mode === 'yunet-wasm'
-          ? 'via local YuNet'
-          : src?.mode ?? ''
+      const detSrc = src?.mode === 'yunet-wasm'
+        ? 'via local YuNet'
+        : src?.mode ?? ''
       setNotice(`Detected ${zones.length} face${zones.length === 1 ? '' : 's'} ${detSrc} — ${elapsed} ms locally.`)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -1228,7 +1696,7 @@ function App() {
       setDetectionProgressCallback(null)
       renderCanvas()
     }
-  }, [activePhoto, renderCanvas, selectedEffect, setActiveZones])
+  }, [activePhoto, activePhotoId, customImageAssets, renderCanvas, selectedEffect])
 
   const cancelDetection = useCallback(() => {
     detectingRef.current = false
@@ -1238,19 +1706,37 @@ function App() {
     setNotice('Detection cancelled.')
   }, [])
 
-  const applyZones = useCallback(() => {
+  const applyZones = useCallback(async () => {
     if (!activePhoto || activeZones.length === 0) return
     const workCanvas = workCanvasRef.current
     if (!workCanvas) return
     const ctx = getWorkCtx()
     if (!ctx) return
-    activeZones.forEach((z) => applyEffectRect(ctx, z.effect, z.x * workCanvas.width, z.y * workCanvas.height, z.width * workCanvas.width, z.height * workCanvas.height, brushStrength, z.emoji))
+    // Yield to let the browser paint the "processing" UI state before blocking
+    // on heavy pixel work (noise/contour can take 200ms+ per zone on mobile).
+    await new Promise(requestAnimationFrame)
+    for (const z of effectiveZones) {
+      applyEffectRect(
+        ctx,
+        z.effect,
+        z.x * workCanvas.width,
+        z.y * workCanvas.height,
+        z.width * workCanvas.width,
+        z.height * workCanvas.height,
+        brushStrength,
+        z.emoji,
+        customEffectOptions(z),
+      )
+      // Yield between zones so the UI thread can breathe on multi-face images.
+      if (effectiveZones.length > 2) await new Promise(requestAnimationFrame)
+    }
+    previewBakedRef.current = true
     setActiveDirty(true)
     if (activePhotoId) setAppliedByPhoto((cur) => ({ ...cur, [activePhotoId]: true }))
     setZonesAnonymized(true)
-    setNotice(`Applied ${activeZones.length} zone${activeZones.length === 1 ? '' : 's'}.`)
+    setNotice(`Applied ${effectiveZones.length} zone${effectiveZones.length === 1 ? '' : 's'}.`)
     renderCanvas()
-  }, [activePhoto, activePhotoId, activeZones, brushStrength, getWorkCtx, renderCanvas, setActiveDirty])
+  }, [activePhoto, activePhotoId, effectiveZones, brushStrength, customEffectOptions, getWorkCtx, renderCanvas, setActiveDirty])
 
   const cropToSelection = useCallback(() => {
     if (!activePhoto || !cropDraft) return
@@ -1274,6 +1760,7 @@ function App() {
     setResEditW(pw); setResEditH(ph)
     setCropDraft(null)
     setToolMode('brush')
+    mobileCanvasEditRef.current = false
     setActiveDirty(true)
     renderCanvas()
     setNotice(`Cropped to ${pw}×${ph}`)
@@ -1342,6 +1829,7 @@ function App() {
           }
         }))
         setVideoFrameOverridesByPhoto((cur) => { const next = { ...cur }; delete next[activePhoto.id]; return next })
+        setVideoTimedZonesByPhoto((cur) => { const next = { ...cur }; delete next[activePhoto.id]; return next })
         setActiveDirty(false)
         undoStackRef.current = []; setUndoCount(0)
         setNotice('Reset video to original.')
@@ -1444,14 +1932,21 @@ function App() {
         return { ...cur, [sourceId]: next }
       })
       setActiveDirty(false)
-      setNotice('Snapshot attached to source video. Re-run video anonymization to bake it into the render.')
+      const msg = 'Frame saved to source video.'
+      setNotice(msg)
+      if (isMobile && activePhoto.derivedFromVideoId) {
+        const sourceId = activePhoto.derivedFromVideoId
+        void selectPhoto(sourceId)
+        setMobileMode('video')
+        setMobileToast({ message: msg })
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       setNotice(`Could not attach snapshot to source video: ${msg}`)
     } finally {
       setIsBusy(false)
     }
-  }, [activePhoto])
+  }, [activePhoto, isMobile, selectPhoto, setMobileMode])
 
   const jumpToSourceVideoFromSnapshot = useCallback(() => {
     if (!sourceVideoPhoto) return
@@ -1495,9 +1990,10 @@ function App() {
       width: 0.001,
       height: 0.001,
       effect: selectedEffect,
-      emoji: pickRandomEmoji(),
+      emoji: resolveEmoji(),
+      maskShape: videoMaskShape,
     })
-  }, [activePhoto, mapPointerToVideo, selectedEffect, videoMaskDrawActive])
+  }, [activePhoto, mapPointerToVideo, selectedEffect, videoMaskDrawActive, videoMaskShape])
 
   const handleVideoMaskPointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     if (!videoMaskPointerStartRef.current || !videoMaskDrawActive) return
@@ -1537,7 +2033,7 @@ function App() {
       id,
       startSec,
       endSec: Math.max(startSec + 0.05, endSec),
-      zone: { ...zone, id, effect: selectedEffect, emoji: zone.emoji || pickRandomEmoji() },
+      zone: { ...zone, id, effect: selectedEffect, emoji: zone.emoji || pickRandomEmoji(), maskShape: zone.maskShape ?? videoMaskShape },
     }
 
     setVideoTimedZonesByPhoto((cur) => ({
@@ -1547,10 +2043,12 @@ function App() {
     setVideoDraftZone(null)
     setVideoMaskDrawActive(false)
     setNotice(`Timeline mask added for ${formatVideoTime(timedZone.startSec)}–${formatVideoTime(timedZone.endSec)}. Re-run video anonymization to bake it in.`)
-  }, [activePhoto, activeVideoTime, selectedEffect, videoDraftZone, videoMaskDrawActive, videoMaskRangeSec])
+  }, [activePhoto, activeVideoTime, selectedEffect, videoDraftZone, videoMaskDrawActive, videoMaskRangeSec, videoMaskShape])
 
   const processActiveVideo = useCallback(async () => {
     if (!activePhoto?.isVideo) return
+    // Guard against a second start while a run is already in flight (double-click race).
+    if (videoAbortRef.current) return
     const selectedContainer = videoExportOptions.find((opt) => opt.id === videoExportFormat)
     if (!selectedContainer?.supported) {
       setNotice(`Video format ${videoExportFormat.toUpperCase()} is not supported in this browser.`)
@@ -1567,8 +2065,10 @@ function App() {
       const resultBlob = await processVideo(sourceVideoBlob, {
         effect: selectedEffect,
         strength: brushStrength / 100,
-        emoji: pickRandomEmoji(),
-        forceLocal: processingLocal,
+        emoji: (!emojiRandom && selectedEmoji) ? selectedEmoji : pickRandomEmoji(),
+        fixedEmoji: (!emojiRandom && selectedEmoji) ? selectedEmoji : undefined,
+        customImages: customImageAssets,
+        customImageSource,
         outputFormat: videoExportFormat,
         frameOverrides: manualOverrides,
         timedZones,
@@ -1613,26 +2113,81 @@ function App() {
       setVideoProgress(null)
       videoAbortRef.current = null
     }
-  }, [activePhoto, brushStrength, originalBlobByPhoto, processingLocal, selectedEffect, videoExportFormat, videoExportOptions, videoFrameOverridesByPhoto, videoTimedZonesByPhoto])
+  }, [activePhoto, brushStrength, originalBlobByPhoto, selectedEffect, videoExportFormat, videoExportOptions, videoFrameOverridesByPhoto, videoTimedZonesByPhoto])
 
   const cancelVideoProcessing = useCallback(() => {
     videoAbortRef.current?.abort()
+  }, [])
+
+  const showVideoFrameLabel = useCallback((currentFrame: number, totalFrames: number) => {
+    setActiveVideoFrameLabel(`${currentFrame}/${totalFrames}`)
+    if (videoFrameLabelTimerRef.current) clearTimeout(videoFrameLabelTimerRef.current)
+    videoFrameLabelTimerRef.current = setTimeout(() => {
+      setActiveVideoFrameLabel(null)
+      videoFrameLabelTimerRef.current = null
+    }, 2000)
   }, [])
 
   const stepActiveVideoFrame = useCallback((direction: -1 | 1) => {
     if (!activePhoto?.isVideo || !activeVideoRef.current) return
     const video = activeVideoRef.current
     const fps = activePhoto.videoFps && activePhoto.videoFps > 0 ? activePhoto.videoFps : 30
+    const activeDuration = Number.isFinite(activePhoto.videoDuration) ? activePhoto.videoDuration ?? 0 : 0
     const duration = Number.isFinite(video.duration) && video.duration > 0
       ? video.duration
-      : activePhoto.videoDuration ?? 0
-    const frameStep = 1 / fps
-    const nextTime = clamp(video.currentTime + direction * frameStep, 0, duration > 0 ? duration : Number.MAX_SAFE_INTEGER)
+      : activeDuration
+    const currentFrame = clamp(Math.round(video.currentTime * fps), 0, duration > 0 ? Math.max(0, Math.round(duration * fps) - 1) : Number.MAX_SAFE_INTEGER)
+    const totalFrames = duration > 0
+      ? Math.max(1, Math.round(duration * fps))
+      : Math.max(currentFrame + 2, 1)
+    const nextFrame = clamp(currentFrame + direction, 0, totalFrames - 1)
+    const nextTime = clamp(nextFrame / fps, 0, duration > 0 ? Math.max(0, duration - 0.001) : Number.MAX_SAFE_INTEGER)
 
+    showVideoFrameLabel(nextFrame + 1, totalFrames)
     video.pause()
-    video.currentTime = nextTime
     setActiveVideoTime(nextTime)
-  }, [activePhoto])
+    const seekDone = () => {
+      setActiveVideoTime(video.currentTime)
+      showVideoFrameLabel(clamp(Math.round(video.currentTime * fps), 0, totalFrames - 1) + 1, totalFrames)
+    }
+    let settled = false
+    const onSeeked = () => {
+      if (settled) return
+      settled = true
+      video.removeEventListener('seeked', onSeeked)
+      seekDone()
+    }
+    video.addEventListener('seeked', onSeeked, { once: true })
+    video.currentTime = nextTime
+    window.setTimeout(() => {
+      if (settled) return
+      settled = true
+      video.removeEventListener('seeked', onSeeked)
+      seekDone()
+    }, 220)
+  }, [activePhoto, showVideoFrameLabel])
+
+  const framePrevHold = useHoldRepeat({ onStep: () => stepActiveVideoFrame(-1) })
+  const frameNextHold = useHoldRepeat({ onStep: () => stepActiveVideoFrame(1) })
+
+  // Keep the frame counter locked to the real playback position so it tracks
+  // both native scrubbing and play/pause (not just manual frame steps).
+  useEffect(() => {
+    if (!activePhoto?.isVideo) return
+    const fps = activePhoto.videoFps && activePhoto.videoFps > 0 ? activePhoto.videoFps : 30
+    const duration = Number.isFinite(activePhoto.videoDuration) ? activePhoto.videoDuration ?? 0 : 0
+    const totalFrames = duration > 0 ? Math.max(1, Math.round(duration * fps)) : 0
+    const frame = clamp(
+      Math.round(activeVideoTime * fps),
+      0,
+      totalFrames > 0 ? totalFrames - 1 : Number.MAX_SAFE_INTEGER,
+    ) + 1
+    if (videoFrameLabelTimerRef.current) {
+      clearTimeout(videoFrameLabelTimerRef.current)
+      videoFrameLabelTimerRef.current = null
+    }
+    setActiveVideoFrameLabel(totalFrames > 0 ? `${frame}/${totalFrames}` : `${frame}`)
+  }, [activePhoto, activeVideoTime])
 
   const openCurrentVideoFrameAsSnapshot = useCallback(async () => {
     if (!activePhoto?.isVideo || !activeVideoRef.current) return
@@ -1672,6 +2227,97 @@ function App() {
       setIsBusy(false)
     }
   }, [activePhoto])
+
+  const stepEditFrameAdjacent = useCallback(async (direction: -1 | 1) => {
+    if (!activePhoto || activePhoto.isVideo || !activePhoto.derivedFromVideoId || activePhoto.derivedFromVideoTime == null) return
+    const source = photos.find((p) => p.id === activePhoto.derivedFromVideoId)
+    if (!source) return
+
+      const fps = source.videoFps && source.videoFps > 0 ? source.videoFps : 30
+    const duration = Number.isFinite(source.videoDuration) ? source.videoDuration ?? 0 : 0
+      const totalFrames = duration > 0
+        ? Math.max(1, Math.round(duration * fps))
+        : Math.max(Math.round(activePhoto.derivedFromVideoTime * fps) + 2, 1)
+      const newTime = clamp(
+        activePhoto.derivedFromVideoTime + direction / fps,
+        0,
+        duration > 0 ? duration : Number.MAX_SAFE_INTEGER,
+      )
+    if (Math.abs(newTime - activePhoto.derivedFromVideoTime) < 0.001) return
+
+    setIsBusy(true)
+    try {
+      const sourceBlob = originalBlobByPhoto[source.id] ?? source.blob
+      const objectUrl = URL.createObjectURL(sourceBlob)
+      const video = document.createElement('video')
+      video.muted = true
+      video.playsInline = true
+      video.preload = 'auto'
+
+      await new Promise<void>((resolve, reject) => {
+        const onErr = () => reject(new Error('Video load failed'))
+        video.onerror = onErr
+        video.onloadedmetadata = () => { video.currentTime = newTime }
+        video.onseeked = () => resolve()
+        video.src = objectUrl
+      })
+
+      const width = video.videoWidth || source.videoWidth || 0
+      const height = video.videoHeight || source.videoHeight || 0
+      if (width <= 0 || height <= 0) throw new Error('Frame not ready')
+
+      const frameCanvas = document.createElement('canvas')
+      frameCanvas.width = width
+      frameCanvas.height = height
+      const frameCtx = frameCanvas.getContext('2d')
+      if (!frameCtx) throw new Error('2D context unavailable')
+      frameCtx.drawImage(video, 0, 0, width, height)
+      const blob = await canvasToBlob(frameCanvas, 'image/png')
+      const nextUrl = URL.createObjectURL(blob)
+      const baseName = source.name.replace(/\.[^.]+$/, '')
+      const frameStamp = `${Math.floor(newTime / 60)}-${String(Math.floor(newTime % 60)).padStart(2, '0')}-${String(Math.floor((newTime % 1) * 100)).padStart(2, '0')}`
+      const snapshotId = activePhoto.id
+
+      setPhotos((cur) => cur.map((p) => {
+        if (p.id !== snapshotId) return p
+        window.setTimeout(() => URL.revokeObjectURL(p.previewUrl), 0)
+        return {
+          ...p,
+          name: `${baseName}-frame-${frameStamp}.png`,
+          blob,
+          previewUrl: nextUrl,
+          derivedFromVideoTime: newTime,
+          edited: false,
+        }
+      }))
+      setOriginalBlobByPhoto((cur) => ({ ...cur, [snapshotId]: blob }))
+      setZonesByPhoto((cur) => ({ ...cur, [snapshotId]: [] }))
+      setZonesAnonymized(false)
+      setActiveDirty(false)
+
+      const wc = workCanvasRef.current
+      if (wc) {
+        wc.width = width
+        wc.height = height
+        workCtxRef.current = null
+        const wCtx = getWorkCtx()
+        if (wCtx) {
+          wCtx.clearRect(0, 0, width, height)
+          wCtx.drawImage(frameCanvas, 0, 0)
+        }
+        setActiveImageSize({ width, height })
+        renderCanvasRef.current()
+      }
+
+      showVideoFrameLabel(clamp(Math.round(newTime * fps), 0, totalFrames - 1) + 1, totalFrames)
+      setNotice(`Frame ${formatVideoTime(newTime)}`)
+      URL.revokeObjectURL(objectUrl)
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : 'Frame step failed.')
+    } finally {
+      setIsBusy(false)
+    }
+  }, [activePhoto, photos, originalBlobByPhoto, getWorkCtx, showVideoFrameLabel])
 
   const exportActiveVideo = useCallback(() => {
     if (!activePhoto?.isVideo) return
@@ -1842,9 +2488,14 @@ function App() {
             ? await normalizeSinglePhoto(photo, s)
             : { photoId: photo.id, outputName: photo.name, outputMimeType: photo.mimeType as NormalizeResult['outputMimeType'], blob: photo.blob, beforeWidth: 0, beforeHeight: 0, afterWidth: 0, afterHeight: 0, beforeBytes: photo.blob.size, afterBytes: photo.blob.size }
 
-          // Apply per-photo color adjustments if colors task is active
+          // Apply color adjustments if colors task is active. Per-photo overrides
+          // win; otherwise the global batch sliders apply to every photo so an
+          // enabled "colors" task always propagates to the output files.
           if (activeBatchTasks.has('colors')) {
-            const photoColorAdj = colorAdjByPhoto[photo.id]
+            const globalActive = colorAdj.brightness !== 0 || colorAdj.contrast !== 0
+              || colorAdj.saturation !== 0 || colorAdj.shadows !== 0
+              || colorAdj.highlights !== 0 || colorAdj.preset !== 'none'
+            const photoColorAdj = colorAdjByPhoto[photo.id] ?? (globalActive ? colorAdj : null)
             if (photoColorAdj) {
               const bmp = await createImageBitmap(result.blob)
               const tmp = document.createElement('canvas')
@@ -1883,12 +2534,31 @@ function App() {
             const tmpCtx = tmp.getContext('2d', { willReadFrequently: true })!
             tmpCtx.drawImage(bmp, 0, 0); bmp.close()
             try {
-              const boxes = await detectFaces(tmp, false)
+              const { confidence, thorough } = detectSettingsRef.current
+              const boxes = await detectFaces(tmp, thorough, confidence)
               if (boxes.length > 0) {
                 const effId = s.batchAnonymizeEffect as AnonymizeEffectId
                 const strength = s.batchAnonymizeStrength
                 const batchEmojis = pickUniqueEmojis(boxes.length)
-                boxes.forEach((b, i) => applyEffectRect(tmpCtx, effId, b.x, b.y, b.width, b.height, strength, batchEmojis[i]))
+                boxes.forEach((b, i) => {
+                  const zoneId = `${photo.id}-${i}`
+                  applyEffectRect(
+                    tmpCtx,
+                    effId,
+                    b.x,
+                    b.y,
+                    b.width,
+                    b.height,
+                    strength,
+                    batchEmojis[i],
+                    effId === 'custom-image' ? {
+                      customImages: customImageAssets,
+                      customImageSource,
+                      zoneId,
+                      customImageAssetId: pickCustomImageAssetId(customImageAssets, zoneId),
+                    } : undefined,
+                  )
+                })
               }
             } catch { /* detection failed — skip anonymize for this photo */ }
             const anonBlob = await exportCanvasToBlob(tmp, s.outputFormat, s.quality, 'full')
@@ -1949,7 +2619,7 @@ function App() {
     if (success === 0) { setNotice('Batch complete — no successes.'); return }
     const saved = inputBytes > 0 ? Math.round((1 - outputBytes / inputBytes) * 100) : 0
     setNotice(`Batch: ${success} done${failed > 0 ? ` · ${failed} errors` : ''}. Saved ~${saved}%`)
-  }, [activeBatchTasks, colorAdjByPhoto, normalizeSettings, photos, selectedForBatch])
+  }, [activeBatchTasks, colorAdj, colorAdjByPhoto, normalizeSettings, photos, selectedForBatch])
 
   const exportNormalizeZip = useCallback(async () => {
     if (Object.keys(normalizeResults).length === 0) { setNotice('Run batch first.'); return }
@@ -1974,6 +2644,8 @@ function App() {
   const resetAdjTransformPreview = useCallback(() => {
     setAdjTransform('none')
     setAdjTransformStrength(35)
+    setEnabledDistorts([])
+    setDistortStrengthByEffect(DEFAULT_DISTORT_STRENGTHS)
     if (transformPreviewCanvasRef.current) transformPreviewCanvasRef.current.width = 0
     renderCanvas()
   }, [renderCanvas])
@@ -1994,43 +2666,30 @@ function App() {
 
   const applyAdjTransformToCanvas = useCallback(async () => {
     const wc = workCanvasRef.current
-    if (!wc || wc.width === 0 || adjTransform === 'none') return
+    const active = getActiveDistorts()
+    if (!wc || wc.width === 0 || active.length === 0) return
     pushUndo()
-    const subEffectMap: Record<string, GlitchSubEffect> = {
-      'halftone': 'halftone',
-      'glitch': 'glitch',
-      'pixel-shift': 'pixel-shift',
-      'color-shift': 'color-shift',
-    }
     try {
-      const glitched = await applyGlitchEffect(wc, {
-        subEffect: subEffectMap[adjTransform] ?? 'glitch',
-        amount: adjTransformStrength,
-        seed: Math.floor(Math.random() * 999),
-        halftoneDotSize: adjTransformParams.dotSize,
-        halftoneShape: 'circle',
-        halftoneContrast: adjTransformParams.halftoneContrast,
-        halftoneAngle: adjTransformParams.halftoneAngle,
-        glitchShift: adjTransformParams.glitchShift,
-        glitchColorSplit: adjTransformParams.glitchColorSplit,
-        pixelShiftX: adjTransformParams.pixelShiftX,
-        pixelShiftY: adjTransformParams.pixelShiftY,
-        pixelShiftType: adjPixelShiftType,
-        colorShiftHue: adjTransformParams.colorShiftHue,
-        colorShiftSat: adjTransformParams.colorShiftSat,
-      })
+      const glitched = await applyDistortPipeline(
+        wc,
+        active,
+        distortStrengthByEffect,
+        adjTransformParams,
+        adjPixelShiftType,
+        Math.floor(Math.random() * 999),
+      )
       const ctx = wc.getContext('2d', { willReadFrequently: true })!
       ctx.clearRect(0, 0, wc.width, wc.height)
       ctx.drawImage(glitched, 0, 0)
       setActiveDirty(true)
       setTransformFlyoutOpen(false)
       resetAdjTransformPreview()
-      setNotice('Transform applied to photo.')
+      setNotice(`Applied ${active.length} distort effect${active.length === 1 ? '' : 's'}.`)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       setNotice(`Transform apply failed: ${msg}`)
     }
-  }, [adjPixelShiftType, adjTransform, adjTransformParams, adjTransformStrength, pushUndo, resetAdjTransformPreview, setActiveDirty])
+  }, [adjPixelShiftType, adjTransformParams, distortStrengthByEffect, getActiveDistorts, pushUndo, resetAdjTransformPreview, setActiveDirty])
   // applyAdjTransformToCanvas is called from toolbar Apply if a transform is pending
   void applyAdjTransformToCanvas
 
@@ -2041,17 +2700,33 @@ function App() {
       if (qualityPreviewCanvasRef.current) { qualityPreviewCanvasRef.current.width = 0 }
       return
     }
+    const draft = mobileExportDraftRef.current
+    const fmt = draft?.format ?? exportFormat
+    const qual = draft?.quality ?? exportQuality
+    const targetW = draft?.width ?? wc.width
+    const targetH = draft?.height ?? wc.height
+
+    let sourceCanvas: HTMLCanvasElement = wc
+    if (targetW !== wc.width || targetH !== wc.height) {
+      if (!previewScaleCanvasRef.current) previewScaleCanvasRef.current = document.createElement('canvas')
+      const sc = previewScaleCanvasRef.current
+      sc.width = Math.max(1, Math.round(targetW))
+      sc.height = Math.max(1, Math.round(targetH))
+      sc.getContext('2d')!.drawImage(wc, 0, 0, sc.width, sc.height)
+      sourceCanvas = sc
+    }
+
     setPreviewRendering(true)
-    if (isLosslessFormat(exportFormat)) {
-      exportCanvasToBlob(wc, exportFormat, exportQuality, exportPngDepth).then((blob) => {
+    if (isLosslessFormat(fmt)) {
+      exportCanvasToBlob(sourceCanvas, fmt, qual, exportPngDepth).then((blob) => {
         setPreviewFileSizeKb(Math.round(blob.size / 1024))
         if (qualityPreviewCanvasRef.current) { qualityPreviewCanvasRef.current.width = 0 }
         renderCanvasRef.current()
       }).catch(() => {}).finally(() => setPreviewRendering(false))
       return
     }
-    const quality = exportQuality / 100
-    wc.toBlob((blob) => {
+    const quality = qual / 100
+    sourceCanvas.toBlob((blob) => {
       if (!blob) { setPreviewRendering(false); return }
       setPreviewFileSizeKb(Math.round(blob.size / 1024))
       createImageBitmap(blob).then((bmp) => {
@@ -2062,10 +2737,10 @@ function App() {
         bmp.close()
         renderCanvasRef.current()
       }).catch(() => {}).finally(() => setPreviewRendering(false))
-    }, exportFormat, quality)
+    }, fmt, quality)
   // renderCanvas intentionally not in deps — use renderCanvasRef to avoid infinite loop
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activePhoto, exportFormat, exportQuality, exportPngDepth])
+  }, [activePhoto, exportFormat, exportQuality, exportPngDepth, mobileExportDraft])
 
   // Batch live preview: when batch panel open, apply enabled tasks to a preview canvas
   const computeBatchPreview = useCallback(async () => {
@@ -2124,36 +2799,23 @@ function App() {
     const clear = () => {
       if (transformPreviewCanvasRef.current) { transformPreviewCanvasRef.current.width = 0 }
     }
-    if ((!adjFlyoutOpen && !transformFlyoutOpen) || adjTransform === 'none') {
+    const active = isMobile ? enabledDistorts : (adjTransform !== 'none' ? [adjTransform as DistortEffectId] : [])
+    if ((!adjFlyoutOpen && !transformPanelOpen) || active.length === 0) {
       clear(); renderCanvasRef.current(); return
     }
     const wc = workCanvasRef.current
     if (!wc || wc.width === 0) { clear(); return }
     if (transformPreviewDebounceRef.current) clearTimeout(transformPreviewDebounceRef.current)
-    const gen = ++transformPreviewGenRef.current  // bump generation for this call
     transformPreviewDebounceRef.current = setTimeout(async () => {
-      const subEffectMap: Record<string, GlitchSubEffect> = {
-        halftone: 'halftone', glitch: 'glitch',
-        'pixel-shift': 'pixel-shift', 'color-shift': 'color-shift',
-      }
+      const gen = ++transformPreviewGenRef.current
       try {
-        const result = await applyGlitchEffect(wc, {
-          subEffect: subEffectMap[adjTransform] ?? 'glitch',
-          amount: adjTransformStrength,
-          seed: 42,
-          halftoneDotSize: adjTransformParams.dotSize,
-          halftoneShape: 'circle',
-          halftoneContrast: adjTransformParams.halftoneContrast,
-          halftoneAngle: adjTransformParams.halftoneAngle,
-          glitchShift: adjTransformParams.glitchShift,
-          glitchColorSplit: adjTransformParams.glitchColorSplit,
-          pixelShiftX: adjTransformParams.pixelShiftX,
-          pixelShiftY: adjTransformParams.pixelShiftY,
-          pixelShiftType: adjPixelShiftType,
-          colorShiftHue: adjTransformParams.colorShiftHue,
-          colorShiftSat: adjTransformParams.colorShiftSat,
-        })
-        // Discard if a newer call started — prevents stale results overwriting fresh ones
+        const result = await applyDistortPipeline(
+          wc,
+          active,
+          distortStrengthByEffect,
+          adjTransformParams,
+          adjPixelShiftType,
+        )
         if (gen !== transformPreviewGenRef.current) return
         if (!transformPreviewCanvasRef.current) transformPreviewCanvasRef.current = document.createElement('canvas')
         const tc = transformPreviewCanvasRef.current
@@ -2161,19 +2823,82 @@ function App() {
         tc.getContext('2d')!.drawImage(result, 0, 0)
         renderCanvasRef.current()
       } catch { /* ignore */ }
-    }, 180)
+    }, 40)
     return () => { if (transformPreviewDebounceRef.current) clearTimeout(transformPreviewDebounceRef.current) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [adjFlyoutOpen, transformFlyoutOpen, adjTransform, adjTransformStrength, adjTransformParams, adjPixelShiftType, activePhoto?.id])
+  }, [adjFlyoutOpen, transformPanelOpen, mobilePanel, adjTransform, enabledDistorts, distortStrengthByEffect, adjTransformParams, adjPixelShiftType, activePhoto?.id, isMobile])
 
   // Recompute preview file size debounced whenever quality/format/depth/photo changes
   useEffect(() => {
     if (qualityDebounceRef.current) clearTimeout(qualityDebounceRef.current)
     setPreviewRendering(true)
-    qualityDebounceRef.current = setTimeout(() => { computePreviewFileSize() }, 300)
+    const delay = mobileExportDraft ? 60 : 300
+    qualityDebounceRef.current = setTimeout(() => { computePreviewFileSize() }, delay)
     return () => { if (qualityDebounceRef.current) clearTimeout(qualityDebounceRef.current) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [exportQuality, exportFormat, exportPngDepth, activePhoto?.id])
+  }, [exportQuality, exportFormat, exportPngDepth, activePhoto?.id, mobileExportDraft])
+
+  const beginMobileExportEdit = useCallback(() => {
+    const wc = workCanvasRef.current
+    const w = activeImageSize?.width ?? wc?.width ?? 0
+    const h = activeImageSize?.height ?? wc?.height ?? 0
+    if (w <= 0 || h <= 0) return
+    setMobileExportDraft({
+      width: w,
+      height: h,
+      format: exportFormat,
+      quality: exportQuality,
+    })
+    window.setTimeout(() => computePreviewFileSize(), 0)
+  }, [activeImageSize, computePreviewFileSize, exportFormat, exportQuality])
+
+  const updateMobileExportDraft = useCallback((patch: Partial<NonNullable<typeof mobileExportDraft>>) => {
+    setMobileExportDraft((cur) => (cur ? { ...cur, ...patch } : null))
+    if (qualityDebounceRef.current) clearTimeout(qualityDebounceRef.current)
+    qualityDebounceRef.current = setTimeout(() => { computePreviewFileSize() }, 60)
+  }, [computePreviewFileSize])
+
+  const cancelMobileExportEdit = useCallback(() => {
+    setMobileExportDraft(null)
+    if (qualityPreviewCanvasRef.current) qualityPreviewCanvasRef.current.width = 0
+    computePreviewFileSize()
+    renderCanvasRef.current()
+  }, [computePreviewFileSize])
+
+  const commitMobileExportEdit = useCallback(async () => {
+    if (!mobileExportDraft || !activePhoto) return
+    const { width, height, format, quality } = mobileExportDraft
+    setMobileExportDraft(null)
+    setExportFormat(format)
+    setExportQuality(quality)
+    setResEditW(width)
+    setResEditH(height)
+
+    const wc = workCanvasRef.current
+    if (wc && wc.width > 0 && (wc.width !== width || wc.height !== height)) {
+      setIsBusy(true)
+      try {
+        const tmp = document.createElement('canvas')
+        tmp.width = width
+        tmp.height = height
+        tmp.getContext('2d')!.drawImage(wc, 0, 0, width, height)
+        wc.width = width
+        wc.height = height
+        workCtxRef.current = null
+        const wCtx = getWorkCtx()
+        if (wCtx) wCtx.drawImage(tmp, 0, 0)
+        setActiveImageSize({ width, height })
+        setActiveDirty(true)
+      } catch {
+        setNotice('Resize failed.')
+      } finally {
+        setIsBusy(false)
+      }
+    }
+
+    computePreviewFileSize()
+    renderCanvasRef.current()
+  }, [activePhoto, computePreviewFileSize, getWorkCtx, mobileExportDraft, setActiveDirty])
 
   const saveAllPhotos = useCallback(async () => {
     const edited = photos.filter((p) => p.edited || dirtyByPhoto[p.id])
@@ -2289,6 +3014,7 @@ function App() {
       return
     }
     if (!activePhoto) return
+    if (isMobile && !mobileCanvasEditRef.current) return
     const mapped = mapPointerToImage(event.clientX, event.clientY)
     if (!mapped) return
     canvasRef.current?.setPointerCapture(event.pointerId)
@@ -2300,7 +3026,7 @@ function App() {
     }
     if (toolMode === 'brush') {
       pushUndo()
-      brushEmojiRef.current = pickRandomEmoji()
+      brushEmojiRef.current = resolveEmoji()
       pointerSessionRef.current = { mode: 'brush', lastPointer: mapped }
       setCursorPoint({ x: mapped.canvasX, y: mapped.canvasY })
       brushLastApplyRef.current = 0
@@ -2309,20 +3035,34 @@ function App() {
       return
     }
     const t = transformRef.current; const hs = 12
-    for (let i = activeZones.length - 1; i >= 0; i--) {
-      const zone = activeZones[i]; const rect = zoneToCanvasRect(zone, t)
-      if (mapped.canvasX < rect.x || mapped.canvasX > rect.x + rect.width || mapped.canvasY < rect.y || mapped.canvasY > rect.y + rect.height) continue
+    for (let i = effectiveZones.length - 1; i >= 0; i--) {
+      const zone = effectiveZones[i]
+      if (!zoneContainsNormalized(zone, mapped.normalizedX, mapped.normalizedY)) continue
       setSelectedZoneId(zone.id)
-      const nearHandle = Math.abs(mapped.canvasX - (rect.x + rect.width)) <= hs && Math.abs(mapped.canvasY - (rect.y + rect.height)) <= hs
+      const { lx, ly } = normalizedToLocal(zone.x + zone.width, zone.y + zone.height, t)
+      const br = localToCanvas(lx, ly, t)
+      const nearHandle = Math.hypot(mapped.canvasX - br.x, mapped.canvasY - br.y) <= hs
       pointerSessionRef.current = nearHandle
         ? { mode: 'resize-zone', zoneId: zone.id }
         : { mode: 'move-zone', zoneId: zone.id, offsetX: mapped.normalizedX - zone.x, offsetY: mapped.normalizedY - zone.y }
       return
     }
     pointerSessionRef.current = { mode: 'create-zone', startX: mapped.normalizedX, startY: mapped.normalizedY }
-    setDraftZone({ id: createId(), x: mapped.normalizedX, y: mapped.normalizedY, width: 0.001, height: 0.001, effect: selectedEffect, emoji: pickRandomEmoji() })
+    const zoneId = createId()
+    setDraftZone({
+      id: zoneId,
+      x: mapped.normalizedX,
+      y: mapped.normalizedY,
+      width: 0.001,
+      height: 0.001,
+      effect: selectedEffect,
+      emoji: resolveEmoji(),
+      customImageAssetId: selectedEffect === 'custom-image'
+        ? resolveCustomImageAssetId(zoneId)
+        : undefined,
+    })
     setSelectedZoneId(null)
-  }, [activePhoto, activeZones, applyBrushAtPointer, batchPanelOpen, isNormalizeCropPicking, mapPointerToImage, normalizeSettings.cropMode, pushUndo, selectedEffect, startBrushLoop, toolMode])
+  }, [activePhoto, effectiveZones, applyBrushAtPointer, activeCategory, batchPanelOpen, customImageAssets, isMobile, isNormalizeCropPicking, mapPointerToImage, normalizeSettings.cropMode, pushUndo, selectedEffect, startBrushLoop, toolMode])
 
   const handleCanvasPointerMove = useCallback((event: ReactPointerEvent<HTMLCanvasElement>) => {
     const session = pointerSessionRef.current
@@ -2349,7 +3089,7 @@ function App() {
     if (session.mode === 'brush') {
       if (brushActiveRef.current && mapped) {
         const now = performance.now()
-        if (now - brushLastApplyRef.current >= 50) {
+        if (now - brushLastApplyRef.current >= (isMobile ? 80 : 50)) {
           brushLastApplyRef.current = now
           applyBrushAtPointer(mapped)
         }
@@ -2361,14 +3101,36 @@ function App() {
       renderCanvas(); return
     }
     if (session.mode === 'move-zone') {
-      setActiveZones((zones) => zones.map((z) => z.id !== session.zoneId ? z : { ...z, x: clamp(mapped.normalizedX - session.offsetX, 0, 1 - z.width), y: clamp(mapped.normalizedY - session.offsetY, 0, 1 - z.height) }))
+      setActiveZones((zones) => zones.map((z) => {
+        if (z.id !== session.zoneId) return z
+        const eff = zonesWithFaceOffset([z], detectFaceOffset)[0]
+        return {
+          ...z,
+          ...CLEAR_DETECT_FIELDS,
+          x: clamp(mapped.normalizedX - session.offsetX, 0, 1 - eff.width),
+          y: clamp(mapped.normalizedY - session.offsetY, 0, 1 - eff.height),
+          width: eff.width,
+          height: eff.height,
+        }
+      }))
       renderCanvas(); return
     }
     if (session.mode === 'resize-zone') {
-      setActiveZones((zones) => zones.map((z) => z.id !== session.zoneId ? z : { ...z, width: clamp(mapped.normalizedX - z.x, 0.02, 1 - z.x), height: clamp(mapped.normalizedY - z.y, 0.02, 1 - z.y) }))
+      setActiveZones((zones) => zones.map((z) => {
+        if (z.id !== session.zoneId) return z
+        const eff = zonesWithFaceOffset([z], detectFaceOffset)[0]
+        return {
+          ...z,
+          ...CLEAR_DETECT_FIELDS,
+          x: eff.x,
+          y: eff.y,
+          width: clamp(mapped.normalizedX - eff.x, 0.02, 1 - eff.x),
+          height: clamp(mapped.normalizedY - eff.y, 0.02, 1 - eff.y),
+        }
+      }))
       renderCanvas()
     }
-  }, [applyBrushAtPointer, batchPanelOpen, drawBrushPreview, mapPointerToImage, renderCanvas, setActiveZones, toolMode])
+  }, [applyBrushAtPointer, batchPanelOpen, detectFaceOffset, drawBrushPreview, mapPointerToImage, renderCanvas, setActiveZones, toolMode])
 
   const handleCanvasPointerUp = useCallback(() => {
     if (batchPanelOpen) {
@@ -2447,65 +3209,115 @@ function App() {
     brushDebounceRef.current = setTimeout(() => { setBrushSize(next) }, 200)
   }, [toolMode])
 
+  // Re-bake the anonymization effect onto the work canvas from the pristine
+  // original, using the CURRENT face-offset + strength. Reads live values from
+  // refs so the callback identity stays stable (no debounce-reset / stale-offset
+  // loops). Returns true when it actually re-baked.
+  const reapplyZoneEffectsPreview = useCallback(async (zonesOverride?: Zone[]): Promise<boolean> => {
+    const photo = activePhotoRef.current
+    if (!photo || photo.isVideo) return false
+    const baseZones = zonesOverride ?? (zonesByPhotoRef.current[photo.id] ?? [])
+    if (baseZones.length === 0) return false
+    const orig = originalBlobByPhotoRef.current[photo.id]
+    if (!orig) return false
+    const wc = workCanvasRef.current
+    if (!wc) return false
+    const photoId = photo.id
+    const offset = detectSettingsRef.current.faceOffset
+    const strength = brushStrengthRef.current
+
+    try {
+      const bmp = await createImageBitmap(orig)
+      if (activePhotoIdRef.current !== photoId) { bmp.close(); return false }
+      if (wc.width !== bmp.width || wc.height !== bmp.height) {
+        wc.width = bmp.width; wc.height = bmp.height; workCtxRef.current = null
+      }
+      const ctx = getWorkCtx()
+      if (!ctx) { bmp.close(); return false }
+      ctx.clearRect(0, 0, wc.width, wc.height)
+      ctx.drawImage(bmp, 0, 0)
+      bmp.close()
+      const expanded = zonesWithFaceOffset(baseZones, offset)
+      expanded.forEach((z) =>
+        applyEffectRect(
+          ctx,
+          z.effect,
+          z.x * wc.width,
+          z.y * wc.height,
+          z.width * wc.width,
+          z.height * wc.height,
+          strength,
+          z.emoji,
+          customEffectOptions(z),
+        ),
+      )
+      previewBakedRef.current = true
+      // Invalidate the cached quality/compression preview so renderCanvas draws
+      // the freshly re-baked work canvas instead of a stale (old-size) preview.
+      // Without this, lossy formats (default JPEG) keep showing the previous
+      // effect size while only the outline grows with the offset.
+      if (qualityPreviewCanvasRef.current) qualityPreviewCanvasRef.current.width = 0
+      renderCanvasRef.current()
+      return true
+    } catch { return false }
+  }, [customEffectOptions, getWorkCtx])
+
   const updateSelectedZoneEffect = useCallback((effect: AnonymizeEffectId) => {
     setSelectedEffect(effect)
+    setEraserActive(false)
     setEffectFlyoutOpen(false)
+    setToolMode(lastZoneTool === 'rectangle' ? 'zone' : 'brush')
+    if (isMobile && activePhoto && !activePhoto.isVideo) {
+      mobileCanvasEditRef.current = true
+      setActiveCategory('zone')
+      const idx = ZONE_TOOLS.indexOf(lastZoneTool)
+      if (idx >= 0) setCategoryIndices((cur) => ({ ...cur, zone: idx }))
+    }
     const updatedZones = activeZones.map((z) => ({
       ...z, effect,
-      emoji: effect === 'emoji' ? z.emoji || pickRandomEmoji() : z.emoji,
+      emoji: effect === 'emoji' ? (z.emoji || resolveEmoji()) : z.emoji,
+      customImageAssetId: effect === 'custom-image'
+        ? z.customImageAssetId ?? resolveCustomImageAssetId(z.id)
+        : undefined,
     }))
-    setActiveZones(() => updatedZones)
-
-    // If zones are already anonymized, reset canvas to original and re-apply with new effect
-    if (zonesAnonymized && activePhoto && originalBlobByPhoto[activePhoto.id]) {
-      const orig = originalBlobByPhoto[activePhoto.id]
-      createImageBitmap(orig).then((bmp) => {
-        const wc = workCanvasRef.current!
-        if (wc.width !== bmp.width || wc.height !== bmp.height) {
-          wc.width = bmp.width; wc.height = bmp.height; workCtxRef.current = null
-        }
-        const ctx = getWorkCtx()
-        if (ctx) { ctx.clearRect(0, 0, wc.width, wc.height); ctx.drawImage(bmp, 0, 0) }
-        bmp.close()
-        // Apply all zones with the new effect directly
-        updatedZones.forEach((z) => applyEffectRect(ctx!, effect, z.x * wc.width, z.y * wc.height, z.width * wc.width, z.height * wc.height, brushStrength, z.emoji))
-        setZonesAnonymized(true)
-        renderCanvasRef.current()
-      }).catch(() => {})
-    } else {
-      setZonesAnonymized(false)
+    if (updatedZones.length === 0) return
+    if (activePhotoId) {
+      setZonesByPhoto((cur) => ({ ...cur, [activePhotoId]: updatedZones }))
     }
-  }, [activePhoto, activeZones, brushStrength, getWorkCtx, originalBlobByPhoto, setActiveZones, zonesAnonymized])
+    reapplyZoneEffectsPreview(updatedZones).then((baked) => {
+      if (baked) {
+        setZonesAnonymized(true)
+        setActiveDirty(true)
+        if (activePhotoId) setAppliedByPhoto((cur) => ({ ...cur, [activePhotoId]: true }))
+      }
+    })
+  }, [activePhoto, activePhotoId, activeZones, isMobile, lastZoneTool, reapplyZoneEffectsPreview, setActiveDirty])
 
-  // Live re-apply zones when brushStrength changes (while zones are already anonymized)
-  const strengthDebounceRef = useRef<ReturnType<typeof setTimeout>>()
+  // Build a primitive signature of zones so the re-bake effect only fires when
+  // the geometry / effect / emoji actually changes — not on every render.
+  const zoneBakeSignature = useMemo(
+    () => activeZones.map((z) =>
+      `${z.id}:${z.effect}:${z.emoji}:${z.customImageAssetId ?? ''}:${z.detectX ?? ''},${z.detectY ?? ''},${z.detectWidth ?? ''},${z.detectHeight ?? ''}:${z.x},${z.y},${z.width},${z.height}`,
+    ).join('|'),
+    [activeZones],
+  )
+
+  // Re-bake zone effects when face-offset / strength / zone geometry changes,
+  // but only while a preview is actually baked on the canvas.
+  const zonePreviewDebounceRef = useRef<ReturnType<typeof setTimeout>>()
   useEffect(() => {
-    if (!zonesAnonymized || !activePhoto || activeZones.length === 0) return
-    const orig = originalBlobByPhoto[activePhoto.id]
-    if (!orig) return
-    if (strengthDebounceRef.current) clearTimeout(strengthDebounceRef.current)
-    strengthDebounceRef.current = setTimeout(() => {
-      createImageBitmap(orig).then((bmp) => {
-        const wc = workCanvasRef.current!
-        if (!wc) return
-        if (wc.width !== bmp.width || wc.height !== bmp.height) {
-          wc.width = bmp.width; wc.height = bmp.height; workCtxRef.current = null
-        }
-        const ctx = getWorkCtx()
-        if (ctx) {
-          ctx.clearRect(0, 0, wc.width, wc.height)
-          ctx.drawImage(bmp, 0, 0)
-        }
-        bmp.close()
-        activeZones.forEach((z) =>
-          applyEffectRect(ctx!, z.effect, z.x * wc.width, z.y * wc.height, z.width * wc.width, z.height * wc.height, brushStrength, z.emoji),
-        )
-        renderCanvasRef.current()
-      }).catch(() => {})
-    }, 150)
-    return () => { if (strengthDebounceRef.current) clearTimeout(strengthDebounceRef.current) }
+    if (!activePhoto || activePhoto.isVideo || activeZones.length === 0) return
+    if (!previewBakedRef.current && !zonesAnonymized) return
+    if (!originalBlobByPhoto[activePhoto.id]) return
+    if (zonePreviewDebounceRef.current) clearTimeout(zonePreviewDebounceRef.current)
+    zonePreviewDebounceRef.current = setTimeout(() => {
+      void reapplyZoneEffectsPreview().then((baked) => {
+        if (baked) setActiveDirty(true)
+      })
+    }, 90)
+    return () => { if (zonePreviewDebounceRef.current) clearTimeout(zonePreviewDebounceRef.current) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [brushStrength])
+  }, [brushStrength, detectFaceOffset, zoneBakeSignature, activePhoto?.id, zonesAnonymized])
 
   // Sync brushSizeRef when slider changes
   useEffect(() => { brushSizeRef.current = brushSize }, [brushSize])
@@ -2513,7 +3325,17 @@ function App() {
   // Sync photosRef for cleanup
   useEffect(() => { photosRef.current = photos }, [photos])
   useEffect(() => () => { photosRef.current.forEach((p) => URL.revokeObjectURL(p.previewUrl)) }, [])
-  useEffect(() => { document.documentElement.setAttribute('data-theme', theme); localStorage.setItem('anonymizer-theme', theme) }, [theme])
+  useEffect(() => { customImageAssetsRef.current = customImageAssets }, [customImageAssets])
+  useEffect(() => () => {
+    customImageAssetsRef.current.forEach((asset) => {
+      URL.revokeObjectURL(asset.objectUrl)
+      asset.imageBitmap?.close()
+    })
+  }, [])
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', effectiveTheme)
+    if (!isMobile) localStorage.setItem('anonymizer-theme', theme)
+  }, [effectiveTheme, isMobile, theme])
 
   // cmd/ctrl+S — save active photo; Delete/Backspace — remove selected zone
   useEffect(() => {
@@ -2543,11 +3365,16 @@ function App() {
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'z') {
         e.preventDefault()
         clearZones()
+        return
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
+        e.preventDefault()
+        undo()
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [clearZones, exportZip, removeSelectedZone, saveActivePhoto, saveAllPhotos, selectedZoneId])
+  }, [clearZones, exportZip, removeSelectedZone, saveActivePhoto, saveAllPhotos, selectedZoneId, undo])
 
   // Prevent browser zoom (ctrl/cmd+wheel or pinch) so brush-size wheel doesn't zoom the page
   useEffect(() => {
@@ -2601,7 +3428,12 @@ function App() {
     setDetectorLoading(true)
     try {
       if (forceReset) resetDetectorStatus()
-      const status = await initializeDetector()
+      const status = await Promise.race([
+        initializeDetector(),
+        new Promise<DetectorStatus>((_, reject) => {
+          setTimeout(() => reject(new Error('Detector init timed out')), 45000)
+        }),
+      ])
       setDetector(status)
       return status
     } catch {
@@ -2610,6 +3442,7 @@ function App() {
       return failed
     } finally {
       setDetectorLoading(false)
+      setModelLoadProgress(null)
     }
   }, [])
 
@@ -2617,6 +3450,13 @@ function App() {
   useEffect(() => {
     void refreshDetector(false)
   }, [refreshDetector])
+
+  // Surface model/WASM download progress so the loading state shows X / Y MB.
+  useEffect(() => {
+    setModelLoadProgress(getDetectorLoadProgress())
+    setDetectorLoadProgressCallback((p) => setModelLoadProgress(p))
+    return () => setDetectorLoadProgressCallback(null)
+  }, [])
 
   useEffect(() => {
     const retryIfUnavailable = () => {
@@ -2653,115 +3493,6 @@ function App() {
     }
   }, [detector.mode, refreshDetector])
 
-  const openDepsModal = useCallback(async () => {
-    setInstallResult(null)
-    setDepsModalOpen(true)
-    try {
-      const status = await checkDeps()
-      setDepsStatus(status)
-      await refreshDetector(true)
-    } catch { setDepsStatus(null) }
-  }, [refreshDetector])
-
-  const isWindows = typeof navigator !== 'undefined' && /win/i.test(navigator.platform ?? '')
-
-  const INSTALL_SCRIPT_SH = `#!/usr/bin/env bash
-# W3PN Anonymizer — Install & start Python backend (macOS / Linux)
-# This script runs LOCALLY on your machine. No data is sent anywhere.
-set -euo pipefail
-SCRIPT_DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)/server"
-VENV_DIR="$SCRIPT_DIR/.venv"
-echo ""
-echo "╔══════════════════════════════════════════════════════╗"
-echo "║  W3PN Anonymizer — Python backend setup & start      ║"
-echo "╚══════════════════════════════════════════════════════╝"
-echo ""
-# 1. Check Python
-if command -v python3 &>/dev/null; then PYTHON=python3
-elif command -v python &>/dev/null; then PYTHON=python
-else echo "❌ Python not found. Install from https://python.org"; exit 1; fi
-PY_VER=$($PYTHON --version); echo "✓ $PY_VER"
-# 2. Virtual environment
-[ ! -d "$VENV_DIR" ] && { echo "→ Creating venv…"; $PYTHON -m venv "$VENV_DIR"; }
-source "$VENV_DIR/bin/activate"
-# 3. Install packages: fastapi, uvicorn, opencv, pillow, numpy
-echo "→ Installing dependencies…"
-pip install --quiet --upgrade pip
-pip install --upgrade -r "$SCRIPT_DIR/requirements.txt"
-echo "✓ All packages installed"
-# 4. Download YuNet face detection model (~400 KB)
-MODEL="$SCRIPT_DIR/models/face_detection_yunet_2023mar.onnx"
-mkdir -p "$SCRIPT_DIR/models"
-[ ! -f "$MODEL" ] && curl -fL "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx" -o "$MODEL" 2>/dev/null && echo "✓ Model downloaded"
-# 5. Start server on http://127.0.0.1:7865
-echo ""; echo "✅ Starting server on http://127.0.0.1:7865"; echo "   Press Ctrl+C to stop."; echo ""
-cd "$SCRIPT_DIR" && exec python main.py
-`
-
-  const INSTALL_SCRIPT_BAT = `@echo off
-REM W3PN Anonymizer — Install ^& start Python backend (Windows)
-REM This script runs LOCALLY. No data is sent anywhere.
-setlocal EnableDelayedExpansion
-set "SD=%~dp0server"
-echo.
-echo  W3PN Anonymizer — Python backend setup
-echo.
-REM 1. Check Python
-where python >nul 2>&1
-if errorlevel 1 ( echo Python not found. Install from https://python.org & pause & exit /b 1 )
-set PYTHON=python
-REM 2. Virtual environment
-if not exist "%SD%\\.venv\\" ( echo Creating venv... & %PYTHON% -m venv "%SD%\\.venv" )
-call "%SD%\\.venv\\Scripts\\activate.bat"
-REM 3. Install packages
-echo Installing dependencies...
-pip install --quiet --upgrade pip
-pip install --upgrade -r "%SD%\\requirements.txt"
-echo All packages installed
-REM 4. YuNet model
-set "MF=%SD%\\models\\face_detection_yunet_2023mar.onnx"
-if not exist "%SD%\\models\\" mkdir "%SD%\\models"
-if not exist "%MF%" ( powershell -Command "Invoke-WebRequest -Uri 'https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx' -OutFile '%MF%' -UseBasicParsing" )
-REM 5. Start server
-echo.
-echo Starting server on http://127.0.0.1:7865
-echo Press Ctrl+C to stop.
-echo.
-cd "%SD%" & %PYTHON% main.py
-endlocal
-`
-
-  const downloadInstallScript = useCallback(() => {
-    const script = isWindows ? INSTALL_SCRIPT_BAT : INSTALL_SCRIPT_SH
-    const filename = isWindows ? 'anonymizer-setup.bat' : 'anonymizer-setup.sh'
-    const blob = new Blob([script], { type: 'text/plain' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url; a.download = filename; a.click()
-    URL.revokeObjectURL(url)
-  }, [isWindows])
-
-  const runInstall = useCallback(async () => {
-    setDepsInstalling(true)
-    setInstallResult(null)
-    try {
-      const result = await triggerInstall()
-      if (!result) {
-        setInstallResult({ ok: false, returncode: -1, stdout: '', stderr: '', message: 'Server not reachable. Start the Python server first, then try again.' })
-        return
-      }
-      setInstallResult(result)
-      const status = await checkDeps()
-      setDepsStatus(status)
-      if (result.ok) {
-        setTimeout(() => {
-          refreshDetector(true).then((s) => { setNotice(`Backend connected: ${s.message}`) })
-        }, 1500)
-      }
-    } catch { setInstallResult({ ok: false, returncode: -1, stdout: '', stderr: '', message: 'Server not reachable. Start the Python server first, then try again.' }) }
-    finally { setDepsInstalling(false) }
-  }, [refreshDetector])
-
   // Load active photo into work canvas; auto-detect if enabled
   useEffect(() => {
     if (!activePhoto) {
@@ -2769,10 +3500,21 @@ endlocal
       if (wc) { wc.width = 0; wc.height = 0 }
       setActiveImageSize(null); renderCanvas(); return
     }
+    // Videos are handled by the <video> player, not the work canvas.
+    // Attempting createImageBitmap on a video blob throws and spuriously
+    // surfaces a "Failed to load photo" error, so skip it here.
+    if (activePhoto.isVideo) {
+      const wc = workCanvasRef.current
+      if (wc) { wc.width = 0; wc.height = 0 }
+      setActiveImageSize(null)
+      renderCanvas()
+      return
+    }
+    const photoId = activePhoto.id
     let cancelled = false
     setIsBusy(true)
     createImageBitmap(activePhoto.blob).then(async (bmp) => {
-      if (cancelled) { bmp.close(); return }
+      if (cancelled || activePhotoIdRef.current !== photoId) { bmp.close(); return }
       const wc = workCanvasRef.current!
       if (wc.width !== bmp.width || wc.height !== bmp.height) {
         wc.width = bmp.width; wc.height = bmp.height
@@ -2782,6 +3524,7 @@ endlocal
       const ctx = getWorkCtx()
       if (ctx) { ctx.clearRect(0, 0, wc.width, wc.height); ctx.drawImage(bmp, 0, 0) }
       bmp.close()
+      if (activePhotoIdRef.current !== photoId) return
       renderCanvasRef.current()  // use ref to get latest renderCanvas with current adjFlyoutOpen state
       // Trigger batch preview after canvas is loaded (avoids race with 350ms debounce)
       if (computeBatchPreviewRef.current) computeBatchPreviewRef.current()
@@ -2793,7 +3536,7 @@ endlocal
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activePhoto?.id])  // only re-run when photo switches, not on every render
 
-  useEffect(() => { renderCanvas() }, [renderCanvas, activeZones, selectedZoneId, draftZone, cursorPoint, toolMode, showBoxes])
+  useEffect(() => { renderCanvas() }, [renderCanvas, effectiveZones, selectedZoneId, draftZone, cursorPoint, toolMode, showBoxes, detectFaceOffset])
 
   // Auto-detect: fires when detector becomes ready, photo changes, or autoDetect toggles ON
   useEffect(() => {
@@ -2828,6 +3571,13 @@ endlocal
     return () => { observer.disconnect(); if (rafId !== null) cancelAnimationFrame(rafId) }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Workspace is display:none in live mode — repaint when editor becomes visible.
+  useEffect(() => {
+    if (!isMobile || mobileMode !== 'editor' || !activePhoto || activePhoto.isVideo) return
+    const t = window.setTimeout(() => renderCanvasRef.current?.(), 0)
+    return () => clearTimeout(t)
+  }, [isMobile, mobileMode, activePhoto?.id, activePhoto?.isVideo])
+
   const normResultsCount = Object.keys(normalizeResults).length
 
   // Folder tree derived from photo names
@@ -2851,11 +3601,9 @@ endlocal
       const enabling = !next.has(taskId)
       if (enabling) next.add(taskId)
       else next.delete(taskId)
-      // Auto-expand when enabling, auto-collapse when disabling
       setExpandedBatchTasks((exp) => {
         const expNext = new Set(exp)
         if (enabling) expNext.add(taskId)
-        else expNext.delete(taskId)
         return expNext
       })
       return next
@@ -2898,7 +3646,7 @@ endlocal
     }
   }, [activePhotoId])
 
-  const rotatePhoto = useCallback(async (photoId: string) => {
+  const rotatePhoto = useCallback(async (photoId: string, direction: 1 | -1 = 1) => {
     const photo = photos.find((p) => p.id === photoId)
     if (!photo) return
     try {
@@ -2908,7 +3656,7 @@ endlocal
       canvas.height = img.width
       const ctx = canvas.getContext('2d')!
       ctx.translate(canvas.width / 2, canvas.height / 2)
-      ctx.rotate(Math.PI / 2)
+      ctx.rotate((direction * Math.PI) / 2)
       ctx.drawImage(img, -img.width / 2, -img.height / 2)
       img.close()
       canvas.toBlob((blob) => {
@@ -2938,31 +3686,628 @@ endlocal
     if (!showBoxes) return []
     const t = transformRef.current
     if (t.drawWidth === 0) return []
-    return activeZones.map((zone) => {
-      const rect = zoneToCanvasRect(zone, t)
-      // Position the 16×16 delete button just outside the right edge of the zone, at the top
-      return { id: zone.id, top: rect.y, left: rect.x + rect.width + 2 }
+    return effectiveZones.map((zone) => {
+      const { lx, ly } = normalizedToLocal(zone.x + zone.width, zone.y, t)
+      const tr = localToCanvas(lx, ly, t)
+      return { id: zone.id, top: tr.y, left: tr.x + 2 }
     })
-  // We intentionally re-compute when transform changes via renderCanvas calls
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeZones, showBoxes, activeImageSize, cursorPoint])
+  }, [effectiveZones, showBoxes, activeImageSize, mobileViewZoom, mobileViewPan, mobileViewRotation])
+
+  const openVideoPicker = useCallback(() => {
+    const input = uploadInputRef.current
+    if (!input) return
+    const prev = input.accept
+    input.accept = 'video/*'
+    input.click()
+    window.setTimeout(() => { input.accept = prev }, 0)
+  }, [])
+
+  const setCategoryIndex = useCallback((cat: MobileToolCategory, idx: number) => {
+    setCategoryIndices((cur) => ({ ...cur, [cat]: idx }))
+  }, [])
+
+  const applyFaceTool = useCallback((id: FaceToolId) => {
+    setActiveCategory('face')
+    const idx = FACE_TOOLS.indexOf(id)
+    if (idx >= 0) setCategoryIndex('face', idx)
+    switch (id) {
+      case 'detect':
+        setAutoDetect(true)
+        setShowBoxes(true)
+        detectFacesOnActiveImage(true)
+        break
+      case 'show-boxes':
+        setShowBoxes((v) => !v)
+        break
+      case 'remove-selected':
+        removeSelectedZone()
+        break
+      case 'clear-all':
+        clearZones()
+        break
+      case 'threshold':
+        detectFacesOnActiveImage(true)
+        break
+    }
+  }, [clearZones, detectFacesOnActiveImage, removeSelectedZone, setCategoryIndex])
+
+  const applyZoneTool = useCallback((id: ZoneToolId) => {
+    setActiveCategory('zone')
+    mobileCanvasEditRef.current = true
+    const idx = ZONE_TOOLS.indexOf(id)
+    if (idx >= 0) setCategoryIndex('zone', idx)
+    switch (id) {
+      case 'rectangle':
+        setLastZoneTool('rectangle')
+        setEraserActive(false)
+        setToolMode('zone')
+        setZonesAnonymized(false)
+        break
+      case 'brush':
+        setLastZoneTool('brush')
+        setEraserActive(false)
+        setToolMode('brush')
+        break
+      case 'eraser':
+        setEraserActive(true)
+        setToolMode('brush')
+        break
+    }
+  }, [setCategoryIndex])
+
+  const applyCropTool = useCallback((id: CropToolId) => {
+    setActiveCategory('crop')
+    mobileCanvasEditRef.current = true
+    const idx = CROP_TOOLS.indexOf(id)
+    if (idx >= 0) setCategoryIndex('crop', idx)
+    switch (id) {
+      case 'crop':
+        setToolMode('crop')
+        break
+      case 'rotate-left':
+        if (activePhotoId) rotatePhoto(activePhotoId, -1)
+        break
+      case 'rotate-right':
+        if (activePhotoId) rotatePhoto(activePhotoId, 1)
+        break
+    }
+  }, [activePhotoId, rotatePhoto, setCategoryIndex])
+
+  const applyAdjustTool = useCallback((id: AdjustToolId) => {
+    setMobilePanel('tool-adjust')
+    void id
+  }, [])
+
+  const applyEffectTool = useCallback((id: EffectToolId) => {
+    setActiveCategory('effects')
+    const idx = EFFECT_TOOL_ORDER.indexOf(id)
+    if (idx >= 0) setCategoryIndex('effects', idx)
+    updateSelectedZoneEffect(id)
+  }, [setCategoryIndex, updateSelectedZoneEffect])
+
+  const selectToolCategory = useCallback((cat: MobileToolCategory) => {
+    setActiveCategory(cat)
+    if (cat !== 'zone' && cat !== 'crop') {
+      mobileCanvasEditRef.current = toolMode === 'brush' || toolMode === 'zone' || toolMode === 'crop'
+    }
+    if (cat === 'gallery') {
+      setGalleryBatchSelect(false)
+      setMobilePanel('gallery')
+      return
+    }
+    const panel = panelForCategory(cat)
+    if (panel) setMobilePanel(panel)
+  }, [toolMode])
+
+  const rotateCategoryTool = useCallback((cat: MobileToolCategory) => {
+    selectToolCategory(cat)
+  }, [selectToolCategory])
+
+  const addLiveMediaToLibrary = useCallback((blob: Blob, opts?: { stayInLive?: boolean }): string | null => {
+    const isVideo = blob.type.startsWith('video/')
+    const ext = isVideo ? 'webm' : 'jpg'
+    const name = `live-capture-${Date.now()}.${ext}`
+    const file = new File([blob], name, { type: blob.type || (isVideo ? 'video/webm' : 'image/jpeg') })
+    addRecords([{ file, name, source: 'upload' }])
+    const id = lastAddedPhotoIdRef.current
+    if (!opts?.stayInLive) {
+      setMobileMode('editor')
+    }
+    return id
+  }, [addRecords])
+
+  const openPhotoInEditor = useCallback((photoId: string, opts?: { slide?: boolean }) => {
+    setMobilePanel(null)
+    if (opts?.slide) {
+      setMobileEditorSlideIn(true)
+      window.setTimeout(() => setMobileEditorSlideIn(false), 360)
+    }
+    setMobileMode('editor')
+    if (photoId === activePhotoIdRef.current) {
+      // Live capture auto-selects the new photo while workspace is hidden — redraw once visible.
+      setMobileViewZoom(1)
+      setMobileViewPan({ x: 0, y: 0 })
+      setMobileViewRotation(0)
+      mobileViewZoomRef.current = 1
+      mobileViewPanRef.current = { x: 0, y: 0 }
+      mobileViewRotationRef.current = 0
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => renderCanvasRef.current?.())
+      })
+      return
+    }
+    void selectPhoto(photoId)
+  }, [selectPhoto])
+
+  const stepAdjacentLibraryPhoto = useCallback((dir: -1 | 1) => {
+    const library = photos.filter((p) => !p.isVideo)
+    const idx = library.findIndex((p) => p.id === activePhotoId)
+    if (idx < 0) return
+    const next = library[idx + dir]
+    if (next) void selectPhoto(next.id)
+  }, [activePhotoId, photos, selectPhoto])
+
+  const showMobileToast = useCallback((message: string, action?: { label: string; onClick: () => void }) => {
+    setMobileToast({ message, action })
+  }, [])
+
+  const exitLiveToWorkspace = useCallback(() => {
+    setMobilePanel(null)
+    const id = lastAddedPhotoIdRef.current ?? photos[photos.length - 1]?.id ?? null
+    if (photos.length > 0) {
+      setMobileMode('editor')
+      if (id) void selectPhoto(id)
+    } else {
+      setMobileMode('home')
+    }
+  }, [photos, selectPhoto])
+
+  const exportAllLibraryZip = useCallback(async (photoIds?: string[]) => {
+    const selectedIds = photoIds ? new Set(photoIds) : null
+    const sourcePhotos = selectedIds ? photos.filter((p) => selectedIds.has(p.id)) : photos
+    const images = sourcePhotos.filter((p) => !p.isVideo)
+    if (images.length === 0) {
+      showMobileToast('No photos in library to export.')
+      return
+    }
+    setIsExporting(true)
+    setExportLibraryProgress({ done: 0, total: images.length })
+    try {
+      const zip = new JSZip()
+      const usage = new Map<string, number>()
+      let done = 0
+      for (const photo of images) {
+        setExportLibraryProgress({ done, total: images.length })
+        const canvas = await bakePhotoToCanvas({
+          photo,
+          sourceBlob: originalBlobByPhoto[photo.id] ?? photo.blob,
+          zones: zonesWithFaceOffset(zonesByPhoto[photo.id] ?? [], detectFaceOffset),
+          colorAdj: colorAdjByPhoto[photo.id],
+          brushStrength,
+          activeWorkCanvas: photo.id === activePhotoId ? workCanvasRef.current : null,
+          isActivePhoto: photo.id === activePhotoId,
+          effectOptionsForZone: (zone) => ({
+            customImages: customImageAssets,
+            customImageSource,
+            customImageAssetId: zone.customImageAssetId,
+            zoneId: zone.id,
+            seed: `${photo.id}:${zone.id}`,
+          }),
+        })
+        const blob = await exportCanvasToBlobLib(canvas, exportFormat, exportQuality, exportPngDepth)
+        const baseName = photo.name.split('/').pop() ?? photo.name
+        const ext = FORMAT_EXT[exportFormat] ?? 'png'
+        const outName = baseName.replace(/\.[^.]+$/, '') + `-anon.${ext}`
+        zip.file(makeZipSafeName(outName, usage), blob)
+        done += 1
+      }
+      const zipBlob = await zip.generateAsync({ type: 'blob' })
+      saveAs(zipBlob, `anonymizer-library-${new Date().toISOString().slice(0, 10)}.zip`)
+      const skipped = sourcePhotos.length - images.length
+      showMobileToast(
+        skipped > 0
+          ? `Downloaded ${images.length} photos · ${skipped} video${skipped !== 1 ? 's' : ''} skipped`
+          : `Downloaded ${images.length} photo${images.length !== 1 ? 's' : ''} as ZIP`,
+      )
+    } catch {
+      showMobileToast('ZIP export failed.')
+    } finally {
+      setIsExporting(false)
+      setExportLibraryProgress(null)
+    }
+  }, [
+    activePhotoId, brushStrength, colorAdjByPhoto, exportFormat, exportPngDepth, exportQuality,
+    customImageAssets, customImageSource, originalBlobByPhoto, photos, showMobileToast, zonesByPhoto,
+  ])
+
+  const exportAllLibraryIndividual = useCallback(async (photoIds?: string[]) => {
+    const selectedIds = photoIds ? new Set(photoIds) : null
+    const sourcePhotos = selectedIds ? photos.filter((p) => selectedIds.has(p.id)) : photos
+    const images = sourcePhotos.filter((p) => !p.isVideo)
+    if (images.length === 0) {
+      showMobileToast('No photos in library to export.')
+      return
+    }
+    setIsExporting(true)
+    setExportLibraryProgress({ done: 0, total: images.length })
+    try {
+      let done = 0
+      for (const photo of images) {
+        setExportLibraryProgress({ done, total: images.length })
+        const canvas = await bakePhotoToCanvas({
+          photo,
+          sourceBlob: originalBlobByPhoto[photo.id] ?? photo.blob,
+          zones: zonesWithFaceOffset(zonesByPhoto[photo.id] ?? [], detectFaceOffset),
+          colorAdj: colorAdjByPhoto[photo.id],
+          brushStrength,
+          activeWorkCanvas: photo.id === activePhotoId ? workCanvasRef.current : null,
+          isActivePhoto: photo.id === activePhotoId,
+          effectOptionsForZone: (zone) => ({
+            customImages: customImageAssets,
+            customImageSource,
+            customImageAssetId: zone.customImageAssetId,
+            zoneId: zone.id,
+            seed: `${photo.id}:${zone.id}`,
+          }),
+        })
+        const blob = await exportCanvasToBlobLib(canvas, exportFormat, exportQuality, exportPngDepth)
+        const baseName = photo.name.split('/').pop() ?? photo.name
+        const ext = FORMAT_EXT[exportFormat] ?? 'png'
+        const outName = baseName.replace(/\.[^.]+$/, '') + `-anon.${ext}`
+        saveAs(blob, outName)
+        done += 1
+      }
+      const skipped = sourcePhotos.length - images.length
+      showMobileToast(
+        skipped > 0
+          ? `Downloaded ${images.length} files · ${skipped} video${skipped !== 1 ? 's' : ''} skipped`
+          : `Downloaded ${images.length} file${images.length !== 1 ? 's' : ''}`,
+      )
+    } catch {
+      showMobileToast('Export failed.')
+    } finally {
+      setIsExporting(false)
+      setExportLibraryProgress(null)
+    }
+  }, [
+    activePhotoId, brushStrength, colorAdjByPhoto, exportFormat, exportPngDepth, exportQuality,
+    customImageAssets, customImageSource, originalBlobByPhoto, photos, showMobileToast, zonesByPhoto,
+  ])
+
+  const batchProcessCount = selectedForBatch.size > 0 ? selectedForBatch.size : photos.filter((p) => !p.isVideo).length
+
+  const updateMobileViewTransformDirty = useCallback(() => {
+    const dirty =
+      Math.abs(mobileViewZoomRef.current - 1) > 0.01 ||
+      Math.abs(mobileViewRotationRef.current) > 0.001 ||
+      Math.abs(mobileViewPanRef.current.x) > 0.5 ||
+      Math.abs(mobileViewPanRef.current.y) > 0.5
+    setMobileViewTransformDirty(dirty)
+  }, [])
+
+  const resetMobileViewTransform = useCallback(() => {
+    mobileViewZoomRef.current = 1
+    mobileViewPanRef.current = { x: 0, y: 0 }
+    mobileViewRotationRef.current = 0
+    setMobileViewZoom(1)
+    setMobileViewPan({ x: 0, y: 0 })
+    setMobileViewRotation(0)
+    setMobileViewTransformDirty(false)
+    renderCanvasRef.current()
+  }, [])
+
+  const mobileBindings: AppMobileBindings = {
+    theme,
+    setTheme,
+    setAboutOpen,
+    loadDemoPhotos,
+    isBusy,
+    isDragOver,
+    photos,
+    activePhoto,
+    activePhotoId,
+    activeZones,
+    displayedPhotos,
+    sidebarView,
+    selectedForBatch,
+    setSelectedForBatch,
+    mobileMode,
+    setMobileMode,
+    mobilePanel,
+    setMobilePanel,
+    galleryBatchSelect,
+    setGalleryBatchSelect,
+    openUnifiedPicker,
+    openVideoPicker,
+    selectPhoto,
+    deletePhoto,
+    resetPhotoToOriginal,
+    undo,
+    undoCount,
+    applyZones,
+    zonesAnonymized,
+    exportActivePhoto,
+    exportActiveVideo,
+    videoProcessing,
+    videoProgress,
+    cancelVideoProcessing,
+    processActiveVideo,
+    videoExportFormat,
+    setVideoExportFormat,
+    videoExportOptions,
+    videoMaskDrawActive,
+    setVideoMaskDrawActive,
+    videoMaskShape,
+    setVideoMaskShape,
+    imageMaskDrawActive,
+    setImageMaskDrawActive,
+    videoMaskRangeSec,
+    setVideoMaskRangeSec,
+    stepActiveVideoFrame,
+    stepEditFrameAdjacent,
+    openCurrentVideoFrameAsSnapshot,
+    applySnapshotToSourceVideo,
+    jumpToSourceVideoFromSnapshot,
+    sourceVideoPhoto,
+    activeVideoFrameOverrides,
+    activeVideoTimedZones,
+    clearVideoTimedZones,
+    activeVideoTime,
+    activeVideoFrameLabel,
+    hasPendingVideoEdits,
+    videoPipelineCapabilities,
+    exportFormat,
+    setExportFormat,
+    exportQuality,
+    setExportQuality,
+    previewFileSizeKb,
+    previewRendering,
+    activeImageSize,
+    resEditW,
+    resEditH,
+    setResEditW,
+    setResEditH,
+    resizeWorkCanvas,
+    mobileExportDraft,
+    beginMobileExportEdit,
+    updateMobileExportDraft,
+    cancelMobileExportEdit,
+    commitMobileExportEdit,
+    vectorizePanelOpen,
+    setVectorizePanelOpen,
+    vectorizeParams,
+    setVectorizeParams: (params: VectorizeParams) => {
+      setVectorizeParams(params)
+      void runVectorizePreview(params)
+    },
+    updateVectorizeParam,
+    vectorizing,
+    svgPreviewSize,
+    exportAsSvg,
+    brushSize,
+    setBrushSize,
+    brushStrength,
+    setBrushStrength,
+    toolMode,
+    setToolMode,
+    selectedEffect,
+    setSelectedEffect,
+    customImageSource,
+    setCustomImageSource,
+    customImageAssets,
+    customImagePresetLoading,
+    openCustomImagePicker,
+    loadCustomImagePreset,
+    openEffectPicker: setEffectPickerOpen,
+    emojiRandom,
+    selectedEmoji,
+    onToggleEmojiRandom: handleToggleEmojiRandom,
+    onPickEmoji: handlePickEmoji,
+    customImageRandom,
+    selectedCustomImageId,
+    onToggleCustomRandom: handleToggleCustomRandom,
+    onPickCustomImage: handlePickCustomImage,
+    liveFixedEmoji: (!emojiRandom && selectedEmoji) ? selectedEmoji : null,
+    liveFixedCustomImageId: (!customImageRandom && selectedCustomImageId) ? selectedCustomImageId : null,
+    faceOffset: faceOffsetFrac,
+    detectFaceOffset,
+    setDetectFaceOffset,
+    detectSensitivity,
+    setDetectSensitivity,
+    detectThorough,
+    setDetectThorough,
+    eraserActive,
+    autoDetect,
+    setAutoDetect,
+    setShowBoxes,
+    showBoxes,
+    detectFacesOnActiveImage,
+    openDetectSettings: () => setDetectSettingsOpen(true),
+    removeZoneById,
+    removeSelectedZone,
+    clearZones,
+    selectedZoneId,
+    categoryIndices,
+    setCategoryIndex,
+    activeCategory,
+    setActiveCategory,
+    rotateCategoryTool,
+    selectToolCategory,
+    applyFaceTool,
+    applyZoneTool,
+    applyCropTool,
+    applyAdjustTool,
+    applyEffectTool,
+    updateSelectedZoneEffect,
+    mobileViewPan,
+    setMobileViewPan,
+    batch: {
+      activeBatchTasks,
+      expandedBatchTasks,
+      normalizeSettings,
+      normalizeProgress,
+      normalizeProgressPercent,
+      normalizeSummary,
+      normalizePreviewPhotos,
+      normResultsCount,
+      isNormalizing,
+      isExporting,
+      selectedForBatch,
+      colorAdj,
+    },
+    toggleBatchTask,
+    toggleExpandBatchTask,
+    updateNormalizeSetting,
+    runNormalizeBatch,
+    exportNormalizeZip,
+    setNormalizeSummary,
+    setColorPreset,
+    setColorAdj,
+    applyColorAdjToActive,
+    setNotice,
+    setIsNormalizeCropPicking,
+    setNormalizeCropDraft,
+    isNormalizeCropPicking,
+    activeNormalizeCrop,
+    applyTemplateFromCurrentCrop,
+    detectFrameOnActivePhoto,
+    detectContentAwareCropOnActivePhoto,
+    pointerSessionRef,
+    resetDetectorStatus,
+    initializeDetector: () => initializeDetector().then((s) => setDetector(s)),
+    setDetector,
+    liveDetectEnabled,
+    setLiveDetectEnabled,
+    mobileViewZoom,
+    setMobileViewZoom,
+    lastDetectFailed,
+    detector,
+    detectorLoading,
+    addLiveMediaToLibrary,
+    openPhotoInEditor,
+    stepAdjacentLibraryPhoto,
+    showMobileToast,
+    exportAllLibraryZip,
+    exportAllLibraryIndividual,
+    exportLibraryProgress,
+    exitLiveToWorkspace,
+    stepMobileViewZoom: (dir: 1 | -1) => {
+      const factor = dir === 1 ? 1.2 : 1 / 1.2
+      const next = Math.min(3, Math.max(0.5, mobileViewZoom * factor))
+      mobileViewZoomRef.current = next
+      setMobileViewZoom(next)
+      updateMobileViewTransformDirty()
+      renderCanvasRef.current()
+    },
+    mobileViewRotation,
+    mobileViewTransformDirty,
+    resetMobileViewTransform,
+    adjTransform,
+    setAdjTransform,
+    adjTransformStrength,
+    setAdjTransformStrength,
+    adjTransformParams,
+    setAdjParam,
+    adjPixelShiftType,
+    setAdjPixelShiftType,
+    commitAdjTransform: () => { void applyAdjTransformToCanvas() },
+    resetAdjTransformPreview,
+    enabledDistorts,
+    toggleDistortEffect,
+    distortStrengthByEffect,
+    setDistortStrength,
+  }
+
+  const showMobileEmbed = isMobile && photos.length > 0 && mobileMode !== 'live'
+
+  useLockMobileViewport(isMobile)
+  const hideWorkspace = isMobile && (photos.length === 0 || mobileMode === 'live')
+
+  useEffect(() => {
+    mobileViewZoomRef.current = mobileViewZoom
+    mobileViewPanRef.current = mobileViewPan
+    mobileViewRotationRef.current = mobileViewRotation
+    renderCanvasRef.current()
+  }, [mobileViewZoom, mobileViewPan, mobileViewRotation])
+
+  const handleMobileZoomChange = useCallback((z: number) => {
+    mobileViewZoomRef.current = z
+    setMobileViewZoom(z)
+    updateMobileViewTransformDirty()
+    renderCanvasRef.current()
+  }, [updateMobileViewTransformDirty])
+
+  const handleMobilePanChange = useCallback((pan: { x: number; y: number }) => {
+    mobileViewPanRef.current = pan
+    setMobileViewPan(pan)
+    updateMobileViewTransformDirty()
+    renderCanvasRef.current()
+  }, [updateMobileViewTransformDirty])
+
+  const handleMobileRotationChange = useCallback((rot: number) => {
+    mobileViewRotationRef.current = rot
+    setMobileViewRotation(rot)
+    updateMobileViewTransformDirty()
+    renderCanvasRef.current()
+  }, [updateMobileViewTransformDirty])
+
+  usePhotoSwipeNav(viewportRef, {
+    enabled: showMobileEmbed && Boolean(activePhoto && !activePhoto.isVideo),
+    onSwipeLeft: () => stepAdjacentLibraryPhoto(1),
+    onSwipeRight: () => stepAdjacentLibraryPhoto(-1),
+    isAllowed: () => (
+      pointerSessionRef.current.mode === 'idle'
+      && !mobileCanvasEditRef.current
+      && mobileViewZoomRef.current <= 1.02
+      && Math.hypot(mobileViewPanRef.current.x, mobileViewPanRef.current.y) < 24
+    ),
+  })
+
+  const mobilePinchEnabled = showMobileEmbed
+    && !hideWorkspace
+    && Boolean(activePhoto && !activePhoto.isVideo)
+
+  usePinchZoom(canvasRef, {
+    enabled: mobilePinchEnabled,
+    zoom: mobileViewZoom,
+    zoomRef: mobileViewZoomRef,
+    pan: mobileViewPan,
+    panRef: mobileViewPanRef,
+    rotation: mobileViewRotation,
+    rotationRef: mobileViewRotationRef,
+    onZoomChange: handleMobileZoomChange,
+    onPanChange: handleMobilePanChange,
+    onRotationChange: handleMobileRotationChange,
+    onViewTransformChange: updateMobileViewTransformDirty,
+    isPanGestureAllowed: () => !mobileCanvasEditRef.current && pointerSessionRef.current.mode === 'idle',
+    onPinchStart: () => {
+      pointerSessionRef.current = { mode: 'idle' }
+      stopBrushLoop()
+      setCursorPoint(null)
+      const overlay = overlayCanvasRef.current
+      if (overlay) {
+        const oc = overlay.getContext('2d')
+        if (oc) oc.clearRect(0, 0, overlay.width, overlay.height)
+      }
+    },
+    minZoom: 0.5,
+    maxZoom: 3,
+  })
 
   return (
     <div
-      className="app-shell"
+      className={`app-shell${isMobile ? ' app-shell-mobile' : ' app-shell-desktop-v2'}${isMobile && mobileMode === 'video' ? ' app-shell-mobile--video' : ''}${isMobile && mobileMode === 'editor' ? ' app-shell-mobile--image' : ''}`}
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
     >
-      {/* ── Top bar ─────────────────────────────────────────── */}
+      {/* ── Top bar (desktop) — hidden on the empty home screen, which has its
+            own minimal header (W3PN logo + "WHAT IS THIS?"). ──────────────── */}
+      {!isMobile && photos.length > 0 && (
       <header className="topbar">
-        <button className="brand" type="button" onClick={() => setAboutOpen(true)} title="About W3PN Anonymizer">
-          <span className="brand-eye">
-            <EyeClosedIcon />
-            <span className="brand-dot-lime" />
-          </span>
-          <h1>W3PN Anonymizer</h1>
+        <button className="brand brand--typographic" type="button" onClick={() => setAboutOpen(true)} title="About W3PN Anonymizer">
+          <img src="/brand/anonymizer-header.png" alt="ANONYMIZER" className="brand-wordmark-img" />
           <span className="brand-chevron"><Icon name="expand_more" size={14} /></span>
         </button>
 
@@ -2984,69 +4329,16 @@ endlocal
           Demo
         </button>
 
-        {/* Processing mode toggle + badge — grouped tightly */}
-        <div className="topbar-processing-group">
-          {/* Privacy shield icon */}
-          <div className="privacy-shield-wrap">
-            <button
-              className={`privacy-shield-btn${processingLocal ? ' secure' : ''}`}
-              type="button"
-              title="Privacy status"
-              aria-label="Privacy status"
-              onClick={() => setAboutOpen(true)}
-            >
-              <Icon name={processingLocal ? 'verified_user' : 'shield'} size={14} />
-            </button>
-            <div className="privacy-shield-tooltip">
-              <div className="privacy-shield-title">
-                {processingLocal ? '✅ Fully Local' : '⚠️ Hybrid Mode'}
-              </div>
-              <ul className="privacy-shield-list">
-                <li className="ok">No analytics or tracking</li>
-                <li className="ok">No third-party fonts or CDNs</li>
-                <li className="ok">CSP blocks outbound connections</li>
-                <li className="ok">Images stay in browser memory</li>
-                <li className={processingLocal ? 'ok' : 'warn'}>
-                  {processingLocal ? 'Face detection: browser-only' : 'Face detection: may use server'}
-                </li>
-              </ul>
-            </div>
-          </div>
-
-          <span className="topbar-privacy-badge visible">
-            {processingLocal ? 'Your data never leaves your device' : 'Detection uses your local localhost backend, with no data saved'}
-          </span>
-
-          <div
-            className="processing-toggle"
-            title={processingLocal
-              ? 'Local mode — all processing in your browser. Click to switch to server.'
-              : 'Server mode — may use backend for better accuracy. Click for fully local.'}
-          >
-            <button
-              className={`processing-toggle-opt${!processingLocal ? ' active' : ''}`}
-              type="button"
-              onClick={() => {
-                setProcessingLocal(false); setForceLocal(false); localStorage.setItem('anonymizer-processing-local', 'false')
-                resetDetectorStatus()
-                initializeDetector().then((s) => setDetector(s))
-              }}
-            >
-              <Icon name="cloud" size={11} /> Server
-            </button>
-            <button
-              className={`processing-toggle-opt${processingLocal ? ' active' : ''}`}
-              type="button"
-              onClick={() => {
-                setProcessingLocal(true); setForceLocal(true); localStorage.setItem('anonymizer-processing-local', 'true')
-                resetDetectorStatus()
-                initializeDetector().then((s) => setDetector(s))
-              }}
-            >
-              <Icon name="lock" size={11} /> Local
-            </button>
-          </div>
-        </div>
+        <button
+          className="topbar-live-btn"
+          type="button"
+          onClick={() => setDesktopLiveOpen(true)}
+          disabled={isBusy}
+          title="Turn on live camera"
+        >
+          <Icon name="videocam" size={14} />
+          Live mode
+        </button>
 
         {/* GitHub link in topbar */}
         <a
@@ -3070,6 +4362,7 @@ endlocal
           <Icon name={theme === 'dark' ? 'dark_mode' : 'light_mode'} size={18} />
         </button>
       </header>
+      )}
 
       {/* hidden file inputs */}
       <input ref={uploadInputRef} type="file" accept="image/*,video/*" multiple onChange={handleUploadInput} hidden />
@@ -3077,56 +4370,43 @@ endlocal
         // @ts-expect-error webkitdirectory is not in React's type defs
         webkitdirectory="" directory="" />
 
+      {isMobile && (
+        <MobileShell
+          b={mobileBindings}
+          fmtBytes={fmtBytes}
+          setSidebarView={setSidebarView}
+          sidebarView={sidebarView}
+          toggleBatchSelect={toggleBatchSelect}
+          batchProcessCount={batchProcessCount}
+          embedEditor={showMobileEmbed}
+        />
+      )}
+
+      {isMobile && (
+        <MobileToast
+          message={mobileToast?.message ?? null}
+          onDismiss={() => setMobileToast(null)}
+          actionLabel={mobileToast?.action?.label}
+          onAction={mobileToast?.action?.onClick}
+        />
+      )}
+
       {/* ── Workspace — flex row: sidebar | resizer | batch | tool-strip | editor ── */}
-      <div className="workspace">
+      <div
+        className={`workspace${showMobileEmbed ? ' workspace-mobile' : ''}${mobileEditorSlideIn ? ' workspace-mobile-slide-enter' : ''}`}
+        style={hideWorkspace ? { display: 'none' } : undefined}
+      >
 
         {/* ── Welcome screen (no photos loaded) ──────────────── */}
-        {photos.length === 0 && (
-          <div
-            className={`welcome-screen${isDragOver ? ' drag-active' : ''}`}
-            onDragEnter={handleDragEnter}
-            onDragLeave={handleDragLeave}
-            onDragOver={handleDragOver}
-            onDrop={handleDrop}
-          >
-            {isDragOver ? (
-              <div className="welcome-drag-overlay">
-                <Icon name="folder_open" size={52} />
-                <span>Drop to add photos or folders</span>
-              </div>
-            ) : (
-              <div className="welcome-content">
-                <button className="welcome-upload-btn" type="button" onClick={openUnifiedPicker}>
-                  <Icon name="cloud_upload" size={48} />
-                  <span className="welcome-upload-title">Upload media</span>
-                  <span className="welcome-upload-sub">Drop files, paste from clipboard, or click to browse</span>
-                  <span className="welcome-upload-formats">JPG · PNG · WebP · GIF · BMP · MP4 · WebM · and more</span>
-                  <span className="welcome-upload-shortcut">
-                    <kbd className="kbd">{navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'}+V</kbd> paste from clipboard
-                  </span>
-                </button>
-
-                <div className="welcome-features">
-                  {[
-                    { icon: 'visibility_off', title: 'Face Anonymization', desc: 'Auto-detect and blur, pixelate, or cover faces with emoji' },
-                    { icon: 'videocam', title: 'Video Anonymization', desc: 'Frame-by-frame local video processing — MP4, WebM, MOV' },
-                    { icon: 'brush', title: 'Brush & Zone Tools', desc: 'Paint over or draw rectangles on any sensitive area' },
-                    { icon: 'polyline', title: 'SVG Vectorization', desc: 'Convert images to SVG with live preview and 8 presets' },
-                    { icon: 'batch_prediction', title: 'Batch Processing', desc: 'Resize, crop, convert, grade, and anonymize photos in bulk' },
-                    { icon: 'lock', title: 'Fully Local', desc: 'No data ever leaves your device — no cloud, no tracking' },
-                  ].map((f) => (
-                    <button key={f.icon} className="welcome-feature-card" type="button" onClick={() => setAboutOpen(true)}>
-                      <Icon name={f.icon} size={20} />
-                      <div>
-                        <div className="welcome-feature-title">{f.title}</div>
-                        <div className="welcome-feature-desc">{f.desc}</div>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
+        {!isMobile && photos.length === 0 && (
+          <DesktopHomeDefault
+            isDragOver={isDragOver}
+            isBusy={isBusy}
+            onAbout={() => setAboutOpen(true)}
+            onSelectMedia={openUnifiedPicker}
+            onLoadDemo={loadDemoPhotos}
+            onLiveCamera={() => setDesktopLiveOpen(true)}
+          />
         )}
 
         {/* ── Sidebar ───────────────────────────────────────── */}
@@ -3371,25 +4651,21 @@ endlocal
         {/* ── Tool Strip ───────────────────────────────────── */}
         <div className="tool-strip">
 
-          {/* 1. Auto-detect toggle — color states: green=backend, orange=local, red=failed */}
+          {/* 1. Auto-detect toggle — color states: green=ready, orange=unavailable, red=failed */}
           <div className="ts-tooltip-wrap" style={{ position: 'relative' }}>
             {(() => {
-              const detMode = (detector as { mode?: string }).mode
-              const backendOff = detMode !== 'backend' && detMode !== 'yunet-wasm'
+              const detMode = detector.mode
+              const detectorOff = detMode !== 'yunet-wasm'
               const btnClass = lastDetectFailed && autoDetect
                 ? ' ts-btn-fail'
-                : backendOff ? ' ts-btn-setup' : ''
+                : detectorOff ? ' ts-btn-setup' : ''
               return (<>
                 <button
                   className={`ts-btn ts-btn-autodetect${autoDetect ? ' active' : ''}${btnClass}`}
                   type="button"
-                  onClick={() => {
-                    const next = !autoDetect
-                    setAutoDetect(next)
-                    setShowBoxes(next)
-                  }}
-                  onDoubleClick={() => openDepsModal()}
-                  title={autoDetect ? 'Face detection ON (double-click for settings)' : 'Face detection OFF'}
+                  onClick={() => setDetectSettingsOpen(true)}
+                  onDoubleClick={() => { void refreshDetector(true).then((s) => setNotice(s.message)) }}
+                  title="Detection settings (double-click to refresh detector)"
                 >
                   <Icon name="face_retouching_natural" filled={autoDetect} size={18} />
                   {autoDetect && activeZones.length > 0 && (
@@ -3400,7 +4676,7 @@ endlocal
                   {lastDetectFailed && autoDetect
                     ? 'No faces found — double-click for settings'
                     : autoDetect
-                      ? `Detection: ON${activeZones.length > 0 ? ` · ${activeZones.length} face${activeZones.length !== 1 ? 's' : ''}` : ''}${backendOff ? ' · local mode' : ''}`
+                      ? `Detection: ON${activeZones.length > 0 ? ` · ${activeZones.length} face${activeZones.length !== 1 ? 's' : ''}` : ''}${detectorOff ? ' · detector unavailable' : ''}`
                       : 'Detection: OFF'}
                 </span>
               </>)
@@ -3488,7 +4764,7 @@ endlocal
                   ['shadows', 'Shadows'],
                   ['highlights', 'High'],
                 ] as [keyof ColorAdjustments, string][]).map(([key, label]) => (
-                  <div key={key} className="color-slider-row" style={{ gridTemplateColumns: '52px 1fr 28px' }}>
+                  <div key={key} className="color-slider-row">
                     <span className="color-slider-label" style={{ fontSize: '0.65rem' }}>{label}</span>
                     <input
                       type="range"
@@ -3534,7 +4810,7 @@ endlocal
               </select>
               {adjTransform === 'halftone' && (<>
                 {[['Dot size', 'dotSize', 2, 30] as const, ['Contrast', 'halftoneContrast', 0, 100] as const, ['Angle', 'halftoneAngle', 0, 360] as const].map(([label, key, min, max]) => (
-                  <div key={key} className="color-slider-row" style={{ gridTemplateColumns: '60px 1fr 28px' }}>
+                  <div key={key} className="color-slider-row">
                     <span className="color-slider-label" style={{ fontSize: '0.62rem' }}>{label}</span>
                     <input type="range" className="color-slider-input" min={min} max={max} value={adjTransformParams[key]} onChange={(e) => setAdjParam(key, Number(e.target.value))} />
                     <span className="color-slider-val">{adjTransformParams[key]}</span>
@@ -3542,14 +4818,14 @@ endlocal
                 ))}
               </>)}
               {adjTransform === 'glitch' && (
-                <div className="color-slider-row" style={{ gridTemplateColumns: '60px 1fr 28px' }}>
+                <div className="color-slider-row">
                   <span className="color-slider-label" style={{ fontSize: '0.62rem' }}>Shift</span>
                   <input type="range" className="color-slider-input" min={1} max={40} value={adjTransformParams.glitchShift} onChange={(e) => setAdjParam('glitchShift', Number(e.target.value))} />
                   <span className="color-slider-val">{adjTransformParams.glitchShift}</span>
                 </div>
               )}
               {adjTransform === 'pixel-shift' && (<>
-                <div className="color-slider-row" style={{ gridTemplateColumns: '60px 1fr' }}>
+                <div className="color-slider-row" style={{ gridTemplateColumns: '72px 1fr' }}>
                   <span className="color-slider-label" style={{ fontSize: '0.62rem' }}>Type</span>
                   <select className="field-select" style={{ fontSize: '0.66rem', padding: '0.15rem 0.3rem' }} value={adjPixelShiftType} onChange={(e) => setAdjPixelShiftType(e.target.value as PixelShiftType)}>
                     <option value="wave">Wave</option>
@@ -3559,7 +4835,7 @@ endlocal
                   </select>
                 </div>
                 {[['X shift', 'pixelShiftX', 1, 60] as const, ['Y shift', 'pixelShiftY', 1, 60] as const].map(([label, key, min, max]) => (
-                  <div key={key} className="color-slider-row" style={{ gridTemplateColumns: '60px 1fr 28px' }}>
+                  <div key={key} className="color-slider-row">
                     <span className="color-slider-label" style={{ fontSize: '0.62rem' }}>{label}</span>
                     <input type="range" className="color-slider-input" min={min} max={max} value={adjTransformParams[key]} onChange={(e) => setAdjParam(key, Number(e.target.value))} />
                     <span className="color-slider-val">{adjTransformParams[key]}</span>
@@ -3568,7 +4844,7 @@ endlocal
               </>)}
               {adjTransform === 'color-shift' && (<>
                 {[['Hue rotate', 'colorShiftHue', 0, 360] as const, ['Sat boost', 'colorShiftSat', 0, 100] as const].map(([label, key, min, max]) => (
-                  <div key={key} className="color-slider-row" style={{ gridTemplateColumns: '60px 1fr 28px' }}>
+                  <div key={key} className="color-slider-row">
                     <span className="color-slider-label" style={{ fontSize: '0.62rem' }}>{label}</span>
                     <input type="range" className="color-slider-input" min={min} max={max} value={adjTransformParams[key]} onChange={(e) => setAdjParam(key, Number(e.target.value))} />
                     <span className="color-slider-val">{adjTransformParams[key]}</span>
@@ -3576,7 +4852,7 @@ endlocal
                 ))}
               </>)}
               {adjTransform !== 'none' && (
-                <div className="color-slider-row" style={{ gridTemplateColumns: '60px 1fr 28px' }}>
+                <div className="color-slider-row">
                   <span className="color-slider-label" style={{ fontSize: '0.62rem' }}>Amount</span>
                   <input type="range" className="color-slider-input" min={1} max={80} value={adjTransformStrength} onChange={(e) => setAdjTransformStrength(Number(e.target.value))} />
                   <span className="color-slider-val">{adjTransformStrength}</span>
@@ -3672,7 +4948,15 @@ endlocal
                     key={ef.id}
                     className={`ts-effect-tile${selectedEffect === ef.id ? ' active' : ''}`}
                     type="button"
-                    onClick={() => updateSelectedZoneEffect(ef.id)}
+                    onClick={() => {
+                      updateSelectedZoneEffect(ef.id)
+                      if (ef.id === 'emoji' || ef.id === 'custom-image') {
+                        setEffectPickerOpen(ef.id)
+                        if (ef.id === 'custom-image' && customImageAssets.length === 0) {
+                          void loadCustomImagePreset(customImageSource === 'custom' ? 'ui-faces-human' : customImageSource)
+                        }
+                      }
+                    }}
                     title={ef.description}
                   >
                     <span className="ts-effect-tile-icon"><Icon name={EFFECT_ICONS[ef.id]} size={18} /></span>
@@ -3680,6 +4964,28 @@ endlocal
                   </button>
                 ))}
               </div>
+              {selectedEffect === 'custom-image' && !activePhoto?.isVideo && (
+                <div className="ts-custom-image-controls">
+                  <label className="ts-custom-image-label" htmlFor="desktop-custom-image-source">Source</label>
+                  <select
+                    id="desktop-custom-image-source"
+                    className="ts-custom-image-select"
+                    value={customImageSource}
+                    onChange={(e) => { void loadCustomImagePreset(e.target.value as CustomImageSource) }}
+                  >
+                    <option value="custom">Custom</option>
+                    <option value="ui-faces-human">UI Faces</option>
+                    <option value="ui-faces-abstract">Abstract</option>
+                    <option value="cryptopunks">CryptoPunks</option>
+                    <option value="aavegotchi">Aavegotchi</option>
+                    <option value="celebrities">Celebrities</option>
+                  </select>
+                  <button type="button" className="btn btn-sm ts-custom-image-upload" onClick={openCustomImagePicker}>
+                    <Icon name="upload" size={14} /> Upload images
+                  </button>
+                  <div className="ts-custom-image-count">{customImageAssets.length} image{customImageAssets.length === 1 ? '' : 's'} ready</div>
+                </div>
+              )}
             </div>,
             document.body
           )}
@@ -4175,6 +5481,7 @@ endlocal
                   <option value="image/bmp">BMP</option>
                   <option value="image/gif">GIF</option>
                   <option value="image/tiff">TIFF</option>
+                  {svgPreview && <option value="image/svg+xml">SVG (vector)</option>}
                 </select>
 
                 {/* PNG depth selector — quantization reduces file size at the cost of color precision */}
@@ -4192,7 +5499,7 @@ endlocal
                 )}
 
                 {/* Quality slider+number — only for lossy formats */}
-                {!isLosslessFormat(exportFormat) && (
+                {exportFormat !== ('image/svg+xml' as NormalizeFormat) && !isLosslessFormat(exportFormat) && (
                   <div className="tb-quality-wrap">
                     <input
                       className="tb-quality-slider"
@@ -4258,39 +5565,15 @@ endlocal
                   </>
                 )}
 
-                {/* Save to disk + Download — grouped on the right */}
+                {/* Download — anonymized file (local, no server / disk write) */}
                 <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.3rem', flexShrink: 0, position: 'relative' }}>
-                  {/* Floppy: write to disk — shows error flyout if no file permissions */}
-                  <div style={{ position: 'relative' }}>
-                    <button
-                      className="tb-btn tb-btn-save"
-                      type="button"
-                      onClick={saveActivePhoto}
-                      disabled={isBusy || !activePhoto}
-                      title="Save to disk — overwrites original file (requires desktop app mode)"
-                      aria-label="Save to disk"
-                    >
-                      <Icon name="save" size={17} />
-                    </button>
-                    {saveErrorVisible && (
-                      <div style={{
-                        position: 'absolute', bottom: 'calc(100% + 6px)', right: 0,
-                        background: 'var(--panel-bg)', border: '1px solid var(--danger)',
-                        borderRadius: 6, padding: '0.35rem 0.55rem', fontSize: '0.68rem',
-                        color: 'var(--danger)', whiteSpace: 'nowrap', zIndex: 200,
-                        boxShadow: '0 4px 16px rgba(0,0,0,0.35)',
-                        pointerEvents: 'none',
-                      }}>
-                        No permissions — work only in desktop app mode
-                      </div>
-                    )}
-                  </div>
-                  {/* Download: export/download anonymized file */}
                   <button
                     className="tb-btn"
                     style={{ background: '#3b5bdb', borderColor: '#3b5bdb', color: '#fff', fontWeight: 600 }}
                     type="button"
-                    onClick={activePhoto?.isVideo ? exportActiveVideo : exportActivePhoto}
+                    onClick={activePhoto?.isVideo
+                      ? exportActiveVideo
+                      : (exportFormat === ('image/svg+xml' as NormalizeFormat) ? exportAsSvg : exportActivePhoto)}
                     disabled={!activePhoto || isBusy || videoProcessing}
                     title="Download anonymized copy"
                   >
@@ -4309,6 +5592,7 @@ endlocal
           <div
             className={[
               'viewer',
+              showMobileEmbed ? 'viewer-mobile-pinch' : '',
               batchPanelOpen && !isNormalizeCropPicking ? 'viewer-readonly' : '',
               isNormalizeCropPicking ? 'viewer-crop-picking' : '',
               isDragOver ? 'drag-over' : '',
@@ -4369,14 +5653,12 @@ endlocal
                 {detectionStep && (
                   <span style={{ fontSize: '0.58rem', color: 'var(--accent)', opacity: 0.9 }}>{detectionStep}</span>
                 )}
-                {processingLocal && (
-                  <div className="local-proof-bar">
-                    <div className="local-proof-progress" />
-                    <span className="local-proof-label">
-                      <Icon name="lock" size={10} /> All data stays on your device
-                    </span>
-                  </div>
-                )}
+                <div className="local-proof-bar">
+                  <div className="local-proof-progress" />
+                  <span className="local-proof-label">
+                    <Icon name="lock" size={10} /> All data stays on your device
+                  </span>
+                </div>
                 <button
                   className="btn btn-sm"
                   type="button"
@@ -4388,14 +5670,22 @@ endlocal
               </div>
             )}
             {/* Local processing proof badge */}
-            {!isDetecting && localProcessingMs != null && processingLocal && (
+            {!isDetecting && localProcessingMs != null && (
               <div className="local-proof-badge">
                 <Icon name="verified_user" size={11} /> Processed locally in {localProcessingMs} ms
               </div>
             )}
 
             {/* Video processing overlay */}
-            {videoProcessing && videoProgress && (
+            {videoProcessing && videoProgress && isMobile && (
+              <MobileVideoProgress
+                phase={videoProgress.phase}
+                current={videoProgress.current}
+                total={videoProgress.total}
+                onCancel={cancelVideoProcessing}
+              />
+            )}
+            {videoProcessing && videoProgress && !isMobile && (
               <div className="detecting-overlay" style={{ flexDirection: 'column', gap: '0.6rem' }}>
                 <span>🎬</span>
                 <span>
@@ -4439,7 +5729,7 @@ endlocal
                     {[...visibleVideoTimedZones.map((item) => item.zone), ...(videoDraftZone ? [videoDraftZone] : [])].map((zone) => (
                       <div
                         key={zone.id}
-                        className={`video-mask-rect${zone.id === 'draft-video-mask' ? ' draft' : ''}`}
+                        className={`video-mask-rect video-mask-rect--${zone.maskShape ?? 'rectangle'}${zone.id === 'draft-video-mask' ? ' draft' : ''}`}
                         style={{
                           left: `${zone.x * 100}%`,
                           top: `${zone.y * 100}%`,
@@ -4449,8 +5739,19 @@ endlocal
                       />
                     ))}
                   </div>
+                  {activeVideoFrameOverrides.length > 0 && Number.isFinite(activePhoto.videoDuration) && (activePhoto.videoDuration ?? 0) > 0 && (
+                    <div className="video-frame-marker-layer" aria-hidden="true">
+                      {activeVideoFrameOverrides.map((item) => (
+                        <span
+                          key={`${item.timeSec}`}
+                          className="video-frame-marker"
+                          style={{ left: `${clamp((item.timeSec / (activePhoto.videoDuration ?? 1)) * 100, 0, 100)}%` }}
+                        />
+                      ))}
+                    </div>
+                  )}
                 </div>
-                <div className="video-controls-bar">
+                <div className={`video-controls-bar${isMobile ? ' video-controls-bar--hidden-mobile' : ''}`}>
                   <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
                     <span>Export</span>
                     <select
@@ -4468,60 +5769,23 @@ endlocal
                     </select>
                   </label>
                   <button
+                    className="btn btn-sm"
+                    type="button"
+                    {...framePrevHold}
+                    disabled={videoProcessing || isBusy}
+                    title="Step one frame back (hold to scrub)"
+                    aria-label="Step one frame back"
+                  >
+                    <Icon name="skip_previous" size={16} />
+                  </button>
+                  <button
                     className="btn btn-primary"
                     type="button"
                     onClick={processActiveVideo}
                     disabled={videoProcessing || isBusy}
+                    style={{ margin: '0 16px' }}
                   >
-                    <Icon name="auto_awesome" size={16} /> Anonymize Video
-                  </button>
-                  {hasPendingVideoEdits && (
-                    <button
-                      className="btn btn-sm"
-                      type="button"
-                      onClick={processActiveVideo}
-                      disabled={videoProcessing || isBusy}
-                      title="Bake frame snapshots and timeline masks into the anonymized video"
-                    >
-                      <Icon name="task_alt" size={14} /> Apply Changes
-                    </button>
-                  )}
-                  {activePhoto.edited && (
-                    <button
-                      className="btn btn-sm"
-                      type="button"
-                      onClick={exportActiveVideo}
-                      disabled={videoProcessing}
-                    >
-                      <Icon name="download" size={14} /> Export Video
-                    </button>
-                  )}
-                  <button
-                    className="btn btn-sm"
-                    type="button"
-                    onClick={() => stepActiveVideoFrame(-1)}
-                    disabled={videoProcessing || isBusy}
-                    title="Step one frame back"
-                  >
-                    <Icon name="skip_previous" size={14} /> Frame -
-                  </button>
-                  <button
-                    className="btn btn-sm"
-                    type="button"
-                    onClick={() => stepActiveVideoFrame(1)}
-                    disabled={videoProcessing || isBusy}
-                    title="Step one frame forward"
-                  >
-                    <Icon name="skip_next" size={14} /> Frame +
-                  </button>
-                  <button
-                    className="btn btn-sm"
-                    type="button"
-                    onClick={openCurrentVideoFrameAsSnapshot}
-                    disabled={videoProcessing || isBusy}
-                    title="Open the current video frame as an editable snapshot"
-                  >
-                    <Icon name="image" size={14} /> Edit Current Frame
+                    <Icon name="auto_awesome" size={16} /> {hasPendingVideoEdits ? 'Apply & Anonymize' : 'Anonymize'}
                   </button>
                   <button
                     className={`btn btn-sm${videoMaskDrawActive ? ' active' : ''}`}
@@ -4530,42 +5794,47 @@ endlocal
                     disabled={videoProcessing || isBusy}
                     title="Draw a rectangle over the video and bake it into a time range"
                   >
-                    <Icon name="select" size={14} /> Draw Time Mask
+                    <Icon name="select" size={14} /> Draw Mask
                   </button>
-                  <label className="video-mask-range-label">
-                    <span>Range</span>
-                    <input
-                      type="number"
-                      min={0.2}
-                      max={30}
-                      step={0.5}
-                      value={videoMaskRangeSec}
-                      onChange={(event) => setVideoMaskRangeSec(clamp(Number(event.target.value) || 0.2, 0.2, 30))}
-                      disabled={videoProcessing || isBusy}
-                    />
-                    <span>s</span>
-                  </label>
-                  {activeVideoFrameOverrides.length > 0 && (
-                    <span className="video-meta-badge" title="Manual frame overrides that will be baked into the next video render">
-                      Manual fixes: {activeVideoFrameOverrides.length}
-                    </span>
+                  <button
+                    className="btn btn-sm"
+                    type="button"
+                    onClick={openCurrentVideoFrameAsSnapshot}
+                    disabled={videoProcessing || isBusy}
+                    title="Open the current video frame as an editable snapshot"
+                  >
+                    <Icon name="image" size={14} /> Edit Frame
+                  </button>
+                  <button
+                    className="btn btn-sm"
+                    type="button"
+                    {...frameNextHold}
+                    disabled={videoProcessing || isBusy}
+                    title="Step one frame forward (hold to scrub)"
+                    aria-label="Step one frame forward"
+                  >
+                    <Icon name="skip_next" size={16} />
+                  </button>
+                  {videoMaskDrawActive && (
+                    <label className="video-mask-range-label">
+                      <span>Range</span>
+                      <input
+                        type="number"
+                        min={0.2}
+                        max={30}
+                        step={0.5}
+                        value={videoMaskRangeSec}
+                        onChange={(event) => setVideoMaskRangeSec(clamp(Number(event.target.value) || 0.2, 0.2, 30))}
+                        disabled={videoProcessing || isBusy}
+                      />
+                      <span>s</span>
+                    </label>
                   )}
                   {activeVideoTimedZones.length > 0 && (
-                    <>
-                      <span className="video-meta-badge" title="Manual timeline masks that will be baked into the next video render">
-                        Time masks: {activeVideoTimedZones.length}
-                      </span>
-                      <button className="btn btn-sm" type="button" onClick={clearVideoTimedZones} disabled={videoProcessing}>
-                        Reset Masks
-                      </button>
-                    </>
+                    <button className="btn btn-sm" type="button" onClick={clearVideoTimedZones} disabled={videoProcessing} title="Remove all timeline masks">
+                      <Icon name="layers_clear" size={14} /> Reset Masks
+                    </button>
                   )}
-                  <span
-                    className="video-meta-badge"
-                    title={`Timeline worker: ${videoPipelineCapabilities.timelineWorker ? 'yes' : 'no'} · Manual frame pacing: ${videoPipelineCapabilities.manualCanvasFrameCapture ? 'yes' : 'no'} · WebCodecs renderer: ${videoPipelineCapabilities.webCodecsRenderer ? 'available' : 'not available'} · Raw WebCodecs encoder: ${videoPipelineCapabilities.webCodecs ? 'available' : 'not available'}`}
-                  >
-                    Pipeline: {videoPipelineCapabilities.timelineWorker ? 'worker' : 'main'} · {videoPipelineCapabilities.webCodecsRenderer ? 'WebCodecs render' : 'MediaRecorder'}
-                  </span>
                   {activePhoto.videoDuration != null && (
                     <span className="video-meta-badge">
                       {formatVideoTime(activePhoto.videoDuration)}
@@ -4597,7 +5866,7 @@ endlocal
             <canvas ref={overlayCanvasRef} className="brush-preview-overlay" />
 
             {/* Zone × delete buttons overlay */}
-            {showBoxes && activeZones.length > 0 && (
+            {showBoxes && !activePhoto?.isVideo && activeZones.length > 0 && (
               <div className="zone-delete-layer" style={{ pointerEvents: toolMode === 'brush' ? 'none' : undefined }}>
                 {zoneDeletePositions.map(({ id, top, left }) => (
                   <button
@@ -4609,7 +5878,7 @@ endlocal
                     title="Remove this face box"
                     aria-label="Remove this face box"
                   >
-                    ×
+                    <Icon name="close" size={12} />
                   </button>
                 ))}
               </div>
@@ -4618,14 +5887,19 @@ endlocal
             {/* Crop draft overlay */}
             {toolMode === 'crop' && cropDraft && cropDraft.w > 0.002 && (() => {
               const t = transformRef.current
-              const x = cropDraft.x * t.imageWidth * t.scale + t.drawX
-              const y = cropDraft.y * t.imageHeight * t.scale + t.drawY
-              const w = cropDraft.w * t.imageWidth * t.scale
-              const h = cropDraft.h * t.imageHeight * t.scale
+              const rect = zoneToCanvasRect({
+                id: 'crop',
+                x: cropDraft.x,
+                y: cropDraft.y,
+                width: cropDraft.w,
+                height: cropDraft.h,
+                effect: 'blur',
+                emoji: '',
+              }, t)
               return (
                 <div
                   style={{
-                    position: 'absolute', left: x, top: y, width: w, height: h,
+                    position: 'absolute', left: rect.x, top: rect.y, width: rect.width, height: rect.height,
                     border: '2px dashed var(--accent)',
                     background: 'rgba(112,255,136,0.08)',
                     pointerEvents: 'none', boxSizing: 'border-box',
@@ -4649,7 +5923,7 @@ endlocal
             })()}
 
             {/* Vectorize panel — flyout from toolbar */}
-            {vectorizePanelOpen && activePhoto && !activePhoto.isVideo && (
+            {vectorizePanelOpen && activePhoto && !activePhoto.isVideo && !isMobile && (
               <div className="vectorize-panel">
                 <div className="vectorize-panel-header">
                   <span style={{ fontWeight: 600, fontSize: '0.72rem' }}>Vectorize to SVG</span>
@@ -4730,16 +6004,28 @@ endlocal
               </div>
             )}
 
-            {/* Reset button — top-left (shown when photo has edits) */}
+            {/* Undo + Reset — top-left (shown when photo has edits) */}
             {activePhoto && (activePhoto.edited || dirtyByPhoto[activePhoto.id] || undoCount > 0) && (
-              <button
-                className="undo-corner-btn"
-                type="button"
-                onClick={resetPhotoToOriginal}
-                title="Reset photo to original — undo all edits"
-              >
-                <Icon name="restart_alt" size={14} /> Reset
-              </button>
+              <div className="undo-corner-group">
+                {undoCount > 0 && (
+                  <button
+                    className="undo-corner-btn"
+                    type="button"
+                    onClick={undo}
+                    title="Undo last edit"
+                  >
+                    <Icon name="undo" size={14} /> Undo
+                  </button>
+                )}
+                <button
+                  className="undo-corner-btn"
+                  type="button"
+                  onClick={resetPhotoToOriginal}
+                  title="Reset photo to original — undo all edits"
+                >
+                  <Icon name="restart_alt" size={14} /> Reset
+                </button>
+              </div>
             )}
 
             {/* Bottom-right: Crop confirm OR Anonymize button */}
@@ -4770,308 +6056,119 @@ endlocal
               </div>
             )}
           </div>
+
+          {showMobileEmbed && activePhoto && !activePhoto.isVideo && (
+            <MobileImageCanvasControls b={mobileBindings} />
+          )}
+          {showMobileEmbed && activePhoto?.isVideo && (
+            <MobileVideoCanvasControls b={mobileBindings} />
+          )}
+
         </div>
         </>)}
       </div>
 
-      {/* ── About modal ───────────────────────────────────── */}
-      {/* ── Backend deps modal ───────────────────────────────────────────── */}
-      {depsModalOpen && (
-        <div className="about-backdrop" onClick={() => setDepsModalOpen(false)}>
-          <div className="about-modal deps-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 440 }}>
-            <button className="about-modal-close" type="button" onClick={() => setDepsModalOpen(false)}>✕ Close</button>
-            <h2 style={{ margin: '0 0 0.4rem', fontSize: '1.05rem' }}>Face Detection</h2>
+      {aboutOpen && (
+        <MobileAbout
+          open={aboutOpen}
+          onClose={() => setAboutOpen(false)}
+          onFeedback={() => { setFeedbackOpen(true) }}
+        />
+      )}
 
-            {/* ── Active mode pill ──────────────────────────── */}
-            {(() => {
-              const dm = (detector as { mode?: string }).mode
-              const isGood = dm === 'backend' || dm === 'yunet-wasm'
-              return (
-                <div style={{ padding: '0.35rem 0.5rem', borderRadius: 6, background: isGood ? 'var(--accent-soft)' : 'rgba(255,169,77,0.08)', border: `1px solid ${isGood ? 'rgba(112,255,136,0.2)' : 'rgba(255,169,77,0.2)'}`, marginBottom: '0.5rem' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.72rem', fontWeight: 600 }}>
-                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: isGood ? 'var(--accent)' : 'var(--warn)' }} />
-                    {dm === 'backend' ? 'Python backend — highest accuracy'
-                      : dm === 'yunet-wasm' ? 'YuNet (WASM) — high accuracy, fully local'
-                      : 'YuNet unavailable'}
-                  </div>
-                  <div style={{ fontSize: '0.62rem', color: 'var(--text-muted)', marginTop: '0.1rem', paddingLeft: '1.2rem' }}>
-                    {dm === 'backend' ? 'OpenCV YuNet on localhost server.'
-                      : dm === 'yunet-wasm' ? 'Same YuNet model as Python backend, running locally via ONNX Runtime WebAssembly. High accuracy, fully offline.'
-                      : 'YuNet is unavailable. Reinstall or reload the local model/runtime, or start the localhost backend.'}
-                    {' '}All data stays on your device.
-                  </div>
-                </div>
-              )
-            })()}
+      <EffectPickerDialog
+        open={effectPickerOpen != null && !((isMobile || desktopLiveOpen) && (effectPickerOpen === 'emoji' || effectPickerOpen === 'custom-image'))}
+        kind={effectPickerOpen}
+        onClose={() => setEffectPickerOpen(null)}
+        emojiRandom={emojiRandom}
+        selectedEmoji={selectedEmoji}
+        onToggleEmojiRandom={handleToggleEmojiRandom}
+        onPickEmoji={handlePickEmoji}
+        customImageRandom={customImageRandom}
+        customImageSource={customImageSource}
+        customImageAssets={customImageAssets}
+        selectedCustomImageId={selectedCustomImageId}
+        onToggleCustomRandom={handleToggleCustomRandom}
+        onChangeCustomSource={(source) => { void loadCustomImagePreset(source) }}
+        onPickCustomImage={handlePickCustomImage}
+        onUploadCustomImages={openCustomImagePicker}
+      />
 
-            {/* ── Enable auto-detect toggle ─────────────────── */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.3rem 0', marginBottom: '0.4rem' }}>
-              <button
-                type="button"
-                onClick={() => { setAutoDetect(!autoDetect); setShowBoxes(!autoDetect) }}
-                style={{
-                  width: 36, height: 20, borderRadius: 10, border: 'none', cursor: 'pointer', position: 'relative', transition: 'background 0.2s',
-                  background: autoDetect ? 'var(--accent)' : 'var(--border)',
-                }}
-              >
-                <span style={{
-                  position: 'absolute', top: 2, left: autoDetect ? 18 : 2, width: 16, height: 16, borderRadius: '50%',
-                  background: '#fff', transition: 'left 0.2s', boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
-                }} />
-              </button>
-              <span style={{ fontSize: '0.72rem', fontWeight: 500 }}>Auto-detect faces when opening photos</span>
-            </div>
-
-            <hr style={{ border: 'none', borderTop: '1px solid var(--border)', margin: '0 0 0.5rem' }} />
-
-            <div style={{ padding: '0.35rem 0.5rem', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--surface-muted)', marginBottom: '0.45rem' }}>
-              <div style={{ fontSize: '0.72rem', fontWeight: 600, marginBottom: '0.16rem' }}>
-                {depsStatus?.all_ok ? 'Localhost backend ready' : 'Localhost backend optional'}
-              </div>
-              <div style={{ fontSize: '0.62rem', color: 'var(--text-muted)', lineHeight: 1.45 }}>
-                {depsStatus?.all_ok
-                  ? <>Server detected on <code style={{ fontSize: '0.58rem' }}>127.0.0.1:7865</code>. Python and the YuNet model are ready.</>
-                  : <>Use your own localhost Python backend if you want the server YuNet path available on this device. It never uploads data to the internet.</>}
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', gap: '0.45rem', flexWrap: 'wrap', marginBottom: '0.45rem' }}>
-              <button
-                className="btn btn-sm"
-                type="button"
-                onClick={() => { void refreshDetector(true) }}
-              >
-                <Icon name="refresh" size={14} /> Re-check detector
-              </button>
-
-              {depsStatus?.all_ok && (
-                <button
-                  className="btn btn-sm"
-                  type="button"
-                  onClick={() => {
-                    setProcessingLocal(false)
-                    setForceLocal(false)
-                    localStorage.setItem('anonymizer-processing-local', 'false')
-                    void refreshDetector(true)
-                  }}
-                >
-                  <Icon name="cloud" size={14} /> Use server mode
-                </button>
-              )}
-            </div>
-
-            {!depsStatus?.all_ok && (
+      {detectorLoading && modelLoadProgress && modelLoadProgress.phase !== 'ready' && (
+        <div className="model-load-toast" role="status" aria-live="polite">
+          <span className="model-load-toast-spinner" aria-hidden="true" />
+          <div className="model-load-toast-body">
+            <span className="model-load-toast-label">
+              {modelLoadProgress.phase === 'init'
+                ? 'Initializing face model…'
+                : 'Loading face model'}
+            </span>
+            {modelLoadProgress.phase === 'download' && modelLoadProgress.total > 0 && (
               <>
-                {(window as unknown as { electronBackend?: { checkPython: () => Promise<{ cmd: string; version: string } | null>; installDeps: () => Promise<{ ok: boolean; message: string }>; startServer: () => Promise<{ ok: boolean; message: string }> } }).electronBackend ? (
-                  <button
-                    className="deps-install-btn"
-                    type="button"
-                    disabled={depsInstalling}
-                    onClick={async () => {
-                      const eb = (window as unknown as { electronBackend: { checkPython: () => Promise<{ cmd: string; version: string } | null>; installDeps: () => Promise<{ ok: boolean; message: string; stderr?: string }>; startServer: () => Promise<{ ok: boolean; message: string }> } }).electronBackend
-                      setDepsInstalling(true)
-                      setInstallResult(null)
-                      try {
-                        const py = await eb.checkPython()
-                        if (!py) {
-                          setInstallResult({ ok: false, returncode: -1, stdout: '', stderr: '', message: 'Python not found. Install Python 3.9+ from python.org first.' })
-                          return
-                        }
-                        setInstallResult({ ok: true, returncode: 0, stdout: '', stderr: '', message: `Found ${py.version}. Installing…` })
-                        const inst = await eb.installDeps()
-                        if (!inst.ok) { setInstallResult({ ok: false, returncode: 1, stdout: '', stderr: inst.message, message: inst.message }); return }
-                        setInstallResult({ ok: true, returncode: 0, stdout: '', stderr: '', message: 'Starting server…' })
-                        const srv = await eb.startServer()
-                        setInstallResult({ ok: srv.ok, returncode: srv.ok ? 0 : 1, stdout: '', stderr: srv.ok ? '' : srv.message, message: srv.message })
-                        if (srv.ok) {
-                          setTimeout(() => {
-                            refreshDetector(true).then((s) => { setNotice(`Backend connected: ${s.message}`); setDepsModalOpen(false) })
-                          }, 2000)
-                        }
-                      } catch (e) {
-                        setInstallResult({ ok: false, returncode: -1, stdout: '', stderr: '', message: `${e instanceof Error ? e.message : String(e)}` })
-                      } finally { setDepsInstalling(false) }
-                    }}
-                  >
-                    <Icon name="play_arrow" size={18} />
-                    {depsInstalling ? 'Setting up…' : 'Install & start localhost backend'}
-                  </button>
-                ) : (
-                  <button
-                    className="deps-install-btn"
-                    type="button"
-                    onClick={downloadInstallScript}
-                  >
-                    <Icon name="download" size={18} />
-                    Download backend setup script ({isWindows ? '.bat' : '.sh'})
-                  </button>
-                )}
-
-                <div style={{ fontSize: '0.58rem', color: 'var(--text-muted)', lineHeight: 1.45, marginTop: '0.3rem', marginBottom: '0.35rem' }}>
-                  {depsStatus
-                    ? 'Server was reached, but some backend requirements or the YuNet model are still missing.'
-                    : 'If you do not need server mode, you can ignore this section and stay in fully local browser mode.'}
-                </div>
-
-                {depsStatus && !depsStatus.all_ok && (
-                  <button
-                    className="deps-install-btn"
-                    type="button"
-                    onClick={runInstall}
-                    disabled={depsInstalling}
-                    style={{ background: 'var(--accent)', marginBottom: '0.25rem' }}
-                  >
-                    <Icon name="build" size={18} />
-                    {depsInstalling ? 'Installing…' : 'Install missing backend requirements'}
-                  </button>
-                )}
+                <span className="model-load-toast-bytes">
+                  {(modelLoadProgress.loaded / 1048576).toFixed(1)} / {(modelLoadProgress.total / 1048576).toFixed(1)} MB
+                </span>
+                <span className="model-load-toast-bar">
+                  <span
+                    className="model-load-toast-fill"
+                    style={{ width: `${Math.min(100, Math.round((modelLoadProgress.loaded / modelLoadProgress.total) * 100))}%` }}
+                  />
+                </span>
               </>
             )}
-
-            {depsStatus && (
-              <div style={{ padding: '0.28rem 0.4rem', borderRadius: 6, border: '1px solid var(--border)', marginBottom: '0.3rem', fontSize: '0.62rem' }}>
-                <div style={{ fontWeight: 600, color: depsStatus.all_ok ? 'var(--accent)' : 'var(--warn)', marginBottom: '0.12rem' }}>
-                  Runtime check
-                </div>
-                <div style={{ color: 'var(--text-secondary)', lineHeight: 1.45 }}>
-                  Python environment: {depsStatus.all_ok ? 'ready' : 'needs attention'}
-                </div>
-                <div style={{ color: 'var(--text-secondary)', lineHeight: 1.45 }}>
-                  YuNet model: {depsStatus.yunet_model_present ? 'present' : 'missing'}
-                </div>
-              </div>
-            )}
-
-            {/* Install result */}
-            {installResult && (
-              <div style={{
-                padding: '0.25rem 0.4rem', borderRadius: 5, fontSize: '0.64rem',
-                background: installResult.ok ? 'rgba(0,200,80,0.06)' : 'rgba(220,60,60,0.06)',
-                border: `1px solid ${installResult.ok ? 'var(--accent)' : 'var(--danger)'}`,
-                color: installResult.ok ? 'var(--accent)' : 'var(--danger)',
-              }}>
-                {installResult.message}
-              </div>
-            )}
           </div>
         </div>
       )}
 
-      {aboutOpen && (
-        <div className="about-backdrop" onClick={() => setAboutOpen(false)}>
-          <div className="about-modal" onClick={(e) => e.stopPropagation()}>
-            <button className="about-modal-close" type="button" onClick={() => setAboutOpen(false)}>✕ Close</button>
-            <h2 style={{ margin: '0 0 0.35rem', fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-              W3PN Anonymizer
-            </h2>
-            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: '0 0 0.6rem', lineHeight: 1.5 }}>
-              A community project by{' '}
-              <a href="https://www.web3privacy.info" target="_blank" rel="noreferrer" className="about-link">Web3Privacy Now</a>
-              {' '}— privacy-first image and video anonymization tool. Rendering and export stay in the browser; face detection can run either in-browser or through your own localhost backend.
-            </p>
+      <DetectionSettingsDrawer
+        open={detectSettingsOpen}
+        onClose={() => setDetectSettingsOpen(false)}
+        target={detectTarget}
+        onTargetChange={setDetectTarget}
+        sensitivity={detectSensitivity}
+        onSensitivityChange={setDetectSensitivity}
+        faceOffset={detectFaceOffset}
+        onFaceOffsetChange={setDetectFaceOffset}
+        thorough={detectThorough}
+        onThoroughChange={setDetectThorough}
+        liveMode={isMobile && mobileMode === 'live'}
+        detectEnabled={isMobile && mobileMode === 'live' ? liveDetectEnabled : autoDetect}
+        onDetectEnabledChange={(v) => {
+          if (isMobile && mobileMode === 'live') setLiveDetectEnabled(v)
+          else { setAutoDetect(v); setShowBoxes(v) }
+        }}
+        showBoxes={showBoxes}
+        onShowBoxesChange={setShowBoxes}
+        detectorReady={detector.mode === 'yunet-wasm'}
+        isVideo={Boolean(activePhoto?.isVideo)}
+        onDetectNow={() => { void detectFacesOnActiveImage(detectThorough) }}
+      />
 
-            <h3 style={{ margin: '0.7rem 0 0.3rem', fontSize: '0.82rem', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)' }}>Features</h3>
-            <ul style={{ margin: '0 0 0.4rem', paddingLeft: '1.1rem' }}>
-              {[
-                '🎭 14+ anonymization effects — blur, pixelate, blackout, emoji, glitch, thermal, halftone, silhouette, noise, swirl, contour, diamond, and more',
-                '✏️ Brush & zone tools — paint or draw rectangles over any region, adjustable size',
-                '🤖 Auto face detection — YuNet in-browser via ONNX Runtime WebAssembly + optional localhost Python YuNet backend',
-                '🎨 Color adjustments — brightness, contrast, saturation, shadows, highlights, temperature + presets',
-                '🌀 Transform effects — halftone, glitch, pixel shift (wave / zoom / shear / ripple / mirror), color shift',
-                '🎬 Video anonymization — frame-by-frame local processing with MediaRecorder for MP4, WebM, MOV, and more',
-                '📐 Batch processing — resize, crop, format convert, color grade, transforms, auto-anonymize hundreds of photos',
-                '📦 Export: JPEG, PNG, WebP, BMP, GIF, TIFF + ZIP for batch downloads',
-                '🖼️ SVG vectorization — convert images to SVG with 8 presets, custom parameters, and live preview',
-                '📸 Save snapshot — freeze intermediate edits as new photos in the explorer',
-                '🧰 Desktop shell is kept in the codebase, but public desktop downloads are temporarily hidden until the builds are polished',
-              ].map((item) => (
-                <li key={item} style={{ marginBottom: '0.22rem', fontSize: '0.76rem', color: 'var(--text-secondary)' }}>{item}</li>
-              ))}
-            </ul>
-
-            <h3 style={{ margin: '0.7rem 0 0.3rem', fontSize: '0.82rem', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)' }}>Privacy & security</h3>
-            <ul style={{ margin: '0 0 0.4rem', paddingLeft: '1.1rem' }}>
-              {[
-                '🔒 100% local by default — all processing runs in your browser, no uploads',
-                '🛡️ Local / Server toggle — choose in-browser YuNet or your own localhost Python YuNet backend',
-                '📊 CPU timing proof — shows processing time to verify local execution',
-                '🚫 No analytics, no cookies, no tracking — zero third-party network requests',
-                '🔤 Self-hosted fonts — Material Symbols served locally, no Google CDN',
-                '🌐 Content Security Policy — blocks unintended outbound connections',
-              ].map((item) => (
-                <li key={item} style={{ marginBottom: '0.22rem', fontSize: '0.76rem', color: 'var(--text-secondary)' }}>{item}</li>
-              ))}
-            </ul>
-
-            <h3 style={{ margin: '0.7rem 0 0.3rem', fontSize: '0.82rem', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)' }}>Operational limits</h3>
-            <ul style={{ margin: '0 0 0.4rem', paddingLeft: '1.1rem' }}>
-              {[
-                `📁 Queue limit — up to ${MAX_TOTAL_PHOTOS} media items loaded in one session`,
-                `🖼️ Image inputs — up to ${fmtBytes(MAX_FILE_SIZE)} per file in the browser queue`,
-                `🧠 Local detector — YuNet analyzes the full image plus 640 px tiles for large frames`,
-                `🖥️ Localhost detector — accepts JPEG/PNG/WebP/BMP/TIFF requests up to 25 MB and 30 megapixels`,
-                `🎞️ Video inputs — up to ${fmtBytes(VIDEO_RUNTIME_LIMITS.maxUploadBytes)} per file; accepted extensions: ${VIDEO_RUNTIME_LIMITS.acceptedExtensions.map((ext) => ext.toUpperCase()).join(', ')}`,
-                `🎯 Video detection — sampled frames are downscaled to ${VIDEO_RUNTIME_LIMITS.detectMaxDimension}px on the long edge before YuNet runs`,
-                `📼 Video export — ${Math.round(VIDEO_RUNTIME_LIMITS.videoBitrate / 1_000_000)} Mbps video + ${Math.round(VIDEO_RUNTIME_LIMITS.audioBitrate / 1000)} kbps audio; FPS defaults to ${VIDEO_RUNTIME_LIMITS.defaultFps} and is normalized into the ${VIDEO_RUNTIME_LIMITS.estimatedFpsRange.min}–${VIDEO_RUNTIME_LIMITS.estimatedFpsRange.max} range`,
-                `🧬 Batch resize — max width and height fields are clamped to 25,000 px`,
-                `🗺️ SVG preview — vectorization preview is internally capped to 1,200 px on the long edge for responsiveness`,
-              ].map((item) => (
-                <li key={item} style={{ marginBottom: '0.22rem', fontSize: '0.76rem', color: 'var(--text-secondary)' }}>{item}</li>
-              ))}
-            </ul>
-
-            <h3 style={{ margin: '0.7rem 0 0.3rem', fontSize: '0.82rem', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)' }}>Data flow & storage</h3>
-            <ul style={{ margin: '0 0 0.4rem', paddingLeft: '1.1rem' }}>
-              {[
-                '🧠 Session memory — loaded files, snapshots, original backups, zones, and video frame overrides live in memory as Blob/ObjectURL state for the current session only',
-                '🧹 Cleanup — preview ObjectURLs are revoked when media is replaced or deleted, and the remaining previews are revoked when the app unloads',
-                '💾 Persistent browser storage — only the selected theme and the Local/Server preference are written to localStorage',
-                '📦 Export behavior — files are written to disk only when you explicitly export, download, or choose overwrite-originals through the File System Access API',
-                '🏠 Server mode scope — only still images or sampled video detection frames are POSTed to your own localhost backend at 127.0.0.1:7865; the backend decodes them in memory, returns boxes, and does not save the source pixels',
-                '🗂️ Server runtime files — if you enable the localhost backend, the only persistent backend files are its virtualenv under server/.venv and the YuNet model cache under server/models/',
-                `🎬 Video path — even in Server mode, timeline building, masking, effect rendering, and final encoding stay in-browser via ${videoPipelineCapabilities.webCodecsRenderer ? 'WebCodecs + MediaRecorder' : 'MediaRecorder'}`
-              ].map((item) => (
-                <li key={item} style={{ marginBottom: '0.22rem', fontSize: '0.76rem', color: 'var(--text-secondary)' }}>{item}</li>
-              ))}
-            </ul>
-
-            <h3 style={{ margin: '0.7rem 0 0.3rem', fontSize: '0.82rem', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)' }}>Open-source integrations</h3>
-            <ul style={{ margin: '0 0 0.4rem', paddingLeft: '1.1rem' }}>
-              {OPEN_SOURCE_CANDIDATES.map((item) => (
-                <li key={item.name} style={{ marginBottom: '0.25rem', fontSize: '0.76rem', color: 'var(--text-secondary)' }}>
-                  <a href={item.url} target="_blank" rel="noreferrer" className="about-link">{item.name}</a>
-                  {' — '}{item.note}
-                </li>
-              ))}
-            </ul>
-
-            <div style={{ margin: '0.8rem 0 0', borderTop: '1px solid var(--border)', paddingTop: '0.6rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
-              <p style={{ fontSize: '0.73rem', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.5 }}>
-                Built with love by the{' '}
-                <a href="https://www.web3privacy.info" target="_blank" rel="noreferrer" className="about-link">Web3Privacy Now</a>
-                {' '}community. Source code on{' '}
-                <a href="https://github.com/web3privacy/w3pn-anonymizer" target="_blank" rel="noreferrer" className="about-link">GitHub</a>.
-              </p>
-              <button
-                className="btn btn-sm"
-                type="button"
-                onClick={() => { setAboutOpen(false); setFeedbackOpen(true) }}
-                style={{ flexShrink: 0, fontSize: '0.7rem' }}
-              >
-                Give us Feedback
-              </button>
-            </div>
-          </div>
+      {!isMobile && desktopLiveOpen && (
+        <div className="desktop-live-overlay">
+          <MobileLiveMode
+            b={mobileBindings}
+            onOpenLibrary={() => { setDesktopLiveOpen(false); openUnifiedPicker() }}
+            onOpenCapturedPhoto={(id) => {
+              setDesktopLiveOpen(false)
+              mobileBindings.openPhotoInEditor(id)
+            }}
+            onExitToWorkspace={() => setDesktopLiveOpen(false)}
+            onFallbackUpload={openUnifiedPicker}
+            onCaptureSaved={(blob) => mobileBindings.addLiveMediaToLibrary(blob, { stayInLive: true })}
+          />
         </div>
       )}
 
-      {/* ── Feedback modal ──────────────────────────────────── */}
+      {/* ── Feedback modal (overlays the About screen) ──────────── */}
       {feedbackOpen && (
-        <div className="about-backdrop" onClick={() => setFeedbackOpen(false)}>
-          <div className="about-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 440 }}>
-            <button className="about-modal-close" type="button" onClick={() => setFeedbackOpen(false)}>✕ Close</button>
-            <h2 style={{ margin: '0 0 0.35rem', fontSize: '1.05rem' }}>Send Feedback</h2>
-            <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '0 0 0.6rem', lineHeight: 1.5 }}>
+        <div className="feedback-backdrop" onClick={() => setFeedbackOpen(false)}>
+          <div className="feedback-modal" onClick={(e) => e.stopPropagation()}>
+            <button className="about-modal-close" type="button" onClick={() => setFeedbackOpen(false)} aria-label="Close">
+              <Icon name="close" size={18} />
+            </button>
+            <h2 className="feedback-modal-title">Send Feedback</h2>
+            <p className="feedback-modal-desc">
               We'd love to hear from you! Your message will be sent to the W3PN team.
             </p>
             <textarea
@@ -5081,14 +6178,13 @@ endlocal
               value={feedbackMsg}
               onChange={(e) => setFeedbackMsg(e.target.value)}
             />
-            <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
+            <div className="feedback-modal-actions">
               <button className="btn btn-sm" type="button" onClick={() => setFeedbackOpen(false)}>Cancel</button>
               <a
-                className="btn btn-sm btn-primary"
+                className="btn btn-sm btn-primary feedback-modal-send"
                 href={`mailto:web3privacynow@protonmail.com?subject=${encodeURIComponent('W3PN Anonymizer Feedback')}&body=${encodeURIComponent(feedbackMsg)}`}
                 target="_blank"
                 rel="noreferrer"
-                style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
                 onClick={() => { setFeedbackOpen(false); setFeedbackMsg(''); setNotice('Opening mail client…') }}
               >
                 <Icon name="send" size={13} /> Send

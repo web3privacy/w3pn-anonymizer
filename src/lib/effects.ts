@@ -1,4 +1,4 @@
-import type { AnonymizeEffectId, ColorAdjustments, EffectDefinition, GlitchSubEffect } from '../types'
+import type { AnonymizeEffectId, ColorAdjustments, EffectDefinition, EffectRenderOptions, GlitchSubEffect } from '../types'
 
 export const EMOJI_POOL = [
   // Cats
@@ -15,17 +15,18 @@ export const EMOJI_POOL = [
 ]
 
 export const EFFECTS: EffectDefinition[] = [
-  { id: 'blur',       label: 'Blur',        description: 'Gaussian blur',                         icon: 'blur_on' },
-  { id: 'pixelate',  label: 'Pixelate',    description: 'Mosaic (low-res) effect',               icon: 'grid_on' },
-  { id: 'zoom-blur', label: 'Zoom Blur',   description: 'Radial zoom blur — destroys face shape', icon: 'motion_blur' },
-  { id: 'blackout',  label: 'Blackout',    description: 'Solid black fill',                       icon: 'square' },
-  { id: 'emoji',     label: 'Emoji',       description: 'Replace with random emoji',              icon: 'mood' },
-  { id: 'noise',     label: 'Noise',       description: 'Noise anonymization',                    icon: 'grain' },
-  { id: 'glitch',    label: 'Glitch',      description: 'RGB chroma-shift',                       icon: 'auto_fix_high' },
-  { id: 'silhouette',label: 'Silhouette',  description: 'Solid black silhouette',                 icon: 'person' },
-  { id: 'contour',   label: 'Contour',     description: 'Edge detection (Sobel)',                 icon: 'pentagon' },
-  { id: 'thermal',   label: 'Thermal',     description: 'Falsecolor thermal map',                 icon: 'thermostat' },
-  { id: 'static',    label: 'Static TV',   description: 'TV static noise',                        icon: 'tv' },
+  { id: 'blur',       label: 'Blur',        description: 'Gaussian blur',                         icon: 'blur_on',         strengthLabel: 'Blur radius' },
+  { id: 'pixelate',  label: 'Pixelate',    description: 'Mosaic (low-res) effect',               icon: 'grid_on',         strengthLabel: 'Block size' },
+  { id: 'zoom-blur', label: 'Zoom Blur',   description: 'Radial zoom blur — destroys face shape', icon: 'motion_blur',   strengthLabel: 'Distortion' },
+  { id: 'blackout',  label: 'Blackout',    description: 'Solid black fill',                       icon: 'square',          strengthLabel: 'Edge softness' },
+  { id: 'emoji',     label: 'Emoji',       description: 'Replace with random emoji',              icon: 'mood',            strengthLabel: 'Size' },
+  { id: 'noise',     label: 'Noise',       description: 'Noise anonymization',                    icon: 'grain',           strengthLabel: 'Density' },
+  { id: 'glitch',    label: 'Glitch',      description: 'RGB chroma-shift',                       icon: 'auto_fix_high',   strengthLabel: 'Shift amount' },
+  { id: 'silhouette',label: 'Silhouette',  description: 'Solid black silhouette',                 icon: 'person',          strengthLabel: 'Edge softness' },
+  { id: 'contour',   label: 'Contour',     description: 'Edge detection (Sobel)',                 icon: 'pentagon',        strengthLabel: 'Line thickness' },
+  { id: 'thermal',   label: 'Thermal',     description: 'Falsecolor thermal map',                 icon: 'thermostat',      strengthLabel: 'Color intensity' },
+  { id: 'static',    label: 'Static TV',   description: 'TV static noise',                        icon: 'tv',              strengthLabel: 'Grain density' },
+  { id: 'custom-image', label: 'Custom Image', description: 'Replace with uploaded image patches', icon: 'image',          strengthLabel: 'Opacity' },
 ]
 
 const scratchA = document.createElement('canvas')
@@ -43,6 +44,83 @@ const getContext2d = (canvas: HTMLCanvasElement) => {
 
 const clamp = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value))
+
+const hashSeed = (value: string | number | undefined) => {
+  const text = String(value ?? 'anonymizer')
+  let hash = 2166136261
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i)
+    hash = Math.imul(hash, 16777619)
+  }
+  return hash >>> 0
+}
+
+const seededRandom = (seed: string | number | undefined) => {
+  let state = hashSeed(seed) || 0x9e3779b9
+  return () => {
+    state += 0x6d2b79f5
+    let t = state
+    t = Math.imul(t ^ (t >>> 15), t | 1)
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+const effectSeed = (effect: AnonymizeEffectId, x: number, y: number, width: number, height: number, options?: EffectRenderOptions) =>
+  options?.seed ?? `${effect}:${options?.zoneId ?? ''}:${options?.customImageAssetId ?? ''}:${Math.round(x)}:${Math.round(y)}:${Math.round(width)}:${Math.round(height)}`
+
+const featherCoreFor = (strength: number) => clamp(0.32 + strength * 0.54, 0.32, 0.9)
+
+const resolveCustomImage = (options?: EffectRenderOptions) => {
+  const images = options?.customImages?.filter((asset) => asset.imageBitmap)
+  if (!images || images.length === 0) return null
+  const explicit = options?.customImageAssetId
+    ? images.find((asset) => asset.id === options.customImageAssetId)
+    : null
+  if (explicit) return explicit.imageBitmap ?? null
+  const index = Math.abs(hashSeed(options?.zoneId ?? options?.seed ?? 'custom-image')) % images.length
+  return images[index].imageBitmap ?? null
+}
+
+const drawImageCover = (
+  ctx: CanvasRenderingContext2D,
+  image: ImageBitmap,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+) => {
+  const imageRatio = image.width / image.height
+  const targetRatio = width / height
+  let sx = 0
+  let sy = 0
+  let sw = image.width
+  let sh = image.height
+  if (imageRatio > targetRatio) {
+    sw = image.height * targetRatio
+    sx = (image.width - sw) / 2
+  } else {
+    sh = image.width / targetRatio
+    sy = (image.height - sh) / 2
+  }
+  ctx.drawImage(image, sx, sy, sw, sh, x, y, width, height)
+}
+
+const applyRectFeatherMask = (
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  strength: number,
+) => {
+  const feather = Math.max(1, Math.round(Math.min(width, height) * (0.04 + (1 - strength) * 0.2)))
+  for (let py = 0; py < height; py += 1) {
+    for (let px = 0; px < width; px += 1) {
+      const edge = Math.min(px, py, width - 1 - px, height - 1 - py)
+      const alpha = clamp(edge / feather, 0, 1)
+      data[(py * width + px) * 4 + 3] = Math.round(data[(py * width + px) * 4 + 3] * alpha)
+    }
+  }
+}
 
 const normalizeRect = (
   x: number,
@@ -77,23 +155,44 @@ const applyBlurRect = (
     ctx.canvas.height,
   )
 
+  // Stage 1 — capture the source patch.
   scratchA.width = rw
   scratchA.height = rh
   const sctx = getContext2d(scratchA)
   sctx.clearRect(0, 0, rw, rh)
   sctx.drawImage(ctx.canvas, rx, ry, rw, rh, 0, 0, rw, rh)
 
+  // Stage 2 — hard downsample. Plain Gaussian blur is a low-pass filter that is
+  // theoretically invertible (deconvolution), so a face can be partly recovered.
+  // Collapsing the patch to a few pixels first DISCARDS the high-frequency
+  // detail entirely, making the result irreversible. The blur on upscale just
+  // hides the blockiness so it still reads as a smooth blur.
+  const s = clamp(strength, 0, 1)
+  const downW = Math.max(3, Math.round(rw / (6 + s * 12)))
+  const downH = Math.max(3, Math.round(rh / (6 + s * 12)))
+  scratchB.width = downW
+  scratchB.height = downH
+  const dctx = getContext2d(scratchB)
+  dctx.clearRect(0, 0, downW, downH)
+  dctx.imageSmoothingEnabled = true
+  dctx.drawImage(scratchA, 0, 0, rw, rh, 0, 0, downW, downH)
+
+  // Stage 3 — blur-upscale back onto the canvas.
   ctx.save()
-  ctx.filter = `blur(${Math.max(2, strength * 18)}px)`
-  ctx.drawImage(scratchA, 0, 0, rw, rh, rx, ry, rw, rh)
+  ctx.filter = `blur(${Math.max(2, s * 18)}px)`
+  ctx.imageSmoothingEnabled = true
+  ctx.drawImage(scratchB, 0, 0, downW, downH, rx, ry, rw, rh)
   ctx.restore()
 }
 
 /**
- * Radial zoom blur applied to a single zone rectangle.
- * Accumulates pixels sampled at progressively zoomed-in positions toward the
- * centre of the zone and averages them — destroys facial geometry while keeping
- * a recognisable "motion" artefact.
+ * "Zoom matrix" face distortion.
+ *
+ * Splits the zone into an irregular grid of tiles. Each tile re-samples the
+ * face region at a different zoom factor (some zoomed in, some shrunk, some
+ * mirrored/offset) so the result is a fractured mosaic of mismatched scales —
+ * the eye can no longer assemble a recognisable face. A light radial smear and
+ * blur pass on top removes residual sharp edges. Deterministic per zone.
  */
 const applyZoomBlurRect = (
   ctx: CanvasRenderingContext2D,
@@ -102,40 +201,86 @@ const applyZoomBlurRect = (
   width: number,
   height: number,
   strength: number,
+  options?: EffectRenderOptions,
 ) => {
   const { x: rx, y: ry, width: rw, height: rh } = normalizeRect(
     x, y, width, height, ctx.canvas.width, ctx.canvas.height,
   )
-  const imageData = ctx.getImageData(rx, ry, rw, rh)
-  const src = new Uint8ClampedArray(imageData.data)
-  const dst = imageData.data
-
   const s = Number.isFinite(strength) ? clamp(strength, 0, 1) : 0.5
-  const samples = Math.max(2, Math.round(8 + s * 12))
-  const maxZoom = 0.15 + s * 0.65
-  const cx = (rw - 1) / 2
-  const cy = (rh - 1) / 2
+  const rng = seededRandom(effectSeed('zoom-blur', rx, ry, rw, rh, options))
 
-  for (let py = 0; py < rh; py++) {
-    for (let px = 0; px < rw; px++) {
-      let r = 0, g = 0, b = 0, a = 0
-      for (let s = 0; s < samples; s++) {
-        const t = s / (samples - 1)          // 0 → 1 along zoom streak
-        const zoom = t * maxZoom             // 0 → maxZoom
-        // Pull pixel toward centre proportionally
-        const sx = clamp(Math.round(cx + (px - cx) * (1 - zoom)), 0, rw - 1)
-        const sy = clamp(Math.round(cy + (py - cy) * (1 - zoom)), 0, rh - 1)
-        const i = (sy * rw + sx) * 4
-        r += src[i]; g += src[i + 1]; b += src[i + 2]; a += src[i + 3]
+  // Source patch (the original face region).
+  scratchA.width = rw
+  scratchA.height = rh
+  const srcCtx = getContext2d(scratchA)
+  srcCtx.clearRect(0, 0, rw, rh)
+  srcCtx.drawImage(ctx.canvas, rx, ry, rw, rh, 0, 0, rw, rh)
+
+  // Build the matrix on scratchB, then blit back.
+  scratchB.width = rw
+  scratchB.height = rh
+  const dstCtx = getContext2d(scratchB)
+  dstCtx.clearRect(0, 0, rw, rh)
+  dstCtx.imageSmoothingEnabled = true
+
+  // Grid density grows with strength: 3×3 (gentle) → 7×7 (aggressive).
+  const cols = Math.max(3, Math.round(3 + s * 4))
+  const rows = cols
+  const cellW = rw / cols
+  const cellH = rh / rows
+  const cx = rw / 2
+  const cy = rh / 2
+
+  for (let gy = 0; gy < rows; gy += 1) {
+    for (let gx = 0; gx < cols; gx += 1) {
+      const dx = gx * cellW
+      const dy = gy * cellH
+      // Zoom factor: 0.45×–2.4× scaled by strength. Half the tiles zoom in,
+      // the rest shrink, so scales are deliberately mismatched.
+      const zoomSpread = 0.45 + s * 1.0
+      const zoom = rng() < 0.5
+        ? 1 + rng() * zoomSpread          // zoomed in
+        : 1 / (1 + rng() * zoomSpread)    // shrunk
+      const sampleW = cellW / zoom
+      const sampleH = cellH / zoom
+      // Bias sample origin toward the face centre with jitter so features get scrambled.
+      const jitter = s * 0.6
+      const towardCenterX = (cx - (dx + cellW / 2)) * jitter * rng()
+      const towardCenterY = (cy - (dy + cellH / 2)) * jitter * rng()
+      const sxRaw = dx + cellW / 2 - sampleW / 2 + towardCenterX + (rng() - 0.5) * cellW * jitter
+      const syRaw = dy + cellH / 2 - sampleH / 2 + towardCenterY + (rng() - 0.5) * cellH * jitter
+      const sx = clamp(sxRaw, 0, Math.max(0, rw - sampleW))
+      const sy = clamp(syRaw, 0, Math.max(0, rh - sampleH))
+
+      dstCtx.save()
+      // Occasionally mirror a tile to further break symmetry.
+      if (rng() < 0.35) {
+        dstCtx.translate(dx + cellW, dy)
+        dstCtx.scale(-1, 1)
+        dstCtx.drawImage(scratchA, sx, sy, sampleW, sampleH, 0, 0, cellW, cellH)
+      } else {
+        dstCtx.drawImage(scratchA, sx, sy, sampleW, sampleH, dx, dy, cellW, cellH)
       }
-      const j = (py * rw + px) * 4
-      dst[j]     = r / samples
-      dst[j + 1] = g / samples
-      dst[j + 2] = b / samples
-      dst[j + 3] = a / samples
+      dstCtx.restore()
     }
   }
-  ctx.putImageData(imageData, rx, ry)
+
+  // Radial smear + blur to dissolve tile seams and any residual detail.
+  dstCtx.save()
+  dstCtx.globalAlpha = 0.5
+  const smearSteps = Math.max(2, Math.round(2 + s * 5))
+  for (let i = 1; i <= smearSteps; i += 1) {
+    const scale = 1 + (i / smearSteps) * (0.04 + s * 0.12)
+    const ox = cx - (cx * scale)
+    const oy = cy - (cy * scale)
+    dstCtx.drawImage(scratchB, 0, 0, rw, rh, ox, oy, rw * scale, rh * scale)
+  }
+  dstCtx.restore()
+
+  ctx.save()
+  ctx.filter = `blur(${(1.5 + s * 4).toFixed(2)}px)`
+  ctx.drawImage(scratchB, 0, 0, rw, rh, rx, ry, rw, rh)
+  ctx.restore()
 }
 
 const applyPixelateRect = (
@@ -188,10 +333,18 @@ const applyBlackoutRect = (
     ctx.canvas.width,
     ctx.canvas.height,
   )
-  ctx.save()
-  ctx.fillStyle = `rgba(0, 0, 0, ${0.6 + strength * 0.4})`
-  ctx.fillRect(rx, ry, rw, rh)
-  ctx.restore()
+  const patch = ctx.createImageData(rw, rh)
+  for (let i = 0; i < patch.data.length; i += 4) {
+    patch.data[i] = 0
+    patch.data[i + 1] = 0
+    patch.data[i + 2] = 0
+    patch.data[i + 3] = 255
+  }
+  applyRectFeatherMask(patch.data, rw, rh, strength)
+  scratchA.width = rw
+  scratchA.height = rh
+  getContext2d(scratchA).putImageData(patch, 0, 0)
+  ctx.drawImage(scratchA, rx, ry)
 }
 
 const applyNoiseRect = (
@@ -201,6 +354,7 @@ const applyNoiseRect = (
   width: number,
   height: number,
   strength: number,
+  options?: EffectRenderOptions,
 ) => {
   const { x: rx, y: ry, width: rw, height: rh } = normalizeRect(
     x,
@@ -212,34 +366,159 @@ const applyNoiseRect = (
   )
 
   const imageData = ctx.getImageData(rx, ry, rw, rh)
-  const { data } = imageData
-  const mix = 0.25 + strength * 0.7
+  const src = new Uint8ClampedArray(imageData.data)
+  const data = imageData.data
+  const rng = seededRandom(effectSeed('noise', rx, ry, rw, rh, options))
+  const s = Number.isFinite(strength) ? clamp(strength, 0, 1) : 0.5
 
-  for (let i = 0; i < data.length; i += 4) {
-    const noise = (Math.random() - 0.5) * 255
-    data[i] = clamp(data[i] * (1 - mix) + (128 + noise) * mix, 0, 255)
-    data[i + 1] = clamp(
-      data[i + 1] * (1 - mix) + (128 + noise * 0.6) * mix,
-      0,
-      255,
-    )
-    data[i + 2] = clamp(
-      data[i + 2] * (1 - mix) + (128 - noise * 0.8) * mix,
-      0,
-      255,
-    )
+  // Grain size: coarse at low strength, fine speckle at high strength.
+  const grain = Math.max(1, Math.round(4 - s * 2))
+  // Contrast push toward black/white as strength rises. Kept moderate so the
+  // probability field still tracks the face's light/shadow map (a faint hint).
+  const contrast = 0.25 + s * 0.4
+
+  // Eye/mouth emphasis: those bands keep tell-tale structure under plain noise,
+  // so we scramble the luminance the probability field reads from. Gaussian
+  // bumps centred on the eye line (~0.38h) and mouth line (~0.72h).
+  const bandWeight = (ny: number) => {
+    const eye = Math.exp(-((ny - 0.38) ** 2) / (2 * 0.1 ** 2))
+    const mouth = Math.exp(-((ny - 0.72) ** 2) / (2 * 0.09 ** 2))
+    return Math.min(1, eye + mouth)
+  }
+  // Per grain-row horizontal jitter that destroys the eye/mouth shadow pattern.
+  const maxBandShift = rw * (0.18 + s * 0.22)
+
+  for (let by = 0; by < rh; by += grain) {
+    for (let bx = 0; bx < rw; bx += grain) {
+      const blockW = Math.min(rw - bx, grain)
+      const blockH = Math.min(rh - by, grain)
+
+      // Where the luminance is sampled from. In the eye/mouth bands we yank the
+      // sample sideways (and a touch vertically) so those features dissolve.
+      const ny = (by + blockH / 2) / rh
+      const weight = bandWeight(ny)
+      const shiftX = Math.round((rng() - 0.5) * 2 * weight * maxBandShift)
+      const shiftY = Math.round((rng() - 0.5) * 2 * weight * (grain * 3))
+      const sampleBx = clamp(bx + shiftX, 0, Math.max(0, rw - blockW))
+      const sampleBy = clamp(by + shiftY, 0, Math.max(0, rh - blockH))
+
+      // Average luminance of the (possibly displaced) sample cell.
+      let lumaSum = 0
+      let count = 0
+      for (let yy = 0; yy < blockH; yy += 1) {
+        for (let xx = 0; xx < blockW; xx += 1) {
+          const i = ((sampleBy + yy) * rw + sampleBx + xx) * 4
+          lumaSum += src[i] * 0.299 + src[i + 1] * 0.587 + src[i + 2] * 0.114
+          count += 1
+        }
+      }
+      const avgLuma = count > 0 ? lumaSum / count : 128
+      // Probability a pixel is white follows the shadow map, but contrast is
+      // amplified so light/dark zones become dense white/black noise fields.
+      const pWhite = clamp(0.5 + (avgLuma / 255 - 0.5) * (1 + contrast * 2), 0.04, 0.96)
+
+      for (let yy = 0; yy < blockH; yy += 1) {
+        for (let xx = 0; xx < blockW; xx += 1) {
+          const dst = ((by + yy) * rw + bx + xx) * 4
+          // Hard black/white speckle — face detail is fully overwritten.
+          const v = rng() < pWhite ? 255 : 0
+          data[dst] = v
+          data[dst + 1] = v
+          data[dst + 2] = v
+          data[dst + 3] = src[dst + 3]
+        }
+      }
+    }
+  }
+
+  // Extra glitch-shred in the eye/mouth bands: tear horizontal slivers sideways
+  // so any residual ordered speckle there is broken into mismatched runs.
+  const noiseBuf0 = new Uint8ClampedArray(data)
+  for (let py = 0; py < rh; py += 1) {
+    const ny = py / rh
+    const weight = bandWeight(ny)
+    if (weight < 0.15) continue
+    if (rng() > 0.35 + weight * 0.5) continue
+    const dx = Math.round((rng() - 0.5) * 2 * weight * maxBandShift)
+    if (dx === 0) continue
+    for (let px = 0; px < rw; px += 1) {
+      const sxw = ((px + dx) % rw + rw) % rw
+      const dstI = (py * rw + px) * 4
+      const srcI = (py * rw + sxw) * 4
+      data[dstI] = noiseBuf0[srcI]
+      data[dstI + 1] = noiseBuf0[srcI + 1]
+      data[dstI + 2] = noiseBuf0[srcI + 2]
+    }
+  }
+
+  // Scatter pass: gently displace small noise patches so the dense speckle is
+  // broken up. Only some patches move; shifts are short.
+  const noiseBuf = new Uint8ClampedArray(data)
+  const patch = Math.max(2, Math.round(2 + s * 2))
+  const minShift = 2
+  const maxShift = Math.round(8 + s * 8)
+  for (let by = 0; by < rh; by += patch) {
+    for (let bx = 0; bx < rw; bx += patch) {
+      // Leave ~40% of patches in place so structure isn't fully destroyed.
+      if (rng() < 0.4) continue
+      const blockW = Math.min(rw - bx, patch)
+      const blockH = Math.min(rh - by, patch)
+      const mag = minShift + rng() * (maxShift - minShift)
+      const ang = rng() * Math.PI * 2
+      const shiftX = Math.round(Math.cos(ang) * mag)
+      const shiftY = Math.round(Math.sin(ang) * mag)
+      for (let yy = 0; yy < blockH; yy += 1) {
+        for (let xx = 0; xx < blockW; xx += 1) {
+          const px = bx + xx
+          const py = by + yy
+          // Wrap the source coordinate so every output pixel still gets noise.
+          const sxw = ((px + shiftX) % rw + rw) % rw
+          const syw = ((py + shiftY) % rh + rh) % rh
+          const dstI = (py * rw + px) * 4
+          const srcI = (syw * rw + sxw) * 4
+          data[dstI] = noiseBuf[srcI]
+          data[dstI + 1] = noiseBuf[srcI + 1]
+          data[dstI + 2] = noiseBuf[srcI + 2]
+        }
+      }
+    }
+  }
+
+  // Feather the rim: blend the noise back toward the original photo near the
+  // zone border (elliptical falloff) so the patch melts into its surroundings
+  // instead of showing a hard rectangle. The solid-noise core still fully
+  // covers the face (the detect box was inflated to keep the face well inside).
+  const cx = (rw - 1) / 2
+  const cy = (rh - 1) / 2
+  const FEATHER = 0.78 // fraction of radius that stays fully opaque noise
+  for (let py = 0; py < rh; py += 1) {
+    const dyn = (py - cy) / Math.max(1, cy)
+    for (let px = 0; px < rw; px += 1) {
+      const dxn = (px - cx) / Math.max(1, cx)
+      const d = Math.sqrt(dxn * dxn + dyn * dyn)
+      if (d <= FEATHER) continue
+      // 1 at FEATHER → 0 at (and beyond) the rect edge.
+      const a = clamp(1 - (d - FEATHER) / (1 - FEATHER), 0, 1)
+      const i = (py * rw + px) * 4
+      data[i] = Math.round(data[i] * a + src[i] * (1 - a))
+      data[i + 1] = Math.round(data[i + 1] * a + src[i + 1] * (1 - a))
+      data[i + 2] = Math.round(data[i + 2] * a + src[i + 2] * (1 - a))
+    }
   }
 
   ctx.putImageData(imageData, rx, ry)
 }
 
-const applyGlitchRect = (
+// Zone anonymization glitch (destructive band/block shred). Distinct from full-canvas
+// `applyPhaseGlitchEffect` used by the distort pipeline (halftone / pixel-shift / color-shift).
+const applyZoneGlitchRect = (
   ctx: CanvasRenderingContext2D,
   x: number,
   y: number,
   width: number,
   height: number,
   strength: number,
+  options?: EffectRenderOptions,
 ) => {
   const { x: rx, y: ry, width: rw, height: rh } = normalizeRect(
     x,
@@ -251,24 +530,54 @@ const applyGlitchRect = (
   )
 
   const source = ctx.getImageData(rx, ry, rw, rh)
+  const src = source.data
   const shifted = ctx.createImageData(rw, rh)
-  const shift = Math.max(1, Math.round(strength * 12))
+  const out = shifted.data
+  const rng = seededRandom(effectSeed('glitch', rx, ry, rw, rh, options))
+  const maxShiftX = Math.max(2, Math.round(rw * (0.08 + strength * 0.32)))
+  const maxShiftY = Math.max(2, Math.round(rh * (0.04 + strength * 0.18)))
+  const block = Math.max(2, Math.round(4 + strength * 14))
 
-  for (let py = 0; py < rh; py += 1) {
-    for (let px = 0; px < rw; px += 1) {
-      const to = (py * rw + px) * 4
-      const redX = clamp(px + shift, 0, rw - 1)
-      const blueX = clamp(px - shift, 0, rw - 1)
-      const greenY = clamp(py + Math.round(shift / 2), 0, rh - 1)
+  for (let row = 0; row < rh;) {
+    const bandH = Math.max(1, Math.round(2 + rng() * (4 + strength * 18)))
+    const sourceRow = Math.floor(rng() * Math.max(1, rh - bandH))
+    const dx = Math.round((rng() * 2 - 1) * maxShiftX)
+    const discard = rng() < 0.28 + strength * 0.28
+    for (let py = row; py < Math.min(rh, row + bandH); py += 1) {
+      for (let px = 0; px < rw; px += 1) {
+        const dst = (py * rw + px) * 4
+        let sx = clamp(px + dx + Math.round((rng() - 0.5) * block), 0, rw - 1)
+        let sy = clamp(sourceRow + (py - row) + Math.round((rng() - 0.5) * maxShiftY), 0, rh - 1)
+        if (discard) {
+          sx = Math.floor(rng() * rw)
+          sy = Math.floor(rng() * rh)
+        }
+        const si = (sy * rw + sx) * 4
+        const muted = discard ? 0.45 : 1
+        out[dst] = clamp(src[si] * muted + rng() * 90 * (1 - muted), 0, 255)
+        out[dst + 1] = clamp(src[si + 1] * muted + rng() * 90 * (1 - muted), 0, 255)
+        out[dst + 2] = clamp(src[si + 2] * muted + rng() * 90 * (1 - muted), 0, 255)
+        out[dst + 3] = 255
+      }
+    }
+    row += bandH
+  }
 
-      const redFrom = (py * rw + redX) * 4
-      const greenFrom = (greenY * rw + px) * 4
-      const blueFrom = (py * rw + blueX) * 4
-
-      shifted.data[to] = source.data[redFrom]
-      shifted.data[to + 1] = source.data[greenFrom + 1]
-      shifted.data[to + 2] = source.data[blueFrom + 2]
-      shifted.data[to + 3] = 255
+  for (let by = 0; by < rh; by += block) {
+    for (let bx = 0; bx < rw; bx += block) {
+      if (rng() > 0.45) continue
+      const sx = Math.floor(rng() * rw)
+      const sy = Math.floor(rng() * rh)
+      for (let yy = 0; yy < block && by + yy < rh; yy += 1) {
+        for (let xx = 0; xx < block && bx + xx < rw; xx += 1) {
+          const dst = ((by + yy) * rw + bx + xx) * 4
+          const si = (clamp(sy + yy, 0, rh - 1) * rw + clamp(sx + xx, 0, rw - 1)) * 4
+          out[dst] = src[si]
+          out[dst + 1] = src[si + 1]
+          out[dst + 2] = src[si + 2]
+          out[dst + 3] = 255
+        }
+      }
     }
   }
 
@@ -282,6 +591,7 @@ const drawEmojiBlock = (
   width: number,
   height: number,
   emoji: string,
+  strength = 0.5,
 ) => {
   const { x: rx, y: ry, width: rw, height: rh } = normalizeRect(
     x,
@@ -292,8 +602,9 @@ const drawEmojiBlock = (
     ctx.canvas.height,
   )
 
-  // Single emoji centered in the rectangle, sized to rect height (may overflow bounds)
-  const size = Math.round(Math.max(rw, rh) * 1.05)
+  // Strength scales the emoji: low ≈ 55% of face box, high ≈ 145% (overflows for coverage).
+  const s = Number.isFinite(strength) ? clamp(strength, 0.05, 1) : 0.5
+  const size = Math.round(Math.max(rw, rh) * (0.55 + s * 0.9))
   const cx = rx + rw / 2
   const cy = ry + rh / 2
 
@@ -324,28 +635,62 @@ export const pickUniqueEmojis = (count: number): string[] => {
 // ── Silueta ──────────────────────────────────────────────────────
 const applySilhouetteRect = (
   ctx: CanvasRenderingContext2D,
-  x: number, y: number, width: number, height: number,
+  x: number, y: number, width: number, height: number, strength: number, options?: EffectRenderOptions,
 ) => {
   const { x: rx, y: ry, width: rw, height: rh } = normalizeRect(x, y, width, height, ctx.canvas.width, ctx.canvas.height)
-  const imageData = ctx.getImageData(rx, ry, rw, rh)
-  const { data } = imageData
-  for (let i = 0; i < data.length; i += 4) {
-    const luma = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]
-    const v = luma < 128 ? 0 : 0   // force black silhouette
-    data[i] = v; data[i + 1] = v; data[i + 2] = v
-    // keep alpha
+  const src = ctx.getImageData(rx, ry, rw, rh)
+  const out = ctx.createImageData(rw, rh)
+  const sd = src.data
+  const od = out.data
+  const rng = seededRandom(effectSeed('silhouette', rx, ry, rw, rh, options))
+  const cx = (rw - 1) / 2
+  const cy = (rh - 1) / 2
+  const steps = 6
+
+  for (let py = 0; py < rh; py += 1) {
+    for (let px = 0; px < rw; px += 1) {
+      const dst = (py * rw + px) * 4
+      let edgeAccum = 0
+      for (let step = 0; step < steps; step += 1) {
+        const scale = 1 - step * (0.07 + strength * 0.025)
+        const ox = Math.round(cx + (px - cx) * scale)
+        const oy = Math.round(cy + (py - cy) * scale)
+        const left = (oy * rw + clamp(ox - 1, 0, rw - 1)) * 4
+        const right = (oy * rw + clamp(ox + 1, 0, rw - 1)) * 4
+        const top = (clamp(oy - 1, 0, rh - 1) * rw + ox) * 4
+        const bottom = (clamp(oy + 1, 0, rh - 1) * rw + ox) * 4
+        const gx =
+          (0.299 * sd[right] + 0.587 * sd[right + 1] + 0.114 * sd[right + 2]) -
+          (0.299 * sd[left] + 0.587 * sd[left + 1] + 0.114 * sd[left + 2])
+        const gy =
+          (0.299 * sd[bottom] + 0.587 * sd[bottom + 1] + 0.114 * sd[bottom + 2]) -
+          (0.299 * sd[top] + 0.587 * sd[top + 1] + 0.114 * sd[top + 2])
+        edgeAccum += Math.sqrt(gx * gx + gy * gy) * (1 - step * 0.11)
+      }
+      const cxn = (px - cx) / Math.max(1, rw / 2)
+      const cyn = (py - cy) / Math.max(1, rh / 2)
+      const vignette = clamp(1 - Math.sqrt(cxn * cxn + cyn * cyn) * 0.45, 0, 1)
+      const v = clamp(20 + edgeAccum / steps * 1.6 + vignette * 72 + rng() * 18, 0, 185)
+      od[dst] = clamp(v * 0.25, 0, 255)
+      od[dst + 1] = clamp(v * 0.28, 0, 255)
+      od[dst + 2] = clamp(v * 0.32, 0, 255)
+      od[dst + 3] = 255
+    }
   }
-  // fill whole region black
-  ctx.save()
-  ctx.fillStyle = '#000'
-  ctx.fillRect(rx, ry, rw, rh)
-  ctx.restore()
+  ctx.putImageData(out, rx, ry)
 }
 
-// ── Kontury (Sobel edge detection) ───────────────────────────────
+// ── Kontury (Sobel edge detection + destructive warp) ────────────
+// The plain Sobel still traces the exact feature geometry (eye spacing, nose,
+// jaw), which a viewer can read. We warp the sampling coordinates with a smooth
+// seeded displacement field so the contour lines bend and the apparent feature
+// positions shift — destructive (only edges are emitted, never the original),
+// so the source face cannot be reconstructed from the result.
 const applyContourRect = (
   ctx: CanvasRenderingContext2D,
   x: number, y: number, width: number, height: number,
+  strength: number,
+  options?: EffectRenderOptions,
 ) => {
   const { x: rx, y: ry, width: rw, height: rh } = normalizeRect(x, y, width, height, ctx.canvas.width, ctx.canvas.height)
   const src = ctx.getImageData(rx, ry, rw, rh)
@@ -353,22 +698,41 @@ const applyContourRect = (
   const sd = src.data; const od = out.data
   const gx = [-1, 0, 1, -2, 0, 2, -1, 0, 1]
   const gy = [-1, -2, -1, 0, 0, 0, 1, 2, 1]
+  const threshold = clamp(255 - strength * 220, 20, 240)
+  const gain = 0.6 + strength * 1.8
+
+  // Smooth multi-frequency warp field (seeded per zone for determinism).
+  const rng = seededRandom(effectSeed('contour', rx, ry, rw, rh, options))
+  const amp = (2 + strength * 7)                    // px of displacement
+  const f1 = (0.04 + rng() * 0.05) * (60 / Math.max(40, rw))
+  const f2 = (0.04 + rng() * 0.05) * (60 / Math.max(40, rh))
+  const f3 = (0.02 + rng() * 0.04) * (60 / Math.max(40, rw))
+  const p1 = rng() * Math.PI * 2
+  const p2 = rng() * Math.PI * 2
+  const p3 = rng() * Math.PI * 2
+
   for (let py = 0; py < rh; py++) {
     for (let px = 0; px < rw; px++) {
+      // Warp the sample origin — bends the edges away from true geometry.
+      const wx = (Math.sin(py * f1 + p1) + Math.sin((px + py) * f3 + p3)) * amp
+      const wy = (Math.cos(px * f2 + p2) + Math.cos((px - py) * f3 + p1)) * amp
+      const baseX = px + wx
+      const baseY = py + wy
       let sx = 0, sy = 0
       for (let ky = -1; ky <= 1; ky++) {
         for (let kx = -1; kx <= 1; kx++) {
-          const nx = clamp(px + kx, 0, rw - 1)
-          const ny = clamp(py + ky, 0, rh - 1)
+          const nx = clamp(Math.round(baseX + kx), 0, rw - 1)
+          const ny = clamp(Math.round(baseY + ky), 0, rh - 1)
           const idx = (ny * rw + nx) * 4
           const luma = 0.299 * sd[idx] + 0.587 * sd[idx + 1] + 0.114 * sd[idx + 2]
           const ki = (ky + 1) * 3 + (kx + 1)
           sx += luma * gx[ki]; sy += luma * gy[ki]
         }
       }
-      const mag = clamp(Math.sqrt(sx * sx + sy * sy), 0, 255)
+      const mag = clamp(Math.sqrt(sx * sx + sy * sy) * gain, 0, 255)
+      const edge = mag >= threshold ? mag : 0
       const oi = (py * rw + px) * 4
-      od[oi] = mag; od[oi + 1] = mag; od[oi + 2] = mag; od[oi + 3] = 255
+      od[oi] = edge; od[oi + 1] = edge; od[oi + 2] = edge; od[oi + 3] = 255
     }
   }
   ctx.putImageData(out, rx, ry)
@@ -390,15 +754,39 @@ const thermalColor = (t: number): [number, number, number] => {
 }
 const applyThermalRect = (
   ctx: CanvasRenderingContext2D,
-  x: number, y: number, width: number, height: number,
+  x: number, y: number, width: number, height: number, strength: number, options?: EffectRenderOptions,
 ) => {
   const { x: rx, y: ry, width: rw, height: rh } = normalizeRect(x, y, width, height, ctx.canvas.width, ctx.canvas.height)
   const imageData = ctx.getImageData(rx, ry, rw, rh)
-  const { data } = imageData
-  for (let i = 0; i < data.length; i += 4) {
-    const luma = (0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]) / 255
-    const [r, g, b] = thermalColor(luma)
-    data[i] = r; data[i + 1] = g; data[i + 2] = b
+  const src = new Uint8ClampedArray(imageData.data)
+  const data = imageData.data
+  const rng = seededRandom(effectSeed('thermal', rx, ry, rw, rh, options))
+  const islands = Array.from({ length: Math.max(3, Math.round(4 + strength * 9)) }, () => ({
+    x: rng() * rw,
+    y: rng() * rh,
+    radius: Math.max(4, (0.08 + rng() * 0.18) * Math.min(rw, rh)),
+    hue: rng(),
+  }))
+  const warp = Math.max(1, Math.round(1 + strength * 5))
+  for (let py = 0; py < rh; py += 1) {
+    for (let px = 0; px < rw; px += 1) {
+      const wobbleX = Math.round(Math.sin(py * 0.17 + rng() * 0.4) * warp)
+      const wobbleY = Math.round(Math.cos(px * 0.13 + rng() * 0.4) * warp)
+      const sx = clamp(px + wobbleX, 0, rw - 1)
+      const sy = clamp(py + wobbleY, 0, rh - 1)
+      const si = (sy * rw + sx) * 4
+      const dst = (py * rw + px) * 4
+      let luma = (0.299 * src[si] + 0.587 * src[si + 1] + 0.114 * src[si + 2]) / 255
+      for (const island of islands) {
+        const d = Math.hypot(px - island.x, py - island.y) / island.radius
+        if (d < 1) luma = clamp(luma * 0.68 + island.hue * 0.32 + (1 - d) * 0.18, 0, 1)
+      }
+      const [r, g, b] = thermalColor(luma)
+      data[dst] = r
+      data[dst + 1] = g
+      data[dst + 2] = b
+      data[dst + 3] = src[si + 3]
+    }
   }
   ctx.putImageData(imageData, rx, ry)
 }
@@ -406,19 +794,46 @@ const applyThermalRect = (
 // ── Static TV noise ───────────────────────────────────────────────
 const applyStaticRect = (
   ctx: CanvasRenderingContext2D,
-  x: number, y: number, width: number, height: number, strength: number,
+  x: number, y: number, width: number, height: number, strength: number, options?: EffectRenderOptions,
 ) => {
   const { x: rx, y: ry, width: rw, height: rh } = normalizeRect(x, y, width, height, ctx.canvas.width, ctx.canvas.height)
-  const imageData = ctx.getImageData(rx, ry, rw, rh)
+  const imageData = ctx.createImageData(rw, rh)
   const { data } = imageData
-  const mix = 0.4 + strength * 0.6
+  const rng = seededRandom(effectSeed('static', rx, ry, rw, rh, options))
   for (let i = 0; i < data.length; i += 4) {
-    const v = Math.random() > 0.5 ? 255 : 0
-    data[i]     = clamp(data[i]     * (1 - mix) + v * mix, 0, 255)
-    data[i + 1] = clamp(data[i + 1] * (1 - mix) + v * mix, 0, 255)
-    data[i + 2] = clamp(data[i + 2] * (1 - mix) + v * mix, 0, 255)
+    const v = rng() > 0.5 ? 255 : 0
+    data[i] = v
+    data[i + 1] = v
+    data[i + 2] = v
+    data[i + 3] = 255
   }
-  ctx.putImageData(imageData, rx, ry)
+  applyRectFeatherMask(data, rw, rh, strength)
+  scratchA.width = rw
+  scratchA.height = rh
+  getContext2d(scratchA).putImageData(imageData, 0, 0)
+  ctx.drawImage(scratchA, rx, ry)
+}
+
+const applyCustomImageRect = (
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  strength = 0.5,
+  options?: EffectRenderOptions,
+) => {
+  const { x: rx, y: ry, width: rw, height: rh } = normalizeRect(x, y, width, height, ctx.canvas.width, ctx.canvas.height)
+  const image = resolveCustomImage(options)
+  if (!image) {
+    applyPixelateRect(ctx, rx, ry, rw, rh, 0.75)
+    return
+  }
+  const s = Number.isFinite(strength) ? clamp(strength, 0.05, 1) : 0.5
+  ctx.save()
+  ctx.globalAlpha = 0.45 + s * 0.55
+  drawImageCover(ctx, image, rx, ry, rw, rh)
+  ctx.restore()
 }
 
 // ── Color adjustments — LUT-based for maximum performance ────────
@@ -516,13 +931,14 @@ export const applyEffectRect = (
   height: number,
   strength: number,
   emoji: string,
+  options?: EffectRenderOptions,
 ) => {
   switch (effect) {
     case 'blur':
       applyBlurRect(ctx, x, y, width, height, strength)
       return
     case 'zoom-blur':
-      applyZoomBlurRect(ctx, x, y, width, height, strength)
+      applyZoomBlurRect(ctx, x, y, width, height, strength, options)
       return
     case 'pixelate':
       applyPixelateRect(ctx, x, y, width, height, strength)
@@ -531,25 +947,28 @@ export const applyEffectRect = (
       applyBlackoutRect(ctx, x, y, width, height, strength)
       return
     case 'emoji':
-      drawEmojiBlock(ctx, x, y, width, height, emoji)
+      drawEmojiBlock(ctx, x, y, width, height, emoji, strength)
       return
     case 'noise':
-      applyNoiseRect(ctx, x, y, width, height, strength)
+      applyNoiseRect(ctx, x, y, width, height, strength, options)
       return
     case 'glitch':
-      applyGlitchRect(ctx, x, y, width, height, strength)
+      applyZoneGlitchRect(ctx, x, y, width, height, strength, options)
       return
     case 'silhouette':
-      applySilhouetteRect(ctx, x, y, width, height)
+      applySilhouetteRect(ctx, x, y, width, height, strength, options)
       return
     case 'contour':
-      applyContourRect(ctx, x, y, width, height)
+      applyContourRect(ctx, x, y, width, height, strength, options)
       return
     case 'thermal':
-      applyThermalRect(ctx, x, y, width, height)
+      applyThermalRect(ctx, x, y, width, height, strength, options)
       return
     case 'static':
-      applyStaticRect(ctx, x, y, width, height, strength)
+      applyStaticRect(ctx, x, y, width, height, strength, options)
+      return
+    case 'custom-image':
+      applyCustomImageRect(ctx, x, y, width, height, strength, options)
       return
     default:
       return
@@ -580,6 +999,7 @@ export const applyEffectBrush = (
   radius: number,
   strength: number,
   emoji: string,
+  options?: EffectRenderOptions,
 ) => {
   const r = Math.max(4, Math.round(radius))
   const diameter = r * 2
@@ -617,19 +1037,26 @@ export const applyEffectBrush = (
     bdCtx.arc(lcx, lcy, r, 0, Math.PI * 2)
     bdCtx.fill()
   } else if (effect === 'emoji') {
-    const size = Math.max(20, r * 1.35)
+    const size = Math.max(16, r * (0.85 + strength * 0.95))
     bdCtx.font = `${Math.round(size)}px system-ui, sans-serif`
     bdCtx.textAlign = 'center'
     bdCtx.textBaseline = 'middle'
     bdCtx.fillText(emoji, lcx, lcy)
+  } else if (effect === 'custom-image') {
+    const image = resolveCustomImage(options)
+    if (image) {
+      drawImageCover(bdCtx, image, 0, 0, pw, ph)
+    } else {
+      applyEffectRect(bdCtx, 'pixelate', 0, 0, pw, ph, strength, emoji)
+    }
   } else {
     // applyEffectRect may clobber scratchA/scratchB internally (e.g. pixelate uses scratchB).
     // That is fine — brushSrc/brushDst are separate and unaffected.
-    applyEffectRect(bdCtx, effect, 0, 0, pw, ph, strength, emoji)
+    applyEffectRect(bdCtx, effect, 0, 0, pw, ph, strength, emoji, options)
   }
 
   // ── 3. Feathered circle mask on brushDst (destination-in) ─────
-  const innerR = r * FEATHER_CORE
+  const innerR = r * (effect === 'blackout' || effect === 'static' || effect === 'custom-image' ? featherCoreFor(strength) : FEATHER_CORE)
   const grad = bdCtx.createRadialGradient(lcx, lcy, innerR, lcx, lcy, r)
   grad.addColorStop(0, 'rgba(0,0,0,1)')
   grad.addColorStop(1, 'rgba(0,0,0,0)')
@@ -640,7 +1067,7 @@ export const applyEffectBrush = (
 
   // ── 4. Composite brushDst back onto the work canvas ──────────
   ctx.save()
-  ctx.globalAlpha = effect === 'blackout' ? 0.55 + strength * 0.45 : 1.0
+  ctx.globalAlpha = 1.0
   ctx.drawImage(brushDst, 0, 0, pw, ph, x0, y0, pw, ph)
   ctx.restore()
 }
@@ -653,31 +1080,103 @@ export const applyEffectBrush = (
  * overlayCtx is expected to be a full-canvas 2D context that is cleared each frame.
  * srcCanvas is the work canvas (source pixels for the effect).
  */
+export interface BrushPreviewTransform {
+  scale: number
+  drawX: number
+  drawY: number
+  drawWidth: number
+  drawHeight: number
+  rotation?: number
+  centerX?: number
+  centerY?: number
+}
+
+const displayPointToImage = (
+  canvasX: number,
+  canvasY: number,
+  srcW: number,
+  srcH: number,
+  t: BrushPreviewTransform,
+) => {
+  const cx = t.centerX ?? t.drawX + t.drawWidth / 2
+  const cy = t.centerY ?? t.drawY + t.drawHeight / 2
+  let lx = canvasX - cx
+  let ly = canvasY - cy
+  const rot = t.rotation ?? 0
+  if (Math.abs(rot) > 0.001) {
+    const cos = Math.cos(-rot)
+    const sin = Math.sin(-rot)
+    const rx = lx * cos - ly * sin
+    const ry = lx * sin + ly * cos
+    lx = rx
+    ly = ry
+  }
+  const normX = (lx + t.drawWidth / 2) / t.drawWidth
+  const normY = (ly + t.drawHeight / 2) / t.drawHeight
+  return { x: normX * srcW, y: normY * srcH }
+}
+
+const imagePatchToDisplay = (
+  x0: number,
+  y0: number,
+  pw: number,
+  ph: number,
+  srcW: number,
+  srcH: number,
+  t: BrushPreviewTransform,
+) => {
+  const toLocal = (nx: number, ny: number) => ({
+    lx: -t.drawWidth / 2 + nx * t.drawWidth,
+    ly: -t.drawHeight / 2 + ny * t.drawHeight,
+  })
+  const toCanvas = (lx: number, ly: number) => {
+    const cx = t.centerX ?? t.drawX + t.drawWidth / 2
+    const cy = t.centerY ?? t.drawY + t.drawHeight / 2
+    const rot = t.rotation ?? 0
+    if (Math.abs(rot) < 0.001) return { x: cx + lx, y: cy + ly }
+    const cos = Math.cos(rot)
+    const sin = Math.sin(rot)
+    return { x: cx + lx * cos - ly * sin, y: cy + lx * sin + ly * cos }
+  }
+  const corners = [
+    toLocal(x0 / srcW, y0 / srcH),
+    toLocal((x0 + pw) / srcW, y0 / srcH),
+    toLocal(x0 / srcW, (y0 + ph) / srcH),
+    toLocal((x0 + pw) / srcW, (y0 + ph) / srcH),
+  ].map(({ lx, ly }) => toCanvas(lx, ly))
+  const xs = corners.map((c) => c.x)
+  const ys = corners.map((c) => c.y)
+  return {
+    x: Math.min(...xs),
+    y: Math.min(...ys),
+    width: Math.max(...xs) - Math.min(...xs),
+    height: Math.max(...ys) - Math.min(...ys),
+  }
+}
+
 export const previewEffectBrush = (
   overlayCtx: CanvasRenderingContext2D,
   srcCanvas: HTMLCanvasElement,
   effect: AnonymizeEffectId,
-  // These are *display-canvas* coordinates (already scaled)
   canvasCenterX: number,
   canvasCenterY: number,
   canvasRadius: number,
   strength: number,
   emoji: string,
-  // Transform: maps display-canvas pixel → srcCanvas pixel
-  scale: number,
-  drawX: number,
-  drawY: number,
+  transform: BrushPreviewTransform,
+  options?: EffectRenderOptions,
 ) => {
-  // Convert display coords to srcCanvas coords
-  const imgCX = (canvasCenterX - drawX) / scale
-  const imgCY = (canvasCenterY - drawY) / scale
-  const imgR  = canvasRadius / scale
+  const cw = srcCanvas.width
+  const ch = srcCanvas.height
+  const imgPoint = displayPointToImage(canvasCenterX, canvasCenterY, cw, ch, transform)
+  const imgCX = imgPoint.x
+  const imgCY = imgPoint.y
+  const imgR = canvasRadius / transform.scale
 
   // Render onto a tiny offscreen using the real brush logic,
   // then composite onto the overlay at the display position with reduced opacity
   const r = Math.max(4, Math.round(imgR))
   const diameter = r * 2
-  const cw = srcCanvas.width; const ch = srcCanvas.height
   const bx = Math.round(imgCX - r); const by = Math.round(imgCY - r)
   const x0 = Math.max(0, bx); const y0 = Math.max(0, by)
   const x1 = Math.min(cw, bx + diameter); const y1 = Math.min(ch, by + diameter)
@@ -696,17 +1195,24 @@ export const previewEffectBrush = (
   if (effect === 'blackout') {
     tCtx.fillStyle = '#000'; tCtx.beginPath(); tCtx.arc(lcx, lcy, r, 0, Math.PI * 2); tCtx.fill()
   } else if (effect === 'emoji') {
-    const size = Math.max(20, r * 1.35)
+    const size = Math.max(16, r * (0.85 + strength * 0.95))
     tCtx.font = `${Math.round(size)}px system-ui, sans-serif`
     tCtx.textAlign = 'center'; tCtx.textBaseline = 'middle'
     tCtx.fillText(emoji, lcx, lcy)
+  } else if (effect === 'custom-image') {
+    const image = resolveCustomImage(options)
+    if (image) {
+      drawImageCover(tCtx, image, 0, 0, pw, ph)
+    } else {
+      applyEffectRect(tCtx, 'pixelate', 0, 0, pw, ph, strength, emoji)
+    }
   } else {
     // Use local patch coords (0,0,pw,ph) to avoid clamping to a tiny area
-    applyEffectRect(tCtx, effect, 0, 0, pw, ph, strength, emoji)
+    applyEffectRect(tCtx, effect, 0, 0, pw, ph, strength, emoji, options)
   }
 
   // Feather mask
-  const innerR = r * FEATHER_CORE
+  const innerR = r * (effect === 'blackout' || effect === 'static' || effect === 'custom-image' ? featherCoreFor(strength) : FEATHER_CORE)
   const grad = tCtx.createRadialGradient(lcx, lcy, innerR, lcx, lcy, r)
   grad.addColorStop(0, 'rgba(0,0,0,1)'); grad.addColorStop(1, 'rgba(0,0,0,0)')
   tCtx.globalCompositeOperation = 'destination-in'
@@ -714,11 +1220,10 @@ export const previewEffectBrush = (
   tCtx.globalCompositeOperation = 'source-over'
 
   // Draw to overlay at 70% opacity so original is still visible
-  const dx = drawX + x0 * scale; const dy = drawY + y0 * scale
-  const dw = pw * scale; const dh = ph * scale
+  const frame = imagePatchToDisplay(x0, y0, pw, ph, cw, ch, transform)
   overlayCtx.save()
   overlayCtx.globalAlpha = 0.72
-  overlayCtx.drawImage(tmp, dx, dy, dw, dh)
+  overlayCtx.drawImage(tmp, frame.x, frame.y, frame.width, frame.height)
   overlayCtx.restore()
 }
 

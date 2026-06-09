@@ -1,0 +1,325 @@
+/* Desktop v2 — shared visual language with mobile redesign */
+.app-shell-desktop-v2 {
+  --desktop-accent: #00ff78;
+  --desktop-bg: #000;
+  --desktop-panel: rgba(8, 8, 8, 0.92);
+  background: var(--desktop-bg);
+  color: #f5f5f5;
+  /* Flex column (not the default app-shell grid) so the welcome screen works
+     without a topbar — grid auto-placement was squeezing .workspace into the
+     reserved 44px header row when no .topbar was rendered. */
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.app-shell-desktop-v2 .workspace {
+  flex: 1 1 0;
+  min-height: 0;
+  width: 100%;
+}
+
+.app-shell-desktop-v2 .topbar {
+  flex-shrink: 0;
+  background: rgba(0, 0, 0, 0.88);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(12px);
+}
+
+[data-theme='light'] .app-shell-desktop-v2 .topbar {
+  background: rgba(255, 255, 255, 0.94);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-primary);
+}
+
+[data-theme='light'] .app-shell-desktop-v2 .topbar .theme-toggle-icon {
+  color: var(--text-primary);
+}
+
+[data-theme='light'] .app-shell-desktop-v2 .topbar .brand-chevron {
+  color: var(--text-muted);
+}
+
+[data-theme='light'] .app-shell-desktop-v2 .action-toolbar {
+  background: #ffffff;
+  border-bottom-color: var(--border);
+}
+
+[data-theme='light'] .app-shell-desktop-v2 .tool-strip {
+  background: #ffffff;
+  border-right-color: var(--border);
+}
+
+[data-theme='light'] .app-shell-desktop-v2 .topbar-tagline {
+  color: var(--text-secondary);
+}
+
+[data-theme='light'] .app-shell-desktop-v2 .topbar-github-link {
+  color: var(--text-secondary);
+}
+
+[data-theme='light'] .app-shell-desktop-v2 .topbar-demo-btn {
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+  background: #ffffff;
+}
+
+[data-theme='light'] .app-shell-desktop-v2 .topbar-live-btn {
+  color: #0a7a42;
+  border-color: rgba(10, 122, 66, 0.45);
+  background: rgba(10, 122, 66, 0.08);
+}
+
+[data-theme='light'] .app-shell-desktop-v2 .brand:hover {
+  background: var(--surface-hover);
+  border-color: var(--border);
+}
+
+[data-theme='light'] .app-shell-desktop-v2 .batch-panel {
+  background: #ffffff;
+  border-right-color: var(--border);
+}
+
+[data-theme='light'] .app-shell-desktop-v2 .sidebar-topbar {
+  background: #ffffff;
+  border-bottom-color: var(--border);
+}
+
+.app-shell-desktop-v2 .topbar-brand img {
+  height: 22px;
+  width: auto;
+}
+
+.app-shell-desktop-v2 .welcome-screen {
+  display: none;
+}
+
+.desktop-home-v2 {
+  position: relative;
+  flex: 1;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  padding: 2rem 2.5rem 3rem;
+  background: #000;
+  overflow: hidden;
+}
+
+.desktop-home-v2-header {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.25rem 2rem;
+}
+
+.desktop-home-v2-w3pn {
+  height: 28px;
+  width: auto;
+}
+
+.desktop-home-v2-about-link {
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.desktop-home-v2-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  max-width: 720px;
+  text-align: center;
+}
+
+.desktop-home-v2-spiral {
+  width: min(320px, 38vw);
+}
+
+.desktop-home-v2-wordmark {
+  width: min(210px, 26vw);
+  height: auto;
+  margin-top: 12px;
+}
+
+.desktop-home-v2-paste-hint {
+  margin: 0.5rem 0 0;
+  font-size: 0.82rem;
+  color: rgba(255, 255, 255, 0.55);
+  line-height: 1.5;
+}
+
+.desktop-home-v2-paste-hint kbd {
+  display: inline-block;
+  padding: 0.1rem 0.45rem;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 0.78rem;
+}
+
+.desktop-home-v2-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 2rem;
+}
+
+.desktop-home-v2-actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  justify-content: center;
+}
+
+.desktop-home-v2-btn {
+  min-width: 220px;
+  padding: 0.85rem 1.4rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.desktop-home-v2-btn--primary {
+  border: none;
+  background: var(--desktop-accent);
+  color: #000;
+}
+
+.desktop-home-v2-btn--secondary {
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: transparent;
+  color: #fff;
+}
+
+.desktop-home-v2-btn--ghost {
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.55);
+  min-width: auto;
+  letter-spacing: 0.08em;
+}
+
+.desktop-home-v2-drop-overlay {
+  position: absolute;
+  inset: 1rem;
+  border: 2px dashed var(--desktop-accent);
+  border-radius: 16px;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 255, 120, 0.06);
+  font-size: 1.1rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.desktop-live-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 12000;
+  background: #000;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  /* Live floating controls use bottom: calc(var(--mobile-bottom-toolbar-h) + …).
+     That token is normally set on .mobile-shell; without it the calc is invalid
+     and the capture row sticks near the top instead of above the bottom toolbar. */
+  --mobile-bottom-toolbar-h: 128px;
+  --mobile-glass-bg: rgba(8, 8, 8, 0.52);
+  --mobile-glass-border: rgba(255, 255, 255, 0.1);
+  --mobile-glass-blur: 20px;
+}
+
+.desktop-live-overlay .mobile-live {
+  flex: 1 1 0;
+  min-height: 0;
+  height: 100%;
+}
+
+.desktop-live-overlay .mobile-live-floating-controls {
+  bottom: calc(var(--mobile-bottom-toolbar-h, 128px) + 12px + env(safe-area-inset-bottom, 0));
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* Desktop live: bottom toolbar (not side rail — mobile-landscape rules must not apply). */
+.desktop-live-overlay .mobile-shell-bottom,
+.desktop-live-overlay .mobile-live-toolbar-wrap {
+  display: block !important;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  top: auto;
+  width: auto;
+  height: auto;
+  z-index: 30;
+  pointer-events: none;
+}
+
+.desktop-live-overlay .mobile-live-toolbar-wrap > * {
+  pointer-events: auto;
+}
+
+.desktop-live-overlay .mobile-live--cover .mobile-topbar-v2 {
+  background: var(--mobile-glass-bg);
+  backdrop-filter: blur(var(--mobile-glass-blur));
+  -webkit-backdrop-filter: blur(var(--mobile-glass-blur));
+  border-bottom: 1px solid var(--mobile-glass-border);
+}
+
+.desktop-live-overlay .mobile-bottom-toolbar {
+  height: auto;
+  border-top: 1px solid var(--mobile-glass-border);
+  border-left: none;
+  flex-direction: column;
+  background: var(--mobile-glass-bg);
+  backdrop-filter: blur(var(--mobile-glass-blur));
+  -webkit-backdrop-filter: blur(var(--mobile-glass-blur));
+}
+
+.desktop-live-overlay .mobile-tool-categories {
+  flex-direction: row;
+}
+
+.app-shell-desktop-v2 .ts-custom-image-controls {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.app-shell-desktop-v2 .ts-custom-image-label {
+  font-size: 0.62rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.app-shell-desktop-v2 .ts-custom-image-select {
+  width: 100%;
+}
+
+.app-shell-desktop-v2 .ts-custom-image-count {
+  font-size: 0.62rem;
+  color: var(--text-muted);
+}

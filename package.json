@@ -19,7 +19,11 @@
     "electron:build:all": "npm run build && electron-builder -mwl",
     "desktop:mac": "npm run build && electron-builder --mac",
     "desktop:win": "npm run build && electron-builder --win",
-    "desktop:linux": "npm run build && electron-builder --linux"
+    "desktop:linux": "npm run build && electron-builder --linux",
+    "icons:download": "node scripts/download-preset-icons.mjs --count=100",
+    "icons:download:new": "node scripts/download-preset-icons.mjs --only=aavegotchi,celebrities --count=100",
+    "icons:normalize": "node scripts/download-preset-icons.mjs --normalize-existing",
+    "icons:generate": "node scripts/generate-test-icons.mjs"
   },
   "build": {
     "appId": "info.web3privacy.anonymizer",
@@ -30,8 +34,6 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
-      "server/main.py",
-      "server/requirements.txt",
       "public/fonts/**/*",
       "public/models/**/*",
       "public/vendor/**/*"
@@ -76,6 +78,7 @@
   },
   "dependencies": {
     "@9am/img-halftone": "^1.0.3",
+    "@fontsource-variable/archivo": "^5.2.8",
     "browser-image-compression": "^2.0.2",
     "file-saver": "^2.0.5",
     "imagetracerjs": "^1.2.6",
@@ -88,6 +91,7 @@
     "webm-duration-fix": "^1.0.4"
   },
   "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2",
     "@types/file-saver": "^2.0.7",
     "@types/pica": "^9.0.5",
     "@types/react": "^18.2.55",
@@ -100,6 +104,7 @@
     "eslint": "^8.56.0",
     "eslint-plugin-react-hooks": "^4.6.0",
     "eslint-plugin-react-refresh": "^0.4.5",
+    "sharp": "^0.34.5",
     "typescript": "^5.2.2",
     "vite": "^5.1.0"
   }

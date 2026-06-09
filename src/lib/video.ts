@@ -1,13 +1,17 @@
-import { detectFaces, getForceLocal, setForceLocal } from './detector'
+import { detectFaces } from './detector'
 import { applyEffectRect, pickRandomEmoji } from './effects'
-import type { AnonymizeEffectId, Zone } from '../types'
+import type { EffectRenderOptions } from '../types'
+import type { AnonymizeEffectId, CustomImageAsset, CustomImageSource, Zone } from '../types'
 import fixWebmDuration from 'webm-duration-fix'
 
 export interface VideoProcessingOptions {
   effect: AnonymizeEffectId
   strength: number
   emoji: string
-  forceLocal?: boolean
+  /** When set, every detected face uses this exact emoji instead of random unique ones. */
+  fixedEmoji?: string
+  customImages?: CustomImageAsset[]
+  customImageSource?: CustomImageSource
   outputFormat?: VideoExportFormatId
   frameOverrides?: VideoFrameOverride[]
   timedZones?: VideoTimedZone[]
@@ -238,7 +242,14 @@ function videoZoneStrength(zone: Zone, strength: number): number {
   return Math.min(1, base)
 }
 
-function drawZones(ctx: CanvasRenderingContext2D, zones: Zone[], w: number, h: number, strength: number): void {
+function drawZones(
+  ctx: CanvasRenderingContext2D,
+  zones: Zone[],
+  w: number,
+  h: number,
+  strength: number,
+  effectOptions?: EffectRenderOptions,
+): void {
   for (const zone of zones) {
     applyEffectRect(
       ctx,
@@ -249,6 +260,11 @@ function drawZones(ctx: CanvasRenderingContext2D, zones: Zone[], w: number, h: n
       zone.height * h,
       videoZoneStrength(zone, strength),
       zone.emoji,
+      {
+        ...effectOptions,
+        zoneId: zone.id,
+        customImageAssetId: zone.customImageAssetId,
+      },
     )
   }
 }
@@ -409,16 +425,17 @@ function pushVideoKeyframe(timeline: VideoTrackKeyframe[], timeSec: number, zone
   }
 }
 
-function buildFrameSampleTimes(duration: number, fps: number): number[] {
-  const frameDuration = 1 / Math.max(1, fps)
-  const totalFrames = Math.max(1, Math.ceil(duration * fps))
-  const lastSampleTime = Math.max(0, duration - frameDuration)
+const DETECTION_SAMPLE_FPS = 8
+
+function buildFrameSampleTimes(duration: number, _fps: number): number[] {
+  const sampleStep = 1 / DETECTION_SAMPLE_FPS
+  const lastSampleTime = Math.max(0, duration - sampleStep)
   const sampleTimes: number[] = []
 
-  for (let frame = 0; frame < totalFrames; frame++) {
-    const timeSec = Math.min(lastSampleTime, frame * frameDuration)
+  for (let timeSec = 0; timeSec <= lastSampleTime + 0.0001; timeSec += sampleStep) {
+    const clamped = Math.min(lastSampleTime, timeSec)
     const previous = sampleTimes[sampleTimes.length - 1]
-    if (previous == null || timeSec > previous + 0.0005) sampleTimes.push(timeSec)
+    if (previous == null || clamped > previous + 0.0005) sampleTimes.push(clamped)
   }
 
   if (sampleTimes.length === 0) sampleTimes.push(0)
@@ -808,11 +825,18 @@ export async function getVideoMetadata(videoBlob: Blob): Promise<VideoMetadata> 
 
     await waitForVideoEvent(video, 'loadedmetadata')
 
+    let fps = FALLBACK_FPS
+    try {
+      fps = await estimateVideoFps(video)
+    } catch {
+      fps = FALLBACK_FPS
+    }
+
     return {
       width: video.videoWidth,
       height: video.videoHeight,
       duration: video.duration,
-      fps: FALLBACK_FPS,
+      fps,
     }
   } finally {
     URL.revokeObjectURL(url)
@@ -822,16 +846,12 @@ export async function getVideoMetadata(videoBlob: Blob): Promise<VideoMetadata> 
 /**
  * Process video as a continuous stream so the output timing stays 1:1 with the source.
  * Audio is preserved by muxing the original audio track with the processed canvas video track.
- * Rendering and final encoding always stay in the browser. In Server mode only
- * sampled detection frames may be sent to the localhost YuNet backend.
+ * All detection and rendering stay in the browser (local YuNet WASM).
  */
 export async function processVideo(
   videoBlob: Blob,
   options: VideoProcessingOptions,
 ): Promise<Blob> {
-  const wasForceLocal = getForceLocal()
-  if (options.forceLocal !== false) setForceLocal(true)
-
   const recorderFormat = resolveRecorderFormat(options.outputFormat)
   if (!recorderFormat?.mimeType) {
     throw new Error('No supported browser video encoder found for the selected format.')
@@ -893,6 +913,7 @@ export async function processVideo(
     const usedTrackEmojis = new Set<string>()
     const nextTrackId = () => `vt-${++trackSeq}`
     const nextTrackEmoji = () => {
+      if (options.fixedEmoji) return options.fixedEmoji
       for (let i = 0; i < 24; i++) {
         const emoji = pickRandomEmoji()
         if (!usedTrackEmojis.has(emoji)) {
@@ -952,6 +973,11 @@ export async function processVideo(
     await waitForSeek(video, 0)
     options.onPhase?.('rendering')
 
+    const effectOptions: EffectRenderOptions = {
+      customImages: options.customImages,
+      customImageSource: options.customImageSource,
+    }
+
     const renderProcessedFrame = (mediaTime: number, sourceFrame?: CanvasImageSource) => {
       const override = overrideBitmaps.find((item) => Math.abs(item.timeSec - mediaTime) <= overrideWindowSec)
       ctx.clearRect(0, 0, w, h)
@@ -960,11 +986,12 @@ export async function processVideo(
       } else {
         ctx.drawImage(sourceFrame ?? video, 0, 0, w, h)
         const frameIndex = clamp(Math.round(mediaTime * fps), 0, frameZones.length - 1)
-        drawZones(ctx, frameZones[frameIndex] ?? [], w, h, options.strength)
+        drawZones(ctx, frameZones[frameIndex] ?? [], w, h, options.strength, effectOptions)
       }
     }
 
     sourceStream = getCaptureStream(video)
+    const audioSourceStream = sourceStream
     const webCodecsPipeline = getWebCodecsVideoPipeline()
     const sourceVideoTrack = sourceStream?.getVideoTracks()[0] ?? null
     const useWebCodecsRenderer = Boolean(webCodecsPipeline && sourceVideoTrack)
@@ -990,8 +1017,15 @@ export async function processVideo(
             if (options.abortSignal?.aborted) throw new DOMException('Aborted', 'AbortError')
             const { value: frame, done } = await reader.read()
             if (done || !frame) break
-            const mediaTime = Math.min(duration, processedFrames / fps)
-            const timestamp = Math.round(mediaTime * 1_000_000)
+            const frameTimestamp = 'timestamp' in frame && typeof frame.timestamp === 'number'
+              ? frame.timestamp / 1_000_000
+              : null
+            const mediaTime = frameTimestamp != null
+              ? Math.min(duration, frameTimestamp)
+              : Math.min(duration, processedFrames / fps)
+            const timestamp = frameTimestamp != null
+              ? Math.round(frameTimestamp * 1_000_000)
+              : Math.round(mediaTime * 1_000_000)
             renderProcessedFrame(mediaTime, frame as unknown as CanvasImageSource)
             const outputFrame = new webCodecsPipeline.VideoFrame(canvas, {
               timestamp,
@@ -1018,6 +1052,9 @@ export async function processVideo(
       composedStream.addTrack(capture.videoTrack)
     }
     sourceStream?.getAudioTracks().forEach((track) => composedStream.addTrack(track))
+    if (!sourceStream?.getAudioTracks().length && audioSourceStream) {
+      audioSourceStream.getAudioTracks().forEach((track) => composedStream.addTrack(track))
+    }
 
     recorder = new MediaRecorder(composedStream, {
       mimeType: recorderFormat.mimeType,
@@ -1110,7 +1147,6 @@ export async function processVideo(
     canvasStream?.getTracks().forEach((track) => track.stop())
     overrideBitmaps.forEach((item) => item.bitmap.close())
     if (hiddenVideo?.parentNode) hiddenVideo.parentNode.removeChild(hiddenVideo)
-    if (!wasForceLocal && options.forceLocal !== false) setForceLocal(false)
   }
 }
 

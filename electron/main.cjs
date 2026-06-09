@@ -1,9 +1,7 @@
 const { app, BrowserWindow, Menu, ipcMain } = require('electron')
 const path = require('path')
-const { execFile, spawn } = require('child_process')
 
 let mainWindow
-let backendProcess = null
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -77,101 +75,6 @@ function createWindow() {
   mainWindow.on('closed', () => { mainWindow = null })
 }
 
-// Find Python executable
-function findPython() {
-  return new Promise((resolve) => {
-    const candidates = process.platform === 'win32'
-      ? ['python', 'python3', 'py']
-      : ['python3', 'python']
-    let idx = 0
-    function tryNext() {
-      if (idx >= candidates.length) return resolve(null)
-      const cmd = candidates[idx++]
-      execFile(cmd, ['--version'], { timeout: 5000 }, (err, stdout) => {
-        if (!err && stdout) {
-          const ver = stdout.trim()
-          resolve({ cmd, version: ver })
-        } else {
-          tryNext()
-        }
-      })
-    }
-    tryNext()
-  })
-}
-
-// IPC: Check Python availability
-ipcMain.handle('backend:check-python', async () => {
-  const result = await findPython()
-  return result // { cmd, version } or null
-})
-
-// IPC: Install Python dependencies
-ipcMain.handle('backend:install-deps', async (_event) => {
-  const python = await findPython()
-  if (!python) return { ok: false, message: 'Python not found on this system.' }
-
-  const serverDir = path.join(__dirname, '..', 'server')
-  const reqFile = path.join(serverDir, 'requirements.txt')
-
-  return new Promise((resolve) => {
-    execFile(python.cmd, ['-m', 'pip', 'install', '-r', reqFile], {
-      cwd: serverDir,
-      timeout: 300_000,
-    }, (err, stdout, stderr) => {
-      if (err) {
-        resolve({ ok: false, message: `Install failed: ${err.message}`, stderr })
-      } else {
-        resolve({ ok: true, message: 'All dependencies installed successfully.', stdout })
-      }
-    })
-  })
-})
-
-// IPC: Start the Python backend server
-ipcMain.handle('backend:start-server', async () => {
-  if (backendProcess) return { ok: true, message: 'Server already running.' }
-
-  const python = await findPython()
-  if (!python) return { ok: false, message: 'Python not found.' }
-
-  const serverDir = path.join(__dirname, '..', 'server')
-
-  return new Promise((resolve) => {
-    backendProcess = spawn(python.cmd, ['main.py'], {
-      cwd: serverDir,
-      stdio: 'pipe',
-    })
-
-    let started = false
-    const timeout = setTimeout(() => {
-      if (!started) resolve({ ok: true, message: 'Server starting…' })
-      started = true
-    }, 3000)
-
-    backendProcess.stdout.on('data', (data) => {
-      const msg = data.toString()
-      if (msg.includes('Uvicorn running') && !started) {
-        started = true
-        clearTimeout(timeout)
-        resolve({ ok: true, message: 'Server started on http://127.0.0.1:7865' })
-      }
-    })
-
-    backendProcess.on('error', (err) => {
-      backendProcess = null
-      if (!started) {
-        started = true
-        clearTimeout(timeout)
-        resolve({ ok: false, message: `Failed to start: ${err.message}` })
-      }
-    })
-
-    backendProcess.on('exit', () => { backendProcess = null })
-  })
-})
-
-// IPC: Check if running in Electron
 ipcMain.handle('app:is-electron', () => true)
 
 app.whenReady().then(createWindow)
@@ -182,11 +85,4 @@ app.on('window-all-closed', () => {
 
 app.on('activate', () => {
   if (mainWindow === null) createWindow()
-})
-
-app.on('before-quit', () => {
-  if (backendProcess) {
-    backendProcess.kill()
-    backendProcess = null
-  }
 })

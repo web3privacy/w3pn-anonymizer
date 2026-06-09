@@ -1,51 +1,42 @@
 /**
- * Face detection orchestrator.
+ * Face detection orchestrator — YuNet via ONNX Runtime Web (local WASM only).
  *
- * YuNet (OpenCV Zoo `face_detection_yunet_2023mar.onnx`) is the only active
- * detector in both processing modes:
- *   1. `backend` uses the localhost Python/OpenCV runtime
- *   2. `yunet-wasm` uses the same ONNX weights directly in the browser
+ * Model: face_detection_yunet_2023mar.onnx
  */
 
 import type { DetectorStatus, FaceBox } from '../types'
-import { initYuNet, isYuNetReady, detectYuNet, disposeYuNet } from './yunet-wasm'
+import { initYuNet, isYuNetReady, detectYuNet, disposeYuNet, setYuNetLoadProgressCallback, type DetectorLoadProgress } from './yunet-wasm'
 
-export type DetectorMode = 'backend' | 'yunet-wasm' | 'unavailable'
+export type { DetectorLoadProgress }
+
+// Capture init download progress as early as module load (before React mounts)
+// so the UI can render an accurate "X / Y MB" even when preload started first.
+let latestLoadProgress: DetectorLoadProgress | null = null
+let appLoadProgressCb: ((p: DetectorLoadProgress) => void) | null = null
+setYuNetLoadProgressCallback((p) => {
+  latestLoadProgress = p
+  appLoadProgressCb?.(p)
+})
+
+/** Subscribe to model/WASM byte-download progress during detector init. */
+export const setDetectorLoadProgressCallback = (cb: ((p: DetectorLoadProgress) => void) | null): void => {
+  appLoadProgressCb = cb
+}
+
+export const getDetectorLoadProgress = (): DetectorLoadProgress | null => latestLoadProgress
+
+export type DetectorMode = 'yunet-wasm' | 'unavailable'
 
 export interface ExtendedDetectorStatus extends DetectorStatus {
   mode: DetectorMode
-  backendAvailable: boolean
-  backendDetector: string
 }
 
-export interface DepEntry { pkg: string; label: string; ok: boolean; version: string | null }
-export interface DepsStatus {
-  all_ok: boolean
-  deps: DepEntry[]
-  yunet_model_present: boolean
-  yunet_model_path: string
-  python: string
-  python_executable: string
-}
-
-export interface InstallResult {
-  ok: boolean
-  returncode: number
-  stdout: string
-  stderr: string
-  message: string
-}
-
-const BACKEND_URL = '/api'
-const BACKEND_TIMEOUT_MS = 8_000
-const DETECT_TIMEOUT_MS = 30_000
 const YUNET_TILE_SIZE = 640
 const YUNET_TILE_OVERLAP = 0.25
 const YUNET_MIN_TILE_DIM = 800
 
 let statusCache: ExtendedDetectorStatus | null = null
 let initPromise: Promise<ExtendedDetectorStatus> | null = null
-let forceLocal = false
 
 let onProgress: ((step: string) => void) | null = null
 
@@ -56,14 +47,6 @@ export const setDetectionProgressCallback = (cb: ((step: string) => void) | null
 const reportProgress = (step: string): void => {
   onProgress?.(step)
 }
-
-export const setForceLocal = (value: boolean): void => {
-  forceLocal = value
-  statusCache = null
-  initPromise = null
-}
-
-export const getForceLocal = (): boolean => forceLocal
 
 function iou(a: FaceBox, b: FaceBox): number {
   const x1 = Math.max(a.x, b.x)
@@ -95,20 +78,6 @@ function nms(boxes: FaceBox[], iouThreshold = 0.35): FaceBox[] {
   return kept
 }
 
-async function checkBackend(): Promise<{ ok: boolean; detector: string }> {
-  try {
-    const ctrl = new AbortController()
-    const timer = setTimeout(() => ctrl.abort(), BACKEND_TIMEOUT_MS)
-    const res = await fetch(`${BACKEND_URL}/status`, { signal: ctrl.signal })
-    clearTimeout(timer)
-    if (!res.ok) return { ok: false, detector: 'none' }
-    const data = await res.json() as { ok: boolean; detector: string }
-    return { ok: data.ok, detector: data.detector ?? 'unknown' }
-  } catch {
-    return { ok: false, detector: 'none' }
-  }
-}
-
 export const initializeDetector = async (): Promise<ExtendedDetectorStatus> => {
   if (statusCache) return statusCache
   if (initPromise) return initPromise
@@ -117,25 +86,9 @@ export const initializeDetector = async (): Promise<ExtendedDetectorStatus> => {
     reportProgress('Loading YuNet (WASM)…')
     const yunetOk = await initYuNet()
 
-    if (!forceLocal) {
-      const info = await checkBackend()
-      if (info.ok) {
-        statusCache = {
-          mode: 'backend',
-          backendAvailable: true,
-          backendDetector: info.detector,
-          message: `Python backend — ${info.detector === 'yunet' ? 'OpenCV YuNet' : info.detector}`,
-        }
-        initPromise = null
-        return statusCache
-      }
-    }
-
     if (yunetOk) {
       statusCache = {
         mode: 'yunet-wasm',
-        backendAvailable: false,
-        backendDetector: 'none',
         message: 'YuNet face detector (local WASM)',
       }
       initPromise = null
@@ -144,8 +97,6 @@ export const initializeDetector = async (): Promise<ExtendedDetectorStatus> => {
 
     statusCache = {
       mode: 'unavailable',
-      backendAvailable: false,
-      backendDetector: 'none',
       message: 'YuNet unavailable — check the local ONNX model and WASM runtime.',
     }
     initPromise = null
@@ -155,37 +106,12 @@ export const initializeDetector = async (): Promise<ExtendedDetectorStatus> => {
   return initPromise
 }
 
+/** Start detector/model download as early as possible (safe to call multiple times). */
+export function preloadDetector(): void {
+  void initializeDetector()
+}
+
 export const getDetectorStatus = (): ExtendedDetectorStatus | null => statusCache
-
-export const checkDeps = async (): Promise<DepsStatus | null> => {
-  try {
-    const ctrl = new AbortController()
-    const timer = setTimeout(() => ctrl.abort(), BACKEND_TIMEOUT_MS)
-    const res = await fetch(`${BACKEND_URL}/deps`, { signal: ctrl.signal })
-    clearTimeout(timer)
-    if (!res.ok) return null
-    return await res.json() as DepsStatus
-  } catch {
-    return null
-  }
-}
-
-export const triggerInstall = async (): Promise<InstallResult | null> => {
-  const ctrl = new AbortController()
-  const timer = setTimeout(() => ctrl.abort(), 320_000)
-  try {
-    const res = await fetch(`${BACKEND_URL}/install`, { method: 'POST', signal: ctrl.signal })
-    if (!res.ok) {
-      const text = await res.text().catch(() => res.statusText)
-      return { ok: false, returncode: res.status, stdout: '', stderr: text, message: `Server error: ${res.status}` }
-    }
-    return await res.json() as InstallResult
-  } catch {
-    return null
-  } finally {
-    clearTimeout(timer)
-  }
-}
 
 export const resetDetectorStatus = (): void => {
   statusCache = null
@@ -205,51 +131,19 @@ function toCanvas(source: HTMLCanvasElement | HTMLImageElement | HTMLVideoElemen
   return canvas
 }
 
-function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob> {
-  return new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error('toBlob returned null')), 'image/jpeg', 0.92)
-  })
-}
-
-async function detectViaBackend(canvas: HTMLCanvasElement, robust: boolean): Promise<FaceBox[]> {
-  const blob = await canvasToBlob(canvas)
-  const form = new FormData()
-  form.append('image', blob, 'photo.jpg')
-  form.append('robust', robust ? 'true' : 'false')
-
-  const ctrl = new AbortController()
-  const timer = setTimeout(() => ctrl.abort(), DETECT_TIMEOUT_MS)
-  try {
-    const res = await fetch(`${BACKEND_URL}/detect`, {
-      method: 'POST',
-      body: form,
-      signal: ctrl.signal,
-    })
-    if (!res.ok) throw new Error(`Backend ${res.status}`)
-    const data = await res.json() as {
-      faces?: Array<{ x: number; y: number; width: number; height: number; score: number }>
-    }
-    return (data.faces ?? []).map((face) => ({
-      x: face.x,
-      y: face.y,
-      width: face.width,
-      height: face.height,
-      score: face.score,
-    }))
-  } finally {
-    clearTimeout(timer)
-  }
-}
-
-async function detectViaLocalYuNet(canvas: HTMLCanvasElement, robust: boolean): Promise<FaceBox[]> {
+async function detectViaLocalYuNet(canvas: HTMLCanvasElement, robust: boolean, confidence?: number): Promise<FaceBox[]> {
   if (!isYuNetReady()) return []
 
   const w = canvas.width
   const h = canvas.height
   reportProgress(`Running YuNet on ${w}×${h} image…`)
 
-  const fullThreshold = robust ? 0.40 : 0.50
-  const tileThreshold = robust ? 0.40 : 0.45
+  // A caller-supplied confidence overrides the defaults so the detection
+  // settings drawer can trade sensitivity (more faces) for precision.
+  const fullThreshold = confidence ?? (robust ? 0.40 : 0.50)
+  const tileThreshold = confidence !== undefined
+    ? Math.max(0.2, confidence - 0.05)
+    : (robust ? 0.40 : 0.45)
 
   const allBoxes = await detectYuNet(canvas, fullThreshold)
   if (w > YUNET_MIN_TILE_DIM || h > YUNET_MIN_TILE_DIM || robust) {
@@ -298,24 +192,14 @@ async function detectViaLocalYuNet(canvas: HTMLCanvasElement, robust: boolean): 
 export const detectFaces = async (
   source: HTMLCanvasElement | HTMLImageElement | HTMLVideoElement,
   robust = false,
+  confidence?: number,
 ): Promise<FaceBox[]> => {
   reportProgress('Initializing…')
-  const status = await initializeDetector()
+  await initializeDetector()
   const canvas = toCanvas(source)
 
-  if (status.mode === 'backend' && !forceLocal) {
-    try {
-      reportProgress('Sending to server…')
-      const backendBoxes = await detectViaBackend(canvas, robust)
-      if (backendBoxes.length > 0 || robust) return backendBoxes
-    } catch (err) {
-      console.warn('[detector] Backend detection failed:', err)
-      reportProgress('Server unavailable — switching to local YuNet…')
-    }
-  }
-
   if (isYuNetReady()) {
-    return await detectViaLocalYuNet(canvas, robust)
+    return await detectViaLocalYuNet(canvas, robust, confidence)
   }
 
   return []
