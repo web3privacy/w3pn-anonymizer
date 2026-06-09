@@ -58,7 +58,7 @@ export const MobileTopBar = memo(function MobileTopBar({
 
       <div className="mobile-topbar-v2-center">
         <button className="mobile-topbar-v2-brand" type="button" onClick={onAbout} title="About">
-          <img src="/brand/anonymizer-logo.svg" alt="ANONYMIZER" />
+          <img src="/brand/anonymizer-wordmark.png" alt="ANONYMIZER" />
         </button>
       </div>
 

@@ -40,13 +40,16 @@ export function MobileLiveCameraSettings({
             <h3 className="mobile-live-settings-heading">Source</h3>
             <button
               type="button"
-              className="mobile-live-settings-row"
+              className="mobile-live-settings-row mobile-live-settings-row--switch"
               onClick={onSwitchCamera}
             >
-              <span className="mobile-live-settings-row-label">
-                <Icon name="cameraswitch" size={18} /> Switch camera
+              <span className="mobile-live-settings-row-icon" aria-hidden="true">
+                <Icon name="cameraswitch" size={24} />
               </span>
-              <span className="mobile-live-settings-row-hint">Flip between front and back</span>
+              <span className="mobile-live-settings-row-copy">
+                <span className="mobile-live-settings-row-label">Switch camera</span>
+                <span className="mobile-live-settings-row-hint">Flip between front and back</span>
+              </span>
             </button>
           </section>
         )}

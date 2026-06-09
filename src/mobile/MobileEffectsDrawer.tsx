@@ -59,6 +59,7 @@ function MobileEmojiPickerPanel({ b }: { b: AppMobileBindings }) {
 
 export function MobileEffectsDrawer({ b, liveMode = false }: MobileEffectsDrawerProps) {
   const open = b.mobilePanel === 'tool-effects'
+  const videoEditor = Boolean(b.activePhoto?.isVideo && !liveMode)
   const [subView, setSubView] = useState<EffectsSubView | null>(null)
   const [slideToSub, setSlideToSub] = useState(false)
   const slideTimerRef = useRef<ReturnType<typeof setTimeout>>()
@@ -110,7 +111,7 @@ export function MobileEffectsDrawer({ b, liveMode = false }: MobileEffectsDrawer
 
   const selectEffect = (efId: typeof EFFECTS[number]['id']) => {
     b.setActiveCategory('effects')
-    if (liveMode) {
+    if (liveMode || videoEditor) {
       b.setSelectedEffect(efId)
     } else {
       b.updateSelectedZoneEffect(efId)
@@ -149,6 +150,9 @@ export function MobileEffectsDrawer({ b, liveMode = false }: MobileEffectsDrawer
       <div className="mobile-distort-viewport mobile-effects-viewport">
         <div className={`mobile-distort-panels${slideToSub ? ' show-settings' : ''}`}>
           <div className="mobile-distort-panel mobile-effects-panel-list">
+            {videoEditor && (
+              <p className="mobile-distort-video-hint">Preview updates on each frame. Tap Anonymize to export.</p>
+            )}
             <div className="ts-effect-grid mobile-effect-grid">
               {effectOptions.map((ef) => (
                 <button

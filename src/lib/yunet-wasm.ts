@@ -90,25 +90,50 @@ export async function initYuNet(): Promise<boolean> {
   initPromise = (async () => {
     const base = new URL('.', window.location.href).href
     const modelUrl = `${base}models/face_detection_yunet_2023mar.onnx`
+    const wasmUrl = `${base}onnx/ort-wasm-simd-threaded.wasm`
     ort.env.wasm.wasmPaths = `${base}onnx/`
 
-    // Pre-fetch the model (small, ~227 KB) with byte progress. ORT loads the
-    // ~10 MB WASM runtime itself from wasmPaths and compiles it — that compile
-    // step is the only real "init" cost (no byte progress, browser-cached after).
+    // Pre-fetch model + WASM with combined byte progress. ORT reuses the cached
+    // WASM; session creation / compile is the remaining init step (no bytes).
     let modelBuffer: ArrayBuffer | null = null
+    let modelLoaded = 0
+    let modelTotal = 0
+    let wasmLoaded = 0
+    let wasmTotal = 0
+
+    const reportDownload = () => {
+      const total = modelTotal + wasmTotal
+      const loaded = modelLoaded + wasmLoaded
+      reportLoad({ loaded, total: total > 0 ? total : 0, phase: 'download' })
+    }
+
     try {
-      let loaded = 0
-      let total = 0
       modelBuffer = await fetchWithProgress(modelUrl, (delta, fileTotal) => {
-        loaded += delta
-        if (fileTotal > 0) total = fileTotal
-        reportLoad({ loaded, total, phase: 'download' })
+        modelLoaded += delta
+        if (fileTotal > 0) modelTotal = fileTotal
+        reportDownload()
       })
     } catch {
       modelBuffer = null
     }
 
-    reportLoad({ loaded: 0, total: 0, phase: 'init' })
+    try {
+      await fetchWithProgress(wasmUrl, (delta, fileTotal) => {
+        wasmLoaded += delta
+        if (fileTotal > 0) wasmTotal = fileTotal
+        reportDownload()
+      })
+    } catch {
+      // ORT will attempt its own fetch if the warm-cache prefetch fails.
+    }
+
+    const combinedTotal = modelTotal + wasmTotal
+    const combinedLoaded = modelLoaded + wasmLoaded
+    reportLoad({
+      loaded: combinedTotal > 0 ? combinedLoaded : 0,
+      total: combinedTotal,
+      phase: 'init',
+    })
 
     // Single-thread WASM: reliable and fast to initialize (no SharedArrayBuffer /
     // cross-origin isolation requirement, no worker-spawn step that can hang).
@@ -120,9 +145,13 @@ export async function initYuNet(): Promise<boolean> {
       : ort.InferenceSession.create(modelUrl, { executionProviders: ['wasm'] })
 
     try {
-      console.log('[yunet-wasm] Creating session…', modelUrl)
+      if (import.meta.env.DEV) {
+        console.log('[yunet-wasm] Creating session…', modelUrl)
+      }
       session = await withTimeout(create, 30000, 'ONNX session')
-      console.log('[yunet-wasm] Session ready, inputs:', session.inputNames)
+      if (import.meta.env.DEV) {
+        console.log('[yunet-wasm] Session ready, inputs:', session.inputNames)
+      }
       reportLoad({ loaded: 0, total: 0, phase: 'ready' })
       return true
     } catch (err) {

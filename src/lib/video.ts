@@ -1,8 +1,20 @@
 import { detectFaces } from './detector'
-import { applyEffectRect, pickRandomEmoji } from './effects'
+import {
+  applyDistortPipeline,
+  type DistortEffectId,
+  type DistortParams,
+} from './distort-effects'
+import { applyColorAdjustments, applyEffectRect, isColorAdjNoop, pickRandomEmoji, type PixelShiftType } from './effects'
 import type { EffectRenderOptions } from '../types'
-import type { AnonymizeEffectId, CustomImageAsset, CustomImageSource, Zone } from '../types'
+import type { AnonymizeEffectId, ColorAdjustments, CustomImageAsset, CustomImageSource, Zone } from '../types'
 import fixWebmDuration from 'webm-duration-fix'
+
+export interface VideoDistortOptions {
+  enabled: DistortEffectId[]
+  strengths: Record<DistortEffectId, number>
+  params: DistortParams
+  pixelShiftType: PixelShiftType
+}
 
 export interface VideoProcessingOptions {
   effect: AnonymizeEffectId
@@ -15,8 +27,13 @@ export interface VideoProcessingOptions {
   outputFormat?: VideoExportFormatId
   frameOverrides?: VideoFrameOverride[]
   timedZones?: VideoTimedZone[]
+  /** Global color adjustments applied after anonymization on non-override frames. */
+  colorAdj?: ColorAdjustments
+  /** Global distort filter applied after color adjustments on non-override frames. */
+  distort?: VideoDistortOptions
   onProgress?: (current: number, total: number) => void
   onPhase?: (phase: VideoProcessingPhase) => void
+  onRenderFrame?: (info: { frameIndex: number; totalFrames: number; canvas: HTMLCanvasElement; mediaTime: number }) => void
   abortSignal?: AbortSignal
 }
 
@@ -978,15 +995,34 @@ export async function processVideo(
       customImageSource: options.customImageSource,
     }
 
-    const renderProcessedFrame = (mediaTime: number, sourceFrame?: CanvasImageSource) => {
+    const distortEnabled = (options.distort?.enabled.length ?? 0) > 0
+    const colorAdjEnabled = options.colorAdj != null && !isColorAdjNoop(options.colorAdj)
+
+    const renderProcessedFrame = async (mediaTime: number, sourceFrame?: CanvasImageSource) => {
       const override = overrideBitmaps.find((item) => Math.abs(item.timeSec - mediaTime) <= overrideWindowSec)
       ctx.clearRect(0, 0, w, h)
       if (override) {
         ctx.drawImage(override.bitmap, 0, 0, w, h)
-      } else {
-        ctx.drawImage(sourceFrame ?? video, 0, 0, w, h)
-        const frameIndex = clamp(Math.round(mediaTime * fps), 0, frameZones.length - 1)
-        drawZones(ctx, frameZones[frameIndex] ?? [], w, h, options.strength, effectOptions)
+        return
+      }
+      ctx.drawImage(sourceFrame ?? video, 0, 0, w, h)
+      const frameIndex = clamp(Math.round(mediaTime * fps), 0, frameZones.length - 1)
+      drawZones(ctx, frameZones[frameIndex] ?? [], w, h, options.strength, effectOptions)
+      if (colorAdjEnabled && options.colorAdj) {
+        applyColorAdjustments(ctx, options.colorAdj, canvas)
+      }
+      if (distortEnabled && options.distort) {
+        const frameSeed = clamp(Math.round(mediaTime * fps), 0, Math.max(0, totalFrames - 1))
+        const distorted = await applyDistortPipeline(
+          canvas,
+          options.distort.enabled,
+          options.distort.strengths,
+          options.distort.params,
+          options.distort.pixelShiftType,
+          frameSeed,
+        )
+        ctx.clearRect(0, 0, w, h)
+        ctx.drawImage(distorted, 0, 0, w, h)
       }
     }
 
@@ -1026,7 +1062,9 @@ export async function processVideo(
             const timestamp = frameTimestamp != null
               ? Math.round(frameTimestamp * 1_000_000)
               : Math.round(mediaTime * 1_000_000)
-            renderProcessedFrame(mediaTime, frame as unknown as CanvasImageSource)
+            await renderProcessedFrame(mediaTime, frame as unknown as CanvasImageSource)
+            const currentFrame = Math.min(totalFrames, Math.max(1, Math.round(mediaTime * fps) + 1))
+            options.onRenderFrame?.({ frameIndex: currentFrame, totalFrames, canvas, mediaTime })
             const outputFrame = new webCodecsPipeline.VideoFrame(canvas, {
               timestamp,
               duration: Number.isFinite(frame.duration) ? frame.duration : Math.round(1_000_000 / fps),
@@ -1036,7 +1074,6 @@ export async function processVideo(
             outputFrame.close()
 
             processedFrames += 1
-            const currentFrame = Math.min(totalFrames, Math.max(1, Math.round(mediaTime * fps) + 1))
             options.onProgress?.(sampleTimes.length + totalFrames + currentFrame, totalWork)
           }
         } finally {
@@ -1071,7 +1108,31 @@ export async function processVideo(
       recorder!.onstop = () => resolve()
     })
 
-    renderProcessedFrame(0)
+    let frameProcessing: Promise<void> = Promise.resolve()
+
+    const scheduleProcessedFrame = (mediaTime: number, sourceFrame?: CanvasImageSource, presentedFrames?: number) => {
+      frameProcessing = frameProcessing.then(async () => {
+        if (finished) return
+        if (options.abortSignal?.aborted) {
+          aborted = true
+          return
+        }
+        await renderProcessedFrame(mediaTime, sourceFrame)
+        const currentFrame = Math.min(totalFrames, Math.max(1, Math.round(mediaTime * fps) + 1))
+        options.onRenderFrame?.({ frameIndex: currentFrame, totalFrames, canvas, mediaTime })
+        capture?.requestFrame?.()
+        const safePresentedFrames = presentedFrames != null && Number.isFinite(presentedFrames) && presentedFrames > 0
+          ? Math.round(presentedFrames)
+          : currentFrame
+        options.onProgress?.(
+          sampleTimes.length + totalFrames + Math.min(totalFrames, Math.max(currentFrame, safePresentedFrames)),
+          totalWork,
+        )
+      })
+    }
+
+    await renderProcessedFrame(0)
+    options.onRenderFrame?.({ frameIndex: 1, totalFrames, canvas, mediaTime: 0 })
     capture?.requestFrame?.()
     options.onProgress?.(sampleTimes.length + totalFrames, totalWork)
 
@@ -1097,15 +1158,7 @@ export async function processVideo(
         return
       }
 
-      renderProcessedFrame(mediaTime)
-      capture?.requestFrame?.()
-
-      const currentFrame = Math.min(totalFrames, Math.max(1, Math.round(mediaTime * fps) + 1))
-      const safePresentedFrames = Number.isFinite(presentedFrames) && presentedFrames > 0 ? Math.round(presentedFrames) : currentFrame
-      options.onProgress?.(
-        sampleTimes.length + totalFrames + Math.min(totalFrames, Math.max(currentFrame, safePresentedFrames)),
-        totalWork,
-      )
+      scheduleProcessedFrame(mediaTime, undefined, presentedFrames)
 
       if (!video.ended && !useWebCodecsRenderer) {
         if (typeof video.requestVideoFrameCallback === 'function') {
@@ -1133,7 +1186,8 @@ export async function processVideo(
     await webCodecsPump?.catch((err) => {
       if (!(err instanceof DOMException && err.name === 'AbortError')) throw err
     })
-    renderProcessedFrame(duration)
+    await frameProcessing
+    await renderProcessedFrame(duration)
     capture?.requestFrame?.()
     options.onProgress?.(totalWork, totalWork)
     await stopProcessing()

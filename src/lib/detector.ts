@@ -189,6 +189,11 @@ async function detectViaLocalYuNet(canvas: HTMLCanvasElement, robust: boolean, c
   return nms(allBoxes, 0.35)
 }
 
+/**
+ * Run YuNet face detection on a canvas/image/video frame.
+ * ONNX inference cannot be aborted mid-run; callers should use a generation
+ * token (see App.tsx detectGenerationRef) to discard stale results after await.
+ */
 export const detectFaces = async (
   source: HTMLCanvasElement | HTMLImageElement | HTMLVideoElement,
   robust = false,

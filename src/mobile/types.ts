@@ -25,4 +25,5 @@ export type MobileToolCategory =
   | 'more'
 
 // Touch-first layout through tablet width; desktop shell above this breakpoint.
+/** Keep in sync with @media breakpoints in mobile.css and index.html (1024px). */
 export const MOBILE_BREAKPOINT_PX = 1024

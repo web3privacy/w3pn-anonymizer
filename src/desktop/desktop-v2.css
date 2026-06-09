@@ -104,9 +104,26 @@
   align-items: center;
   justify-content: center;
   min-height: 0;
-  padding: 2rem 2.5rem 3rem;
+  padding: 1.25rem 2.5rem 1.5rem;
   background: #000;
   overflow: hidden;
+}
+
+/* Logo + wordmark + hint + actions — one block, max ~640px, vertically centered. */
+.desktop-home-v2-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.35rem;
+  width: 100%;
+  max-width: 720px;
+  max-height: min(640px, calc(100dvh - 4.5rem));
+  --desktop-home-stack-fixed: calc(13.5rem + 12px);
+  --desktop-home-spiral-size: min(
+    286px,
+    calc(min(640px, 100dvh - 4.5rem) - var(--desktop-home-stack-fixed))
+  );
 }
 
 .desktop-home-v2-header {
@@ -125,40 +142,73 @@
   width: auto;
 }
 
+/* Default screen — unified "What is this app?" (mobile tablet+ matches desktop). */
+.mobile-home-v2-about-link,
 .desktop-home-v2-about-link {
   border: none;
   background: transparent;
   color: rgba(255, 255, 255, 0.72);
   font-size: 0.72rem;
+  font-weight: 600;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   cursor: pointer;
+  padding: 4px 0;
+}
+
+.mobile-home-v2-about-link {
+  text-align: right;
+}
+
+@media (max-width: 639px) {
+  .mobile-home-v2-about-link {
+    font-size: 0.62rem;
+    letter-spacing: 0.1em;
+    max-width: 108px;
+    line-height: 1.2;
+  }
 }
 
 .desktop-home-v2-center {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 1rem;
-  max-width: 720px;
+  gap: 0.75rem;
+  width: 100%;
   text-align: center;
+  flex: 0 1 auto;
+  min-height: 0;
 }
 
-.desktop-home-v2-spiral {
-  width: min(320px, 38vw);
+.desktop-home-v2-spiral-wrap {
+  width: var(--desktop-home-spiral-size);
+  height: var(--desktop-home-spiral-size);
+  max-width: 100%;
+  flex: 0 0 auto;
+  transition:
+    width 0.9s cubic-bezier(0.22, 1, 0.36, 1),
+    height 0.9s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.desktop-home-v2-spiral-wrap .logo-motion-wrap,
+.desktop-home-v2-spiral-wrap .logo-motion-svg {
+  width: 100%;
+  height: 100%;
 }
 
 .desktop-home-v2-wordmark {
-  width: min(210px, 26vw);
+  width: min(180px, 22vw);
   height: auto;
-  margin-top: 12px;
+  margin-top: 0;
+  padding-top: 12px;
 }
 
 .desktop-home-v2-paste-hint {
-  margin: 0.5rem 0 0;
-  font-size: 0.82rem;
+  margin: 0;
+  font-size: 0.78rem;
   color: rgba(255, 255, 255, 0.55);
-  line-height: 1.5;
+  line-height: 1.45;
+  max-width: 36rem;
 }
 
 .desktop-home-v2-paste-hint kbd {
@@ -174,8 +224,9 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 0.75rem;
-  margin-top: 2rem;
+  gap: 0.65rem;
+  margin-top: 0;
+  flex: 0 0 auto;
 }
 
 .desktop-home-v2-actions-row {
@@ -214,6 +265,18 @@
   color: rgba(255, 255, 255, 0.55);
   min-width: auto;
   letter-spacing: 0.08em;
+}
+
+@media (max-height: 720px) {
+  .desktop-home-v2-hero {
+    --desktop-home-stack-fixed: 12.75rem;
+    gap: 1.1rem;
+  }
+
+  .desktop-home-v2-paste-hint {
+    font-size: 0.74rem;
+    line-height: 1.35;
+  }
 }
 
 .desktop-home-v2-drop-overlay {
@@ -285,6 +348,15 @@
   border-bottom: 1px solid var(--mobile-glass-border);
 }
 
+/* Desktop live: inset library + close icons 12px toward center */
+.desktop-live-overlay .mobile-topbar-v2--live .mobile-topbar-v2-left {
+  padding-left: 12px;
+}
+
+.desktop-live-overlay .mobile-topbar-v2--live .mobile-topbar-v2-right {
+  padding-right: 12px;
+}
+
 .desktop-live-overlay .mobile-bottom-toolbar {
   height: auto;
   border-top: 1px solid var(--mobile-glass-border);
@@ -322,4 +394,48 @@
 .app-shell-desktop-v2 .ts-custom-image-count {
   font-size: 0.62rem;
   color: var(--text-muted);
+}
+
+/* ── Privacy calibration: immersive fullscreen spiral (desktop) ── */
+.desktop-home-v2.home-v2--calibrating {
+  padding: 0;
+}
+
+.desktop-home-v2.home-v2--calibrating .desktop-home-v2-header {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.35s ease;
+}
+
+.desktop-home-v2.home-v2--calibrating .desktop-home-v2-hero {
+  flex: 1;
+  width: 100%;
+  max-width: none;
+  max-height: none;
+  height: 100%;
+  gap: 0;
+  justify-content: center;
+}
+
+.desktop-home-v2.home-v2--calibrating .desktop-home-v2-center {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  justify-content: center;
+}
+
+.desktop-home-v2.home-v2--calibrating .desktop-home-v2-spiral-wrap {
+  --home-calibration-spiral: min(
+    calc(100vw - 2rem),
+    calc(100dvh - 2rem - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px))
+  );
+  width: var(--home-calibration-spiral);
+  height: var(--home-calibration-spiral);
+  max-width: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .desktop-home-v2-spiral-wrap {
+    transition: none;
+  }
 }

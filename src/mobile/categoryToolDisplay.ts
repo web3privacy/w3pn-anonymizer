@@ -83,7 +83,7 @@ export function getCategoryToolDisplay(
     }
     case 'adjust': {
       const id = pickAt(ADJUST_TOOLS, idx)
-      return { icon: ADJUST_TOOL_ICONS[id], label: 'BRIGH' }
+      return { icon: ADJUST_TOOL_ICONS[id], label: 'ADJUST' }
     }
     case 'effects': {
       const id = b.selectedEffect

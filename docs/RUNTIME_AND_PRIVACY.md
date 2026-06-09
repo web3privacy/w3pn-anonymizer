@@ -1,68 +1,57 @@
 # Runtime, Privacy, and Deployment Notes
 
-This project now uses a single face detector everywhere: **YuNet**.
-
-- `Local` mode runs YuNet inside the browser with `onnxruntime-web`.
-- `Server` mode runs the same YuNet weights on the user's own localhost Python backend with OpenCV `FaceDetectorYN`.
-- Video rendering and export always stay in the browser. In Server mode, only sampled detection frames may be sent to `127.0.0.1:7865`.
+The public web release runs **entirely in the browser**. Face detection uses **YuNet** via ONNX Runtime Web (WebAssembly). No image or video pixels are sent to any server.
 
 ## Browser runtime
 
-The frontend depends on these local assets:
+The frontend depends on these same-origin assets:
 
 - `public/models/face_detection_yunet_2023mar.onnx`
-- `public/onnx/*`
+- `public/onnx/*` (ORT WASM binaries)
 - `public/fonts/*`
 - `public/vendor/browser-image-compression.js`
 - `public/vendor/imagetracer_v1.2.6.js`
 
-For correct browser-side YuNet execution in production:
+For correct YuNet execution in production:
 
 - serve `.mjs` files as `application/javascript`
 - send `Cross-Origin-Opener-Policy: same-origin`
 - send `Cross-Origin-Embedder-Policy: require-corp`
 - send `Cross-Origin-Resource-Policy: same-origin`
 - apply the same resource policy to `/onnx/*` and `/models/*`
+- send `Content-Security-Policy` (see `vercel.json`)
 
-If these headers or MIME types are wrong, browser-side ONNX Runtime may fail to initialize.
+If headers or MIME types are wrong, ONNX Runtime may fail to initialize.
 
-The optional localhost backend keeps only these runtime artifacts on disk:
+## Network activity
 
-- `server/.venv/`
-- `server/models/face_detection_yunet_2023mar.onnx`
+At runtime the app makes **no third-party network requests**. All `fetch()` calls are same-origin:
 
-## Data lifecycle and anonymization path
+- ONNX model and WASM loaders
+- Custom image preset manifests and assets
+- Bundled demo media
+- Brand SVG assets
 
-### Local mode
+External links (GitHub, Web3Privacy Now, mailto) open only when the user clicks them.
+
+## Data lifecycle
 
 1. The browser reads the source file into a `Blob`.
-2. The app creates a preview `ObjectURL` for the session UI.
+2. A preview `ObjectURL` is created for the session UI.
 3. YuNet runs in-browser through `onnxruntime-web`.
-4. The app stores only face boxes, zones, temporary canvases, and edit state in memory.
-5. Anonymized output is rendered in-browser and written to disk only when the user explicitly exports or overwrites.
-
-### Server mode
-
-1. The browser still owns the source file and render pipeline.
-2. Only detection requests are sent to `127.0.0.1:7865`.
-3. The backend validates content type, magic bytes, upload size, and decoded pixel count.
-4. OpenCV YuNet returns only bounding boxes.
-5. The backend releases upload bytes and decoded arrays immediately after detection.
-6. The browser applies anonymization effects and performs final export locally.
+4. The app stores face boxes, zones, temporary canvases, and edit state in memory.
+5. Output is written to disk only when the user explicitly exports, downloads, or enables batch overwrite via File System Access.
 
 ### Video path
 
 1. The source video remains a browser `Blob`.
-2. The app samples detection frames across the timeline.
-3. Detection uses the selected mode:
-   - `Local`: sampled frames stay in-browser
-   - `Server`: sampled frames may be sent to localhost for bounding boxes
-4. Timeline interpolation, mask expansion, manual frame overrides, preview rendering, and final encoding always stay in-browser.
-5. The final output is saved only on explicit export.
+2. The app samples detection frames across the timeline (in-browser YuNet).
+3. Timeline interpolation, masking, frame overrides, preview rendering, and final encoding stay in-browser.
+4. The final output is saved only on explicit export.
 
 ### What stays in memory
 
-During a normal session, the app keeps these items only in browser memory:
+During a session:
 
 - loaded image/video `Blob`s
 - preview `ObjectURL`s
@@ -74,41 +63,35 @@ During a normal session, the app keeps these items only in browser memory:
 
 ### What is persisted
 
-The app writes only two preferences to `localStorage`:
+| Storage | Key | Data |
+|---------|-----|------|
+| `localStorage` | `anonymizer-theme` | Theme preference (desktop) |
+| `localStorage` | `anonymizer-enable-optical-mode` | Home logo animation toggle |
+| `sessionStorage` | `anonymizer-live-meta` | Live capture metadata only (no blob) |
 
-- `anonymizer-theme`
-- `anonymizer-processing-local`
-
-No image or video content is persisted to browser storage by default.
+No image or video content is persisted to browser storage.
 
 ### What gets written to disk
 
-Files are written only when the user explicitly does one of these actions:
+Only on explicit user action:
 
-- exports an image, SVG, ZIP, or video
-- saves a processed file through the browser/desktop download flow
-- enables overwrite mode for batch processing with File System Access
+- export image, SVG, ZIP, or video
+- browser download flow
+- batch overwrite with File System Access API (opt-in)
 
 ### Cleanup behavior
 
 - preview `ObjectURL`s are revoked when media is replaced or deleted
 - remaining previews are revoked when the app unmounts
-- the Python backend deletes upload bytes and decoded arrays after each detection request
+- video/batch operations are aborted on unmount
+- live camera stream stops on exit
 
-## Local vs Server mode
+## Security headers (production)
 
-### Local mode
+Configured in [`vercel.json`](../vercel.json) and mirrored in [`vite.config.ts`](../vite.config.ts) for dev/preview:
 
-- Input pixels never leave the browser.
-- YuNet runs on the full image plus tiled crops for larger frames.
-- Video detection uses sampled frames downscaled to at most `1280px` on the long edge.
-
-### Server mode
-
-- The browser sends only detection requests to `127.0.0.1:7865`.
-- The backend accepts JPEG, PNG, WebP, BMP, and TIFF requests up to `25 MB` and `30 MP`.
-- The backend returns only bounding boxes.
-- Rendering, masking, timeline interpolation, and final encoding still happen client-side.
+- COOP / COEP / CORP for WASM isolation
+- Content-Security-Policy restricting scripts, connections, and workers to `'self'` (`wasm-unsafe-eval` for ONNX WebAssembly; `unsafe-inline` for boot scripts in `index.html`)
 
 ## Operational limits
 
@@ -121,38 +104,14 @@ Files are written only when the user explicitly does one of these actions:
 - batch resize controls clamp width/height to `25000`
 - SVG preview caps the long edge at `1200px`
 
-## Recommended deployment profile
+## Recommended deployment (public web)
 
-### Public deployment
+1. Build: `npm run build`
+2. Deploy `dist/` to static hosting (e.g. Vercel)
+3. Verify ONNX model and WASM files are served from `/models/` and `/onnx/`
+4. Verify isolation + CSP headers on all routes
+5. Smoke-test face detection on the production URL
 
-Recommended default:
+## Optional components (not in public web release)
 
-- deploy only the static frontend
-- keep detection in `Local` mode
-- do not expose the Python backend publicly
-
-This preserves the strongest privacy story because all pixels stay on the user's device.
-
-### Trusted-host / kiosk / internal deployment
-
-If you need the Python YuNet backend:
-
-- bind it to `127.0.0.1:7865` only
-- reverse proxy `/api/*` on the same host if needed
-- do not log request bodies
-- do not persist uploaded frames to disk
-- do not expose the backend directly to the public internet
-- keep the writable runtime paths local:
-  - `server/.venv/`
-  - `server/models/face_detection_yunet_2023mar.onnx`
-- keep CORS scoped to localhost or the exact same-host frontend origin
-
-## Server scripts
-
-Canonical scripts:
-
-- `./server/install.sh`
-- `./server/start.sh`
-- `./server/install.bat`
-- `./server/start.bat`
-- `./start.sh` for combined frontend + localhost backend startup on macOS/Linux
+The repository may contain **Electron** desktop packaging and a **Python localhost backend** for future or self-hosted use. These are **not required** for the public web app at [anonymizer.web3privacy.info](https://anonymizer.web3privacy.info). The current web frontend does not send detection requests to any backend.

@@ -27,7 +27,7 @@ import { MobileLiveMode } from './mobile/MobileLiveMode'
 import { MobileShell } from './mobile/MobileShell'
 import { MobileToast } from './mobile/MobileToast'
 import { MobileImageCanvasControls } from './mobile/MobileImageCanvasControls'
-import { MobileVideoCanvasControls } from './mobile/MobileVideoCanvasControls'
+import { MobileDrawMaskPanel } from './mobile/MobileDrawMaskPanel'
 import { MobileVideoProgress } from './mobile/MobileVideoProgress'
 import type { AppMobileBindings } from './mobile/bindings'
 import { bakePhotoToCanvas } from './lib/bake-photo-export'
@@ -36,17 +36,19 @@ import type { MobileMode, MobilePanel, MobileToolCategory } from './mobile/types
 import { CROP_TOOLS, EFFECT_TOOL_ORDER, FACE_TOOLS, panelForCategory, ZONE_TOOLS } from './mobile/toolRotation'
 import type { AdjustToolId, CropToolId, EffectToolId, FaceToolId, ZoneToolId } from './mobile/toolRotation'
 import { detectFaces, initializeDetector, resetDetectorStatus, getDetectorStatus, setDetectionProgressCallback, setDetectorLoadProgressCallback, getDetectorLoadProgress, type DetectorLoadProgress } from './lib/detector'
+import { ModelLoadStatus } from './components/ModelLoadStatus'
 import { CLEAR_DETECT_FIELDS, expandPixelBox, faceOffsetPads, zonesWithFaceOffset } from './lib/face-offset'
 import {
   applyDistortPipeline,
   DEFAULT_DISTORT_STRENGTHS,
+  distortPipelineKey,
   type DistortEffectId,
 } from './lib/distort-effects'
-import { EFFECTS, applyColorAdjustments, applyEffectBrush, applyEffectRect, applyGlitchEffect, pickRandomEmoji, pickUniqueEmojis, previewEffectBrush } from './lib/effects'
+import { EFFECTS, applyColorAdjustments, applyEffectBrush, applyEffectRect, applyGlitchEffect, colorAdjExportKey, isColorAdjNoop, pickRandomEmoji, pickUniqueEmojis, previewEffectBrush } from './lib/effects'
 import type { PixelShiftType } from './lib/effects'
 import { canvasToBmpBlob, canvasToGifBlob, canvasToTiffBlob, FORMAT_EXT, isLosslessFormat } from './lib/image-encoders'
 import { canvasToSvg, canvasToSvgBlob, VECTORIZE_PRESETS, DEFAULT_VECTORIZE_PARAMS, type VectorizeParams, type VectorizePreset } from './lib/vectorize'
-import { extractPosterFrame, getSupportedVideoExportOptions, getVideoMetadata, getVideoPipelineCapabilities, mimeTypeToVideoExtension, processVideo, type VideoExportFormatId, type VideoFrameOverride, type VideoProcessingPhase, type VideoTimedZone } from './lib/video'
+import { extractPosterFrame, getSupportedVideoExportOptions, getVideoMetadata, getVideoPipelineCapabilities, mimeTypeToVideoExtension, processVideo, type VideoDistortOptions, type VideoExportFormatId, type VideoFrameOverride, type VideoProcessingPhase, type VideoTimedZone } from './lib/video'
 import {
   detectFrameCropFromBlob,
   getCropRectNormalized,
@@ -127,7 +129,7 @@ const DEMO_MEDIA = [
   './demo/demo-3.jpg',
   './demo/demo-4.png',
   './demo/demo-5.png',
-  './demo/live-capture-demo.webm',
+  './demo/vitalik-rap.webm',
 ]
 
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v))
@@ -166,6 +168,37 @@ const pickCustomImageAssetId = (assets: CustomImageAsset[], seed: string | numbe
 import { MOBILE_BREAKPOINT_PX } from './mobile/types'
 
 const MOBILE_THEME_QUERY = `(max-width: ${MOBILE_BREAKPOINT_PX}px)`
+
+const DEFAULT_ADJ_TRANSFORM_PARAMS = {
+  dotSize: 8, halftoneContrast: 50, halftoneAngle: 45,
+  glitchShift: 15, glitchColorSplit: 8,
+  pixelShiftX: 10, pixelShiftY: 5,
+  colorShiftHue: 60, colorShiftSat: 50,
+}
+
+type VideoDistortSettingsSnapshot = {
+  enabled: DistortEffectId[]
+  strengths: Record<DistortEffectId, number>
+  params: {
+    dotSize: number
+    halftoneContrast: number
+    halftoneAngle: number
+    glitchShift: number
+    glitchColorSplit: number
+    pixelShiftX: number
+    pixelShiftY: number
+    colorShiftHue: number
+    colorShiftSat: number
+  }
+  pixelShiftType: PixelShiftType
+}
+
+const EMPTY_VIDEO_DISTORT_SETTINGS: VideoDistortSettingsSnapshot = {
+  enabled: [],
+  strengths: DEFAULT_DISTORT_STRENGTHS,
+  params: { ...DEFAULT_ADJ_TRANSFORM_PARAMS },
+  pixelShiftType: 'wave',
+}
 
 const getInitialTheme = (): ThemeMode => {
   if (typeof window !== 'undefined' && window.matchMedia(MOBILE_THEME_QUERY).matches) {
@@ -242,6 +275,39 @@ const zoneToCanvasRect = (zone: Zone, t: DrawTransform) => {
 
 const zoneContainsNormalized = (zone: Zone, nx: number, ny: number) =>
   nx >= zone.x && nx <= zone.x + zone.width && ny >= zone.y && ny <= zone.y + zone.height
+
+/** Rotate normalized zone coords 90° (direction 1 = CW, -1 = CCW). */
+const rotateZone90 = (zone: Zone, direction: 1 | -1): Zone => {
+  const { x, y, width, height } = zone
+  const base = direction === 1
+    ? { x: y, y: 1 - x - width, width: height, height: width }
+    : { x: 1 - y - height, y: x, width: height, height: width }
+  const next: Zone = { ...zone, ...base }
+  if (
+    zone.detectX != null && zone.detectY != null
+    && zone.detectWidth != null && zone.detectHeight != null
+  ) {
+    const dx = zone.detectX
+    const dy = zone.detectY
+    const dw = zone.detectWidth
+    const dh = zone.detectHeight
+    if (direction === 1) {
+      next.detectX = dy
+      next.detectY = 1 - dx - dw
+      next.detectWidth = dh
+      next.detectHeight = dw
+    } else {
+      next.detectX = 1 - dy - dh
+      next.detectY = dx
+      next.detectWidth = dh
+      next.detectHeight = dw
+    }
+  }
+  return next
+}
+
+const rotateZones90 = (zones: Zone[], direction: 1 | -1): Zone[] =>
+  zones.map((z) => rotateZone90(z, direction))
 
 const drawNormalizeCropInView = (
   ctx: CanvasRenderingContext2D,
@@ -374,6 +440,126 @@ const formatVideoTime = (sec: number) => {
   return `${minutes}:${String(seconds).padStart(2, '0')}`
 }
 
+/** Fractional rect of the object-fit:contain video picture inside .video-media. */
+type VideoContentLayout = {
+  left: number
+  top: number
+  width: number
+  height: number
+}
+
+const measureVideoContentLayout = (
+  mediaWidth: number,
+  mediaHeight: number,
+  videoWidth: number,
+  videoHeight: number,
+): VideoContentLayout | null => {
+  if (mediaWidth <= 0 || mediaHeight <= 0 || videoWidth <= 0 || videoHeight <= 0) return null
+  const videoAR = videoWidth / videoHeight
+  const mediaAR = mediaWidth / mediaHeight
+  let contentW: number
+  let contentH: number
+  let offsetX: number
+  let offsetY: number
+  if (mediaAR > videoAR) {
+    contentH = mediaHeight
+    contentW = contentH * videoAR
+    offsetX = (mediaWidth - contentW) / 2
+    offsetY = 0
+  } else {
+    contentW = mediaWidth
+    contentH = contentW / videoAR
+    offsetX = 0
+    offsetY = (mediaHeight - contentH) / 2
+  }
+  return {
+    left: offsetX / mediaWidth,
+    top: offsetY / mediaHeight,
+    width: contentW / mediaWidth,
+    height: contentH / mediaHeight,
+  }
+}
+
+const videoOverlayLayerStyle = (layout: VideoContentLayout | null): React.CSSProperties | undefined => {
+  if (!layout) return undefined
+  return {
+    left: `${layout.left * 100}%`,
+    top: `${layout.top * 100}%`,
+    width: `${layout.width * 100}%`,
+    height: `${layout.height * 100}%`,
+    right: 'auto',
+    bottom: 'auto',
+  }
+}
+
+const syncVideoOverlayCanvasDisplay = (
+  overlay: HTMLCanvasElement,
+  layout: VideoContentLayout | null,
+) => {
+  Object.assign(overlay.style, {
+    width: '100%',
+    height: '100%',
+    ...(videoOverlayLayerStyle(layout) ?? {}),
+  })
+}
+
+const paintVideoPreviewOverlay = (
+  overlay: HTMLCanvasElement,
+  source: CanvasImageSource,
+  sourceW: number,
+  sourceH: number,
+  layout: VideoContentLayout | null,
+) => {
+  overlay.width = sourceW
+  overlay.height = sourceH
+  overlay.getContext('2d')!.drawImage(source, 0, 0)
+  syncVideoOverlayCanvasDisplay(overlay, layout)
+  overlay.classList.add('visible')
+}
+
+const waitForVideoFrame = (video: HTMLVideoElement): Promise<void> =>
+  new Promise((resolve) => {
+    if (video.seeking) {
+      video.addEventListener('seeked', () => resolve(), { once: true })
+      return
+    }
+    // Paused video does not present new frames — rVFC never fires.
+    if (video.paused || video.ended) {
+      requestAnimationFrame(() => resolve())
+      return
+    }
+    if (typeof video.requestVideoFrameCallback === 'function') {
+      video.requestVideoFrameCallback(() => resolve())
+      return
+    }
+    requestAnimationFrame(() => resolve())
+  })
+
+/** Progressive video face scan: default 10%, then +4%/s → 14/18/22%. */
+const VIDEO_FACE_SCAN_SENSITIVITY_STEP = 4
+const VIDEO_FACE_SCAN_MAX_PASSES = 3
+
+const getVideoFaceScanSensitivity = (userSensitivity: number, passIndex: number) =>
+  clamp(userSensitivity + passIndex * VIDEO_FACE_SCAN_SENSITIVITY_STEP, 0, 100)
+
+const getVideoDetectSettings = (userSensitivity: number, passIndex: number) => {
+  const sensitivity = getVideoFaceScanSensitivity(userSensitivity, passIndex)
+  const confidence = 0.7 - (sensitivity / 100) * 0.4
+  const thorough = passIndex >= 1
+  return { sensitivity, confidence, thorough }
+}
+
+type NormalizedFaceRect = { x: number; y: number; width: number; height: number }
+
+const faceRectsSimilar = (a: NormalizedFaceRect, b: NormalizedFaceRect, tolerance = 0.06) =>
+  Math.abs(a.x - b.x) <= tolerance
+  && Math.abs(a.y - b.y) <= tolerance
+  && Math.abs(a.width - b.width) <= tolerance
+  && Math.abs(a.height - b.height) <= tolerance
+
+const filterDismissedFaceZones = (zones: Zone[], dismissed: NormalizedFaceRect[]) =>
+  zones.filter((zone) => !dismissed.some((rect) => faceRectsSimilar(zone, rect)))
+
 const IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'tiff', 'tif', 'avif', 'heic', 'heif'])
 const VIDEO_EXTENSIONS_SET = new Set(['mp4', 'webm', 'mov', 'avi', 'mkv', 'm4v', 'ogv'])
 const MAX_FILE_SIZE = 50 * 1024 * 1024 // 50 MB per image
@@ -420,7 +606,8 @@ function App() {
   const [dirtyByPhoto, setDirtyByPhoto] = useState<Record<string, boolean>>({})
   const [selectedZoneId, setSelectedZoneId] = useState<string | null>(null)
   const [toolMode, setToolMode] = useState<ToolMode>('brush')
-  const [selectedEffect, setSelectedEffect] = useState<AnonymizeEffectId>('pixelate')
+  const [selectedEffect, setSelectedEffectState] = useState<AnonymizeEffectId>('pixelate')
+  const selectedEffectRef = useRef<AnonymizeEffectId>('pixelate')
   const [lastZoneTool, setLastZoneTool] = useState<'brush' | 'rectangle'>('brush')
   const [customImageSource, setCustomImageSource] = useState<CustomImageSource>('custom')
   const [customImageAssets, setCustomImageAssets] = useState<CustomImageAsset[]>([])
@@ -438,6 +625,7 @@ function App() {
   const selectedCustomImageIdRef = useRef<string | null>(null)
   emojiRandomRef.current = emojiRandom
   selectedEmojiRef.current = selectedEmoji
+  selectedEffectRef.current = selectedEffect
   customImageRandomRef.current = customImageRandom
   selectedCustomImageIdRef.current = selectedCustomImageId
   // Resolve the emoji to assign to a zone, honoring the picker selection.
@@ -540,6 +728,8 @@ function App() {
   const [mobileViewRotation, setMobileViewRotation] = useState(0)
   const mobileViewRotationRef = useRef(0)
   const [mobileViewTransformDirty, setMobileViewTransformDirty] = useState(false)
+  /** Bumped when canvas draw transform changes so HTML overlays re-sync with the bitmap. */
+  const [canvasLayoutVersion, setCanvasLayoutVersion] = useState(0)
   const [activeCategory, setActiveCategory] = useState<MobileToolCategory>('face')
   const [categoryIndices, setCategoryIndices] = useState<Record<MobileToolCategory, number>>({
     face: 0, gallery: 0, zone: 0, crop: 0, adjust: 0, distort: 0, effects: 0, more: 0,
@@ -562,7 +752,13 @@ function App() {
   const [appliedByPhoto, setAppliedByPhoto] = useState<Record<string, boolean>>({})
   // Video processing state
   const [videoProcessing, setVideoProcessing] = useState(false)
-  const [videoProgress, setVideoProgress] = useState<{ current: number; total: number; phase: VideoProcessingPhase } | null>(null)
+  const [videoProgress, setVideoProgress] = useState<{
+    current: number
+    total: number
+    phase: VideoProcessingPhase
+    renderFrame?: number
+    renderTotal?: number
+  } | null>(null)
   const videoAbortRef = useRef<AbortController | null>(null)
   const videoExportOptions = useMemo(() => getSupportedVideoExportOptions(), [])
   const videoPipelineCapabilities = useMemo(() => getVideoPipelineCapabilities(), [])
@@ -611,18 +807,17 @@ function App() {
   const [adjTransform, setAdjTransform] = useState<string>('none')   // none | glitch | halftone | pixel-shift | color-shift
   const [adjTransformStrength, setAdjTransformStrength] = useState(35)
   // Per-effect extra parameters
-  const [adjTransformParams, setAdjTransformParams] = useState({
-    dotSize: 8, halftoneContrast: 50, halftoneAngle: 45,
-    glitchShift: 15, glitchColorSplit: 8,
-    pixelShiftX: 10, pixelShiftY: 5,
-    colorShiftHue: 60, colorShiftSat: 50,
-  })
+  const [adjTransformParams, setAdjTransformParams] = useState({ ...DEFAULT_ADJ_TRANSFORM_PARAMS })
   const setAdjParam = (key: keyof typeof adjTransformParams, value: number) =>
     setAdjTransformParams((p) => ({ ...p, [key]: value }))
 
   const [adjPixelShiftType, setAdjPixelShiftType] = useState<'wave' | 'shear' | 'ripple' | 'mirror'>('wave')
   const [enabledDistorts, setEnabledDistorts] = useState<DistortEffectId[]>([])
   const [distortStrengthByEffect, setDistortStrengthByEffect] = useState(DEFAULT_DISTORT_STRENGTHS)
+  const [distortSettingsByVideoId, setDistortSettingsByVideoId] = useState<Record<string, VideoDistortSettingsSnapshot>>({})
+  const [videoExportedDistortKeyByPhoto, setVideoExportedDistortKeyByPhoto] = useState<Record<string, string>>({})
+  const [videoExportedColorAdjKeyByPhoto, setVideoExportedColorAdjKeyByPhoto] = useState<Record<string, string>>({})
+  const [videoDistortPreviewVisible, setVideoDistortPreviewVisible] = useState(false)
 
   const getActiveDistorts = useCallback((): DistortEffectId[] => {
     if (isMobile) return enabledDistorts
@@ -641,6 +836,21 @@ function App() {
     setDistortStrengthByEffect((cur) => ({ ...cur, [id]: value }))
     setAdjTransformStrength(value)
   }, [])
+
+  const applyVideoDistortSettings = useCallback((settings: VideoDistortSettingsSnapshot) => {
+    setEnabledDistorts(settings.enabled)
+    setDistortStrengthByEffect(settings.strengths)
+    setAdjTransformParams(settings.params)
+    setAdjPixelShiftType(settings.pixelShiftType)
+    setAdjTransform(settings.enabled.length > 0 ? settings.enabled[settings.enabled.length - 1] : 'none')
+  }, [])
+
+  const snapshotVideoDistortSettings = useCallback((): VideoDistortSettingsSnapshot => ({
+    enabled: enabledDistorts,
+    strengths: { ...distortStrengthByEffect },
+    params: { ...adjTransformParams },
+    pixelShiftType: adjPixelShiftType,
+  }), [adjTransformParams, adjPixelShiftType, distortStrengthByEffect, enabledDistorts])
   const showSaveError = (msg: string) => {
     setNotice(msg)
   }
@@ -682,6 +892,7 @@ function App() {
   const workCtxRef = useRef<CanvasRenderingContext2D | null>(null)
   const renderRafRef = useRef<number | null>(null)
   const transformRef = useRef<DrawTransform>(DEFAULT_TRANSFORM)
+  const lastSyncedTransformRef = useRef<DrawTransform>(DEFAULT_TRANSFORM)
   const pointerSessionRef = useRef<PointerSession>({ mode: 'idle' })
   const mobileCanvasEditRef = useRef(false)
   const brushRafRef = useRef<number | null>(null)
@@ -705,6 +916,25 @@ function App() {
   const transformPreviewDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const transformPreviewGenRef = useRef(0)   // increments each call; used to discard stale async results
   const activeVideoRef = useRef<HTMLVideoElement | null>(null)
+  const videoDistortPreviewCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  const videoDistortPreviewGenRef = useRef(0)
+  const videoDistortCaptureCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  const videoFaceDetectDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const videoFaceDetectGenRef = useRef(0)
+  const videoFaceDetectCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  const videoMediaRef = useRef<HTMLDivElement | null>(null)
+  const activeVideoTimeRef = useRef(0)
+  const pendingVideoSeekRef = useRef<number | null>(null)
+  const [videoPreviewFaceZones, setVideoPreviewFaceZones] = useState<Zone[]>([])
+  const [videoPlaying, setVideoPlaying] = useState(false)
+  const [videoContentLayout, setVideoContentLayout] = useState<VideoContentLayout | null>(null)
+  const [videoReadyTick, setVideoReadyTick] = useState(0)
+  const [processedVideoEpoch, setProcessedVideoEpoch] = useState(0)
+  const videoFaceScanTimersRef = useRef<ReturnType<typeof setTimeout>[]>([])
+  const videoPreviewFaceZonesRef = useRef<Zone[]>([])
+  const videoDismissedFacesByPhotoRef = useRef<Record<string, Record<number, NormalizedFaceRect[]>>>({})
+  const videoContentLayoutRef = useRef<VideoContentLayout | null>(null)
+  const videoProcessingRef = useRef(false)
 
   const activePhoto = useMemo(() => {
     if (!activePhotoId) return null
@@ -713,6 +943,10 @@ function App() {
       ?? null
   }, [photos, activePhotoId])
   useEffect(() => { activePhotoIdRef.current = activePhotoId }, [activePhotoId])
+  useEffect(() => { activeVideoTimeRef.current = activeVideoTime }, [activeVideoTime])
+  videoPreviewFaceZonesRef.current = videoPreviewFaceZones
+  videoContentLayoutRef.current = videoContentLayout
+  videoProcessingRef.current = videoProcessing
   // Live refs for the async zone re-bake pipeline (stable callback identity).
   const activePhotoRef = useRef(activePhoto)
   activePhotoRef.current = activePhoto
@@ -740,14 +974,79 @@ function App() {
     setVideoMaskDrawActive(false)
     setVideoMaskShape('rectangle')
     setVideoDraftZone(null)
-    setActiveVideoTime(0)
+    if (pendingVideoSeekRef.current == null) {
+      setActiveVideoTime(0)
+    }
     setActiveVideoFrameLabel(null)
     if (videoFrameLabelTimerRef.current) {
       clearTimeout(videoFrameLabelTimerRef.current)
       videoFrameLabelTimerRef.current = null
     }
     videoMaskPointerStartRef.current = null
+    setVideoPreviewFaceZones([])
+    setVideoPlaying(false)
+    setVideoContentLayout(null)
   }, [activePhotoId])
+
+  const syncVideoContentLayout = useCallback(() => {
+    const media = videoMediaRef.current
+    const video = activeVideoRef.current
+    if (!media || !video || video.videoWidth <= 0 || video.videoHeight <= 0) {
+      setVideoContentLayout(null)
+      return
+    }
+    const next = measureVideoContentLayout(
+      media.clientWidth,
+      media.clientHeight,
+      video.videoWidth,
+      video.videoHeight,
+    )
+    setVideoContentLayout((cur) => (
+      cur && next
+      && cur.left === next.left
+      && cur.top === next.top
+      && cur.width === next.width
+      && cur.height === next.height
+        ? cur
+        : next
+    ))
+  }, [])
+
+  useEffect(() => {
+    if (!activePhoto?.isVideo) {
+      setVideoContentLayout(null)
+      return
+    }
+    syncVideoContentLayout()
+    const media = videoMediaRef.current
+    if (!media) return
+    let rafId: number | null = null
+    const observer = new ResizeObserver(() => {
+      if (rafId !== null) return
+      rafId = requestAnimationFrame(() => { rafId = null; syncVideoContentLayout() })
+    })
+    observer.observe(media)
+    return () => { observer.disconnect(); if (rafId !== null) cancelAnimationFrame(rafId) }
+  }, [activePhoto?.id, activePhoto?.isVideo, activeVideoUrl, syncVideoContentLayout])
+
+  useEffect(() => {
+    if (!activePhoto?.isVideo) return
+    const pending = pendingVideoSeekRef.current
+    if (pending == null) return
+    pendingVideoSeekRef.current = null
+    setActiveVideoTime(pending)
+    const video = activeVideoRef.current
+    if (!video) return
+    const applySeek = () => {
+      video.currentTime = pending
+      setActiveVideoTime(video.currentTime)
+    }
+    if (video.readyState >= HTMLMediaElement.HAVE_METADATA) {
+      applySeek()
+    } else {
+      video.addEventListener('loadedmetadata', applySeek, { once: true })
+    }
+  }, [activePhoto?.isVideo, activePhotoId, activeVideoUrl, processedVideoEpoch])
 
   const activeZones = useMemo(() => (activePhotoId ? zonesByPhoto[activePhotoId] ?? [] : []), [zonesByPhoto, activePhotoId])
   const effectiveZones = useMemo(
@@ -766,7 +1065,13 @@ function App() {
     () => activeVideoTimedZones.filter((item) => activeVideoTime >= item.startSec && activeVideoTime <= item.endSec),
     [activeVideoTime, activeVideoTimedZones],
   )
-  const hasPendingVideoEdits = activeVideoTimedZones.length > 0 || activeVideoFrameOverrides.length > 0
+  const hasPendingVideoEdits = activeVideoTimedZones.length > 0
+    || activeVideoFrameOverrides.length > 0
+    || (Boolean(activePhoto?.isVideo && activePhotoId)
+      && distortPipelineKey(enabledDistorts, distortStrengthByEffect, adjTransformParams, adjPixelShiftType)
+        !== (videoExportedDistortKeyByPhoto[activePhotoId ?? ''] ?? ''))
+    || (Boolean(activePhoto?.isVideo && activePhotoId)
+      && colorAdjExportKey(colorAdj) !== (videoExportedColorAdjKeyByPhoto[activePhotoId ?? ''] ?? ''))
   const normalizePreviewPhotos = useMemo(
     () => normalizePreviewIds.map((id) => photos.find((p) => p.id === id)).filter(Boolean) as PhotoItem[],
     [normalizePreviewIds, photos],
@@ -1014,6 +1319,26 @@ function App() {
     return { canvasX, canvasY, imageX: normalizedX * t.imageWidth, imageY: normalizedY * t.imageHeight, normalizedX, normalizedY }
   }, [])
 
+  const syncOverlayLayout = useCallback(() => {
+    const next = transformRef.current
+    const prev = lastSyncedTransformRef.current
+    if (
+      prev.drawWidth === next.drawWidth
+      && prev.drawHeight === next.drawHeight
+      && prev.drawX === next.drawX
+      && prev.drawY === next.drawY
+      && prev.centerX === next.centerX
+      && prev.centerY === next.centerY
+      && (prev.rotation ?? 0) === (next.rotation ?? 0)
+      && prev.imageWidth === next.imageWidth
+      && prev.imageHeight === next.imageHeight
+    ) {
+      return
+    }
+    lastSyncedTransformRef.current = { ...next }
+    setCanvasLayoutVersion((v) => v + 1)
+  }, [])
+
   const renderCanvas = useCallback(() => {
     const viewport = viewportRef.current
     const canvas = canvasRef.current
@@ -1052,6 +1377,7 @@ function App() {
 
     if (source.width === 0 || source.height === 0 || !activePhoto) {
       transformRef.current = DEFAULT_TRANSFORM
+      syncOverlayLayout()
       return
     }
 
@@ -1140,11 +1466,13 @@ function App() {
     }
 
     ctx.restore()
+    syncOverlayLayout()
 
   }, [
     activePhoto, activeNormalizeCrop, effectiveZones, adjFlyoutOpen, adjTransform, batchPanelOpen,
     colorAdj, colorPanelOpen, draftZone, enabledDistorts, exportFormat, isMobile, isNormalizeCropPicking, transformPanelOpen,
     normalizeCropDraft, normalizeSettings.cropMode, selectedZoneId, showBoxes, effectiveTheme, mobileViewZoom, mobileViewPan, mobileViewRotation, transformPanelOpen, mobileExportDraft,
+    syncOverlayLayout,
   ])
 
   const renderCanvasRef = useRef(renderCanvas)
@@ -1161,21 +1489,39 @@ function App() {
 
   const getEraserSourceCanvas = useCallback(async (): Promise<HTMLCanvasElement | null> => {
     if (!activePhoto || activePhoto.isVideo) return null
+    const workCanvas = workCanvasRef.current
     if (eraserSourcePhotoIdRef.current === activePhoto.id && eraserSourceCanvasRef.current) {
-      return eraserSourceCanvasRef.current
+      const cached = eraserSourceCanvasRef.current
+      if (!workCanvas || (cached.width === workCanvas.width && cached.height === workCanvas.height)) {
+        return cached
+      }
+      eraserSourcePhotoIdRef.current = null
+      eraserSourceCanvasRef.current = null
     }
-    const sourceBlob = originalBlobByPhoto[activePhoto.id] ?? activePhoto.blob
-    const bmp = await createImageBitmap(sourceBlob)
-    const sourceCanvas = document.createElement('canvas')
-    sourceCanvas.width = bmp.width
-    sourceCanvas.height = bmp.height
-    const sourceCtx = sourceCanvas.getContext('2d')
-    if (!sourceCtx) {
+    const tryBlob = async (blob: Blob): Promise<HTMLCanvasElement | null> => {
+      const bmp = await createImageBitmap(blob)
+      if (workCanvas && (bmp.width !== workCanvas.width || bmp.height !== workCanvas.height)) {
+        bmp.close()
+        return null
+      }
+      const sourceCanvas = document.createElement('canvas')
+      sourceCanvas.width = bmp.width
+      sourceCanvas.height = bmp.height
+      const sourceCtx = sourceCanvas.getContext('2d')
+      if (!sourceCtx) {
+        bmp.close()
+        return null
+      }
+      sourceCtx.drawImage(bmp, 0, 0)
       bmp.close()
-      return null
+      return sourceCanvas
     }
-    sourceCtx.drawImage(bmp, 0, 0)
-    bmp.close()
+    const original = originalBlobByPhoto[activePhoto.id]
+    let sourceCanvas = original ? await tryBlob(original).catch(() => null) : null
+    if (!sourceCanvas) {
+      sourceCanvas = await tryBlob(activePhoto.blob).catch(() => null)
+    }
+    if (!sourceCanvas) return null
     eraserSourceCanvasRef.current = sourceCanvas
     eraserSourcePhotoIdRef.current = activePhoto.id
     return sourceCanvas
@@ -1346,17 +1692,27 @@ function App() {
       if (p.isVideo) {
         extractPosterFrame(p.blob).then(({ blob: posterBlob, width, height }) => {
           const posterUrl = URL.createObjectURL(posterBlob)
-          setPhotos((cur) => cur.map((ph) => {
-            if (ph.id !== p.id) return ph
-            URL.revokeObjectURL(ph.previewUrl)
-            return { ...ph, previewUrl: posterUrl, videoWidth: width, videoHeight: height }
-          }))
+          setPhotos((cur) => {
+            const target = cur.find((ph) => ph.id === p.id)
+            if (!target) {
+              URL.revokeObjectURL(posterUrl)
+              return cur
+            }
+            return cur.map((ph) => {
+              if (ph.id !== p.id) return ph
+              URL.revokeObjectURL(ph.previewUrl)
+              return { ...ph, previewUrl: posterUrl, videoWidth: width, videoHeight: height }
+            })
+          })
         }).catch(() => { /* poster extraction failed — keep video blob URL as preview */ })
         getVideoMetadata(p.blob).then((meta) => {
-          setPhotos((cur) => cur.map((ph) => {
-            if (ph.id !== p.id) return ph
-            return { ...ph, videoDuration: meta.duration, videoWidth: meta.width, videoHeight: meta.height, videoFps: meta.fps }
-          }))
+          setPhotos((cur) => {
+            if (!cur.some((ph) => ph.id === p.id)) return cur
+            return cur.map((ph) => {
+              if (ph.id !== p.id) return ph
+              return { ...ph, videoDuration: meta.duration, videoWidth: meta.width, videoHeight: meta.height, videoFps: meta.fps }
+            })
+          })
         }).catch(() => {})
       }
     }
@@ -1474,7 +1830,7 @@ function App() {
         if (!res.ok) throw new Error(`Demo ${url} failed`)
         const blob = await res.blob()
         const ext = url.split('.').pop() ?? 'jpg'
-        const name = ext === 'webm' ? 'demo-video.webm' : `demo-${i + 1}.${ext}`
+        const name = url.split('/').pop() ?? `demo-${i + 1}.${ext}`
         const mime = blob.type || (ext === 'webm' ? 'video/webm' : ext === 'webp' ? 'image/webp' : ext === 'png' ? 'image/png' : 'image/jpeg')
         return { file: new File([blob], name, { type: mime }), name, source: 'upload' as const }
       }))
@@ -1508,6 +1864,13 @@ function App() {
       await commitWorkCanvasToBlob(activePhotoId)
       setActiveDirty(false)
     }
+    const leavingVideo = photos.find((p) => p.id === activePhotoId)?.isVideo
+    if (activePhotoId && leavingVideo) {
+      setDistortSettingsByVideoId((cur) => ({
+        ...cur,
+        [activePhotoId]: snapshotVideoDistortSettings(),
+      }))
+    }
     setActivePhotoId(photoId)
     setSelectedZoneId(null)
     setDraftZone(null)
@@ -1540,8 +1903,12 @@ function App() {
     if (photo) {
       const fmt = photo.mimeType as NormalizeFormat
       if (['image/jpeg', 'image/png', 'image/webp', 'image/bmp', 'image/gif', 'image/tiff'].includes(fmt)) setExportFormat(fmt)
+      if (photo.isVideo) {
+        applyVideoDistortSettings(distortSettingsByVideoId[photoId] ?? EMPTY_VIDEO_DISTORT_SETTINGS)
+        setDetectSensitivity((s) => (s <= 1 ? 10 : s))
+      }
     }
-  }, [activePhotoId, colorAdjByPhoto, commitWorkCanvasToBlob, dirtyByPhoto, isMobile, photos, setActiveDirty])
+  }, [activePhotoId, applyVideoDistortSettings, colorAdjByPhoto, commitWorkCanvasToBlob, dirtyByPhoto, distortSettingsByVideoId, isMobile, photos, setActiveDirty, snapshotVideoDistortSettings])
 
   // ── Unified picker: opens files OR folder depending on browser support ──
   const openUnifiedPicker = useCallback(async () => {
@@ -1619,6 +1986,7 @@ function App() {
   }, [addRecords])
 
   const detectingRef = useRef(false)
+  const detectGenerationRef = useRef(0)
   const detectFacesOnActiveImage = useCallback(async (robust = false) => {
     if (!activePhoto) return
     // Videos are detected frame-by-frame during processing, never on the (stale)
@@ -1628,6 +1996,7 @@ function App() {
     const photoId = activePhoto.id
     const workCanvas = workCanvasRef.current
     if (!workCanvas || workCanvas.width === 0) return
+    const generation = ++detectGenerationRef.current
     detectingRef.current = true
     setIsDetecting(true)
     setLocalProcessingMs(null)
@@ -1638,7 +2007,7 @@ function App() {
     try {
       const { confidence, thorough } = detectSettingsRef.current
       const boxes = await detectFaces(workCanvas, robust || thorough, confidence)
-      if (activePhotoIdRef.current !== photoId) return
+      if (generation !== detectGenerationRef.current || activePhotoIdRef.current !== photoId) return
       const elapsed = Math.round(performance.now() - t0)
       setLocalProcessingMs(elapsed)
       if (boxes.length === 0) {
@@ -1700,6 +2069,7 @@ function App() {
 
   const cancelDetection = useCallback(() => {
     detectingRef.current = false
+    detectGenerationRef.current += 1
     setIsDetecting(false)
     setDetectionStep('')
     setDetectionProgressCallback(null)
@@ -1755,12 +2125,22 @@ function App() {
     tc.drawImage(workCanvas, px, py, pw, ph, 0, 0, pw, ph)
     const ctx = workCanvas.getContext('2d', { willReadFrequently: true })!
     workCanvas.width = pw; workCanvas.height = ph
+    workCtxRef.current = null
     ctx.drawImage(tmp, 0, 0)
     setActiveImageSize({ width: pw, height: ph })
     setResEditW(pw); setResEditH(ph)
     setCropDraft(null)
     setToolMode('brush')
     mobileCanvasEditRef.current = false
+    setMobileViewZoom(1)
+    setMobileViewPan({ x: 0, y: 0 })
+    setMobileViewRotation(0)
+    mobileViewZoomRef.current = 1
+    mobileViewPanRef.current = { x: 0, y: 0 }
+    mobileViewRotationRef.current = 0
+    setMobileViewTransformDirty(false)
+    eraserSourcePhotoIdRef.current = null
+    eraserSourceCanvasRef.current = null
     setActiveDirty(true)
     renderCanvas()
     setNotice(`Cropped to ${pw}×${ph}`)
@@ -1798,7 +2178,7 @@ function App() {
       setNotice(`Save failed: ${msg}`)
     }
     finally { setIsBusy(false) }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   }, [activePhoto, setActiveDirty])
 
   const resetPhotoToOriginal = useCallback(async () => {
@@ -1950,20 +2330,29 @@ function App() {
 
   const jumpToSourceVideoFromSnapshot = useCallback(() => {
     if (!sourceVideoPhoto) return
+    const frameTime = activePhoto?.derivedFromVideoTime
+    if (frameTime != null) pendingVideoSeekRef.current = frameTime
     void selectPhoto(sourceVideoPhoto.id)
+    if (isMobile) setMobileMode('video')
     setNotice(`Returned to source video: ${sourceVideoPhoto.name.split('/').pop()}`)
-  }, [selectPhoto, sourceVideoPhoto])
+  }, [activePhoto?.derivedFromVideoTime, isMobile, selectPhoto, setMobileMode, sourceVideoPhoto])
 
   const mapPointerToVideo = useCallback((event: ReactPointerEvent<HTMLElement>) => {
-    const video = activeVideoRef.current
-    if (!video) return null
-    const bounds = video.getBoundingClientRect()
+    const media = videoMediaRef.current
+    const layout = videoContentLayout
+    if (!media || !layout) return null
+    const bounds = media.getBoundingClientRect()
     if (bounds.width <= 0 || bounds.height <= 0) return null
+    const contentLeft = layout.left * bounds.width
+    const contentTop = layout.top * bounds.height
+    const contentW = layout.width * bounds.width
+    const contentH = layout.height * bounds.height
+    if (contentW <= 0 || contentH <= 0) return null
     return {
-      x: clamp((event.clientX - bounds.left) / bounds.width, 0, 1),
-      y: clamp((event.clientY - bounds.top) / bounds.height, 0, 1),
+      x: clamp((event.clientX - bounds.left - contentLeft) / contentW, 0, 1),
+      y: clamp((event.clientY - bounds.top - contentTop) / contentH, 0, 1),
     }
-  }, [])
+  }, [videoContentLayout])
 
   const clearVideoTimedZones = useCallback(() => {
     if (!activePhoto?.isVideo) return
@@ -2047,7 +2436,6 @@ function App() {
 
   const processActiveVideo = useCallback(async () => {
     if (!activePhoto?.isVideo) return
-    // Guard against a second start while a run is already in flight (double-click race).
     if (videoAbortRef.current) return
     const selectedContainer = videoExportOptions.find((opt) => opt.id === videoExportFormat)
     if (!selectedContainer?.supported) {
@@ -2058,13 +2446,27 @@ function App() {
     videoAbortRef.current = abort
     setVideoProcessing(true)
     setVideoProgress({ current: 0, total: 1, phase: 'analyzing' })
+    if (isMobile) setMobilePanel(null)
+    setVideoMaskDrawActive(false)
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => { requestAnimationFrame(() => resolve()) })
+    })
     try {
       const sourceVideoBlob = originalBlobByPhoto[activePhoto.id] ?? activePhoto.blob
       const manualOverrides = videoFrameOverridesByPhoto[activePhoto.id] ?? []
       const timedZones = videoTimedZonesByPhoto[activePhoto.id] ?? []
+      const videoDistort: VideoDistortOptions | undefined = enabledDistorts.length > 0
+        ? {
+            enabled: enabledDistorts,
+            strengths: distortStrengthByEffect,
+            params: adjTransformParams,
+            pixelShiftType: adjPixelShiftType,
+          }
+        : undefined
+      const videoColorAdj = !isColorAdjNoop(colorAdj) ? colorAdj : undefined
       const resultBlob = await processVideo(sourceVideoBlob, {
         effect: selectedEffect,
-        strength: brushStrength / 100,
+        strength: brushStrength,
         emoji: (!emojiRandom && selectedEmoji) ? selectedEmoji : pickRandomEmoji(),
         fixedEmoji: (!emojiRandom && selectedEmoji) ? selectedEmoji : undefined,
         customImages: customImageAssets,
@@ -2072,8 +2474,22 @@ function App() {
         outputFormat: videoExportFormat,
         frameOverrides: manualOverrides,
         timedZones,
-        onPhase: (phase) => setVideoProgress((prev) => ({ current: prev?.current ?? 0, total: prev?.total ?? 1, phase })),
-        onProgress: (current, total) => setVideoProgress((prev) => ({ current, total, phase: prev?.phase ?? 'analyzing' })),
+        colorAdj: videoColorAdj,
+        distort: videoDistort,
+        onPhase: (phase) => setVideoProgress((prev) => ({
+          current: prev?.current ?? 0,
+          total: prev?.total ?? 1,
+          phase,
+          renderFrame: prev?.renderFrame,
+          renderTotal: prev?.renderTotal,
+        })),
+        onProgress: (current, total) => setVideoProgress((prev) => ({
+          current,
+          total,
+          phase: prev?.phase ?? 'analyzing',
+          renderFrame: prev?.renderFrame,
+          renderTotal: prev?.renderTotal,
+        })),
         abortSignal: abort.signal,
       })
       const [poster, meta] = await Promise.all([
@@ -2099,7 +2515,26 @@ function App() {
       const manualSummary = [
         manualOverrides.length > 0 ? `${manualOverrides.length} frame override${manualOverrides.length === 1 ? '' : 's'}` : '',
         timedZones.length > 0 ? `${timedZones.length} timeline mask${timedZones.length === 1 ? '' : 's'}` : '',
+        videoColorAdj ? 'color adjust' : '',
+        videoDistort ? `${videoDistort.enabled.length} distort effect${videoDistort.enabled.length === 1 ? '' : 's'}` : '',
       ].filter(Boolean).join(' and ')
+      setVideoExportedDistortKeyByPhoto((cur) => ({
+        ...cur,
+        [activePhoto.id]: distortPipelineKey(
+          enabledDistorts,
+          distortStrengthByEffect,
+          adjTransformParams,
+          adjPixelShiftType,
+        ),
+      }))
+      setVideoExportedColorAdjKeyByPhoto((cur) => ({
+        ...cur,
+        [activePhoto.id]: colorAdjExportKey(colorAdj),
+      }))
+      setActiveVideoTime(0)
+      setVideoPreviewFaceZones([])
+      setProcessedVideoEpoch((epoch) => epoch + 1)
+      setVideoReadyTick((tick) => tick + 1)
       setNotice(`Video processed successfully as ${selectedContainer.label}. ${manualSummary ? `${manualSummary} baked in.` : 'Preview updated.'}`)
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') {
@@ -2112,8 +2547,10 @@ function App() {
       setVideoProcessing(false)
       setVideoProgress(null)
       videoAbortRef.current = null
+      if (videoDistortPreviewCanvasRef.current) videoDistortPreviewCanvasRef.current.width = 0
+      setVideoDistortPreviewVisible(false)
     }
-  }, [activePhoto, brushStrength, originalBlobByPhoto, selectedEffect, videoExportFormat, videoExportOptions, videoFrameOverridesByPhoto, videoTimedZonesByPhoto])
+  }, [activePhoto, adjPixelShiftType, adjTransformParams, brushStrength, colorAdj, customImageAssets, customImageSource, distortStrengthByEffect, enabledDistorts, emojiRandom, isMobile, originalBlobByPhoto, selectedEffect, selectedEmoji, videoExportFormat, videoExportOptions, videoFrameOverridesByPhoto, videoTimedZonesByPhoto])
 
   const cancelVideoProcessing = useCallback(() => {
     videoAbortRef.current?.abort()
@@ -2395,7 +2832,7 @@ function App() {
       setSvgPreviewSize(null)
       setVectorizing(false)
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   }, [vectorizePanelOpen, activePhoto?.id, activePhoto?.isVideo])
 
   useEffect(() => () => {
@@ -2426,8 +2863,12 @@ function App() {
     try {
       const zip = new JSZip()
       const usage = new Map<string, number>()
-      // Strip metadata from every photo before adding to ZIP
+      // Strip metadata from images; videos stay as-is (re-encoded exports are already metadata-free)
       await Promise.all(photos.map(async (p) => {
+        if (p.isVideo) {
+          zip.file(makeZipSafeName(p.name, usage), p.blob)
+          return
+        }
         const clean = await stripMetadata(p.blob)
         zip.file(makeZipSafeName(p.name, usage), clean)
       }))
@@ -2647,6 +3088,8 @@ function App() {
     setEnabledDistorts([])
     setDistortStrengthByEffect(DEFAULT_DISTORT_STRENGTHS)
     if (transformPreviewCanvasRef.current) transformPreviewCanvasRef.current.width = 0
+    if (videoDistortPreviewCanvasRef.current) videoDistortPreviewCanvasRef.current.width = 0
+    setVideoDistortPreviewVisible(false)
     renderCanvas()
   }, [renderCanvas])
 
@@ -2739,7 +3182,7 @@ function App() {
       }).catch(() => {}).finally(() => setPreviewRendering(false))
     }, fmt, quality)
   // renderCanvas intentionally not in deps — use renderCanvasRef to avoid infinite loop
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   }, [activePhoto, exportFormat, exportQuality, exportPngDepth, mobileExportDraft])
 
   // Batch live preview: when batch panel open, apply enabled tasks to a preview canvas
@@ -2775,7 +3218,7 @@ function App() {
     }
     renderCanvasRef.current()   // use ref to avoid dep on renderCanvas
   // renderCanvas intentionally not in deps — use renderCanvasRef
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   }, [activePhoto, activeBatchTasks, batchPanelOpen, colorAdj, normalizeSettings])
 
   // Keep ref in sync so photo-loading effect can call it
@@ -2791,8 +3234,185 @@ function App() {
     if (batchPreviewDebounceRef.current) clearTimeout(batchPreviewDebounceRef.current)
     batchPreviewDebounceRef.current = setTimeout(() => { computeBatchPreview() }, 350)
     return () => { if (batchPreviewDebounceRef.current) clearTimeout(batchPreviewDebounceRef.current) }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   }, [batchPanelOpen, activeBatchTasks, normalizeSettings, activePhoto, colorAdj])
+
+  useEffect(() => {
+    if (!activePhotoId || !activePhoto?.isVideo) return
+    setDistortSettingsByVideoId((cur) => ({
+      ...cur,
+      [activePhotoId]: snapshotVideoDistortSettings(),
+    }))
+  }, [activePhoto?.isVideo, activePhotoId, adjPixelShiftType, adjTransformParams, distortStrengthByEffect, enabledDistorts, snapshotVideoDistortSettings])
+
+  useEffect(() => {
+    if (!activePhotoId || !activePhoto?.isVideo) return
+    setColorAdjByPhoto((cur) => ({
+      ...cur,
+      [activePhotoId]: { ...colorAdj },
+    }))
+  }, [activePhoto?.isVideo, activePhotoId, colorAdj])
+
+  const loadedVideoDistortPhotoRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!activePhotoId || !activePhoto?.isVideo) {
+      loadedVideoDistortPhotoRef.current = null
+      return
+    }
+    if (loadedVideoDistortPhotoRef.current === activePhotoId) return
+    loadedVideoDistortPhotoRef.current = activePhotoId
+    applyVideoDistortSettings(distortSettingsByVideoId[activePhotoId] ?? EMPTY_VIDEO_DISTORT_SETTINGS)
+  }, [activePhoto?.isVideo, activePhotoId, applyVideoDistortSettings, distortSettingsByVideoId])
+
+  useEffect(() => {
+    if (!activePhoto?.isVideo) return
+    const overlay = videoDistortPreviewCanvasRef.current
+    if (overlay && videoContentLayout) {
+      syncVideoOverlayCanvasDisplay(overlay, videoContentLayout)
+    }
+  }, [activePhoto?.isVideo, videoContentLayout])
+
+  // Re-render video preview immediately when anonymize / adjust / distort settings change.
+  const refreshVideoFramePreview = useCallback(async () => {
+    if (videoProcessingRef.current) return
+    const clearPreview = () => {
+      const overlay = videoDistortPreviewCanvasRef.current
+      if (overlay) {
+        overlay.width = 0
+        overlay.classList.remove('visible')
+      }
+      setVideoDistortPreviewVisible(false)
+    }
+    const photo = activePhotoRef.current
+    const faceZones = videoPreviewFaceZonesRef.current
+    const hasFaceZones = faceZones.length > 0
+    const activeDistorts = getActiveDistorts()
+    const hasColor = !isColorAdjNoop(colorAdj)
+    const hasDistort = activeDistorts.length > 0
+    const shouldPreview = Boolean(photo?.isVideo && (hasFaceZones || hasColor || hasDistort))
+    if (!shouldPreview) {
+      clearPreview()
+      return
+    }
+    const video = activeVideoRef.current
+    if (!video || video.videoWidth <= 0 || video.videoHeight <= 0) {
+      clearPreview()
+      return
+    }
+    const layout = videoContentLayoutRef.current ?? (
+      videoMediaRef.current
+        ? measureVideoContentLayout(
+          videoMediaRef.current.clientWidth,
+          videoMediaRef.current.clientHeight,
+          video.videoWidth,
+          video.videoHeight,
+        )
+        : null
+    )
+    const gen = ++videoDistortPreviewGenRef.current
+    const targetTime = activeVideoTimeRef.current
+    try {
+      await waitForVideoFrame(video)
+      if (gen !== videoDistortPreviewGenRef.current) return
+      if (Math.abs(video.currentTime - targetTime) > 0.12) return
+      if (!videoDistortCaptureCanvasRef.current) {
+        videoDistortCaptureCanvasRef.current = document.createElement('canvas')
+      }
+      const capture = videoDistortCaptureCanvasRef.current
+      capture.width = video.videoWidth
+      capture.height = video.videoHeight
+      const captureCtx = capture.getContext('2d')
+      if (!captureCtx) return
+      captureCtx.drawImage(video, 0, 0, capture.width, capture.height)
+      const effect = selectedEffectRef.current
+      if (hasFaceZones) {
+        const W = capture.width
+        const H = capture.height
+        const emojis = emojiRandomRef.current
+          ? pickUniqueEmojis(faceZones.length)
+          : faceZones.map(() => selectedEmojiRef.current ?? pickRandomEmoji())
+        faceZones.forEach((zone, i) => {
+          const emoji = emojiRandomRef.current
+            ? (zone.emoji || emojis[i] || pickRandomEmoji())
+            : (selectedEmojiRef.current ?? zone.emoji ?? emojis[i] ?? pickRandomEmoji())
+          try {
+            applyEffectRect(
+              captureCtx,
+              effect,
+              zone.x * W,
+              zone.y * H,
+              zone.width * W,
+              zone.height * H,
+              brushStrength,
+              emoji,
+              customEffectOptions({ ...zone, effect }, `${zone.id}-${i}`),
+            )
+          } catch (err) {
+            console.warn('Video face preview effect failed:', err)
+          }
+        })
+      }
+      if (hasColor) {
+        applyColorAdjustments(captureCtx, colorAdj, capture)
+      }
+      let result: HTMLCanvasElement = capture
+      if (hasDistort) {
+        const fps = photo?.videoFps && photo.videoFps > 0 ? photo.videoFps : 30
+        const seed = Math.max(0, Math.round(activeVideoTimeRef.current * fps))
+        result = await applyDistortPipeline(
+          capture,
+          activeDistorts,
+          distortStrengthByEffect,
+          adjTransformParams,
+          adjPixelShiftType,
+          seed,
+        )
+      }
+      if (gen !== videoDistortPreviewGenRef.current) return
+      if (Math.abs(video.currentTime - targetTime) > 0.12) return
+      const overlay = videoDistortPreviewCanvasRef.current
+      if (!overlay) return
+      paintVideoPreviewOverlay(overlay, result, result.width, result.height, layout)
+      setVideoDistortPreviewVisible(true)
+    } catch (err) {
+      console.warn('Video frame preview failed:', err)
+      clearPreview()
+    }
+  }, [
+    activeVideoTime,
+    adjPixelShiftType,
+    adjTransformParams,
+    brushStrength,
+    colorAdj,
+    customEffectOptions,
+    distortStrengthByEffect,
+    enabledDistorts,
+    getActiveDistorts,
+  ])
+
+  useEffect(() => {
+    if (videoProcessing) return
+    void refreshVideoFramePreview()
+  }, [
+    videoProcessing,
+    refreshVideoFramePreview,
+    activePhoto?.isVideo,
+    activePhoto?.id,
+    activeVideoTime,
+    videoPreviewFaceZones,
+    selectedEffect,
+    selectedEmoji,
+    emojiRandom,
+    selectedCustomImageId,
+    customImageSource,
+    mobilePanel,
+    autoDetect,
+  ])
+
+  const setSelectedEffect = useCallback((effect: AnonymizeEffectId) => {
+    selectedEffectRef.current = effect
+    setSelectedEffectState(effect)
+  }, [])
 
   // Transform live preview: recompute from workCanvas whenever transform params change in adj flyout
   useEffect(() => {
@@ -2825,8 +3445,129 @@ function App() {
       } catch { /* ignore */ }
     }, 40)
     return () => { if (transformPreviewDebounceRef.current) clearTimeout(transformPreviewDebounceRef.current) }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   }, [adjFlyoutOpen, transformPanelOpen, mobilePanel, adjTransform, enabledDistorts, distortStrengthByEffect, adjTransformParams, adjPixelShiftType, activePhoto?.id, isMobile])
+
+  const runVideoFaceDetectPass = useCallback(async (passIndex: number, targetTime: number, gen: number) => {
+    const video = activeVideoRef.current
+    if (!video || video.videoWidth <= 0 || video.videoHeight <= 0) return
+    try {
+      await waitForVideoFrame(video)
+      if (gen !== videoFaceDetectGenRef.current) return
+      if (Math.abs(video.currentTime - targetTime) > 0.12) return
+      if (!videoFaceDetectCanvasRef.current) {
+        videoFaceDetectCanvasRef.current = document.createElement('canvas')
+      }
+      const capture = videoFaceDetectCanvasRef.current
+      capture.width = video.videoWidth
+      capture.height = video.videoHeight
+      const captureCtx = capture.getContext('2d')
+      if (!captureCtx) return
+      captureCtx.drawImage(video, 0, 0, capture.width, capture.height)
+      const { confidence, thorough } = getVideoDetectSettings(detectSensitivity, passIndex)
+      const boxes = await detectFaces(capture, thorough, confidence)
+      if (gen !== videoFaceDetectGenRef.current) return
+      if (Math.abs(video.currentTime - targetTime) > 0.12) return
+      const W = capture.width
+      const H = capture.height
+      const offsetPct = detectSettingsRef.current.faceOffset
+      if (boxes.length === 0) {
+        if (passIndex === 0) setVideoPreviewFaceZones([])
+        return
+      }
+      const emojis = pickUniqueEmojis(boxes.length)
+      const frameKey = Math.round(targetTime * 1000)
+      const dismissed = videoDismissedFacesByPhotoRef.current[activePhotoId ?? '']?.[frameKey] ?? []
+      const zones: Zone[] = boxes.map((b, i) => {
+        const detectX = b.x / W
+        const detectY = b.y / H
+        const detectWidth = b.width / W
+        const detectHeight = b.height / H
+        const expanded = expandPixelBox(b.x, b.y, b.width, b.height, W, H, offsetPct)
+        return {
+          id: createId(),
+          ...expanded,
+          detectX,
+          detectY,
+          detectWidth,
+          detectHeight,
+          effect: selectedEffect,
+          emoji: emojiRandomRef.current ? emojis[i] : (selectedEmojiRef.current ?? emojis[i]),
+          customImageAssetId: selectedEffect === 'custom-image'
+            ? resolveCustomImageAssetId(`${activePhotoId ?? 'video'}-${i}`)
+            : undefined,
+        }
+      })
+      setVideoPreviewFaceZones(filterDismissedFaceZones(zones, dismissed))
+      void refreshVideoFramePreview()
+    } catch {
+      if (gen === videoFaceDetectGenRef.current && passIndex === 0) setVideoPreviewFaceZones([])
+    }
+  }, [activePhotoId, detectSensitivity, refreshVideoFramePreview, resolveCustomImageAssetId, selectedEffect])
+
+  // Video face preview: immediate scan on load/frame change, then +4%/s (10→14→18→22%) on same frame.
+  useEffect(() => {
+    videoFaceScanTimersRef.current.forEach(clearTimeout)
+    videoFaceScanTimersRef.current = []
+    if (videoFaceDetectDebounceRef.current) clearTimeout(videoFaceDetectDebounceRef.current)
+
+    if (!activePhoto?.isVideo || !autoDetect || detector.mode === 'unavailable') {
+      setVideoPreviewFaceZones([])
+      return
+    }
+    const video = activeVideoRef.current
+    if (!video || video.videoWidth <= 0 || video.videoHeight <= 0) {
+      return
+    }
+
+    const targetTime = activeVideoTimeRef.current
+    const frameKey = Math.round(targetTime * 1000)
+    const gen = ++videoFaceDetectGenRef.current
+
+    void runVideoFaceDetectPass(0, targetTime, gen)
+
+    for (let passIndex = 1; passIndex <= VIDEO_FACE_SCAN_MAX_PASSES; passIndex += 1) {
+      const timer = setTimeout(() => {
+        if (gen !== videoFaceDetectGenRef.current) return
+        if (Math.round(activeVideoTimeRef.current * 1000) !== frameKey) return
+        void runVideoFaceDetectPass(passIndex, targetTime, gen)
+      }, passIndex * 1000)
+      videoFaceScanTimersRef.current.push(timer)
+    }
+
+    return () => {
+      videoFaceScanTimersRef.current.forEach(clearTimeout)
+      videoFaceScanTimersRef.current = []
+    }
+  }, [
+    activePhoto?.id,
+    activePhoto?.isVideo,
+    activeVideoTime,
+    autoDetect,
+    detector.mode,
+    detectFaceOffset,
+    detectSensitivity,
+    processedVideoEpoch,
+    runVideoFaceDetectPass,
+    selectedEffect,
+    videoReadyTick,
+  ])
+
+  const seekActiveVideo = useCallback((timeSec: number) => {
+    const video = activeVideoRef.current
+    if (!video) return
+    const duration = activePhoto?.videoDuration ?? video.duration ?? 0
+    const next = clamp(timeSec, 0, Number.isFinite(duration) && duration > 0 ? duration : timeSec)
+    video.currentTime = next
+    setActiveVideoTime(next)
+  }, [activePhoto?.videoDuration])
+
+  const toggleVideoPlayback = useCallback(() => {
+    const video = activeVideoRef.current
+    if (!video) return
+    if (video.paused) void video.play().catch(() => {})
+    else video.pause()
+  }, [])
 
   // Recompute preview file size debounced whenever quality/format/depth/photo changes
   useEffect(() => {
@@ -2835,7 +3576,7 @@ function App() {
     const delay = mobileExportDraft ? 60 : 300
     qualityDebounceRef.current = setTimeout(() => { computePreviewFileSize() }, delay)
     return () => { if (qualityDebounceRef.current) clearTimeout(qualityDebounceRef.current) }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   }, [exportQuality, exportFormat, exportPngDepth, activePhoto?.id, mobileExportDraft])
 
   const beginMobileExportEdit = useCallback(() => {
@@ -3001,6 +3742,23 @@ function App() {
     setSelectedZoneId((cur) => cur === id ? null : cur)
   }, [setActiveZones])
 
+  const removeVideoPreviewFaceZone = useCallback((zoneId: string) => {
+    const zone = videoPreviewFaceZonesRef.current.find((item) => item.id === zoneId)
+    if (!zone || !activePhotoId) return
+    const frameKey = Math.round(activeVideoTimeRef.current * 1000)
+    const byPhoto = videoDismissedFacesByPhotoRef.current
+    if (!byPhoto[activePhotoId]) byPhoto[activePhotoId] = {}
+    if (!byPhoto[activePhotoId][frameKey]) byPhoto[activePhotoId][frameKey] = []
+    byPhoto[activePhotoId][frameKey].push({
+      x: zone.x,
+      y: zone.y,
+      width: zone.width,
+      height: zone.height,
+    })
+    setVideoPreviewFaceZones((zones) => zones.filter((item) => item.id !== zoneId))
+    void refreshVideoFramePreview()
+  }, [activePhotoId, refreshVideoFramePreview])
+
   const clearZones = useCallback(() => { setActiveZones(() => []); setSelectedZoneId(null); setDraftZone(null) }, [setActiveZones])
 
   const handleCanvasPointerDown = useCallback((event: ReactPointerEvent<HTMLCanvasElement>) => {
@@ -3015,7 +3773,11 @@ function App() {
     }
     if (!activePhoto) return
     if (isMobile && !mobileCanvasEditRef.current) return
-    const mapped = mapPointerToImage(event.clientX, event.clientY)
+    const mapped = mapPointerToImage(
+      event.clientX,
+      event.clientY,
+      toolMode === 'crop' || toolMode === 'brush',
+    )
     if (!mapped) return
     canvasRef.current?.setPointerCapture(event.pointerId)
     if (toolMode === 'crop') {
@@ -3066,7 +3828,11 @@ function App() {
 
   const handleCanvasPointerMove = useCallback((event: ReactPointerEvent<HTMLCanvasElement>) => {
     const session = pointerSessionRef.current
-    const mapped = mapPointerToImage(event.clientX, event.clientY, session.mode === 'brush')
+    const mapped = mapPointerToImage(
+      event.clientX,
+      event.clientY,
+      session.mode === 'brush' || session.mode === 'crop-draw',
+    )
     if (mapped) setCursorPoint({ x: mapped.canvasX, y: mapped.canvasY })
     else setCursorPoint(null)
 
@@ -3082,6 +3848,7 @@ function App() {
 
     if (session.mode === 'crop-draw' && mapped) {
       setCropDraft({ x: Math.min(session.startX, mapped.normalizedX), y: Math.min(session.startY, mapped.normalizedY), w: Math.abs(mapped.normalizedX - session.startX), h: Math.abs(mapped.normalizedY - session.startY) })
+      renderCanvas()
       return
     }
 
@@ -3263,7 +4030,8 @@ function App() {
   }, [customEffectOptions, getWorkCtx])
 
   const updateSelectedZoneEffect = useCallback((effect: AnonymizeEffectId) => {
-    setSelectedEffect(effect)
+    selectedEffectRef.current = effect
+    setSelectedEffectState(effect)
     setEraserActive(false)
     setEffectFlyoutOpen(false)
     setToolMode(lastZoneTool === 'rectangle' ? 'zone' : 'brush')
@@ -3316,7 +4084,7 @@ function App() {
       })
     }, 90)
     return () => { if (zonePreviewDebounceRef.current) clearTimeout(zonePreviewDebounceRef.current) }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   }, [brushStrength, detectFaceOffset, zoneBakeSignature, activePhoto?.id, zonesAnonymized])
 
   // Sync brushSizeRef when slider changes
@@ -3411,6 +4179,11 @@ function App() {
   useEffect(() => () => {
     if (renderRafRef.current !== null) cancelAnimationFrame(renderRafRef.current)
     if (brushRafRef.current !== null) cancelAnimationFrame(brushRafRef.current)
+    if (brushDebounceRef.current !== null) clearTimeout(brushDebounceRef.current)
+    if (videoFrameLabelTimerRef.current !== null) clearTimeout(videoFrameLabelTimerRef.current)
+    videoAbortRef.current?.abort()
+    normalizeCancelRef.current = true
+    detectGenerationRef.current += 1
   }, [])
 
   useEffect(() => {
@@ -3435,10 +4208,13 @@ function App() {
         }),
       ])
       setDetector(status)
+      setModelLoadProgress({ loaded: 1, total: 1, phase: 'ready' })
+      await new Promise((resolve) => setTimeout(resolve, 900))
       return status
     } catch {
       const failed: DetectorStatus = { mode: 'unavailable', message: 'Initialization failed.' }
       setDetector(failed)
+      await new Promise((resolve) => setTimeout(resolve, 1200))
       return failed
     } finally {
       setDetectorLoading(false)
@@ -3533,7 +4309,7 @@ function App() {
     }).catch(() => setNotice('Failed to load photo.'))
       .finally(() => { if (!cancelled) setIsBusy(false) })
     return () => { cancelled = true }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   }, [activePhoto?.id])  // only re-run when photo switches, not on every render
 
   useEffect(() => { renderCanvas() }, [renderCanvas, effectiveZones, selectedZoneId, draftZone, cursorPoint, toolMode, showBoxes, detectFaceOffset])
@@ -3556,7 +4332,7 @@ function App() {
     }, 300)
 
     return () => { cancelled = true; clearTimeout(timer) }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   }, [autoDetect, detector.mode, activePhoto?.id])
 
   useEffect(() => {
@@ -3569,7 +4345,7 @@ function App() {
     })
     observer.observe(viewport)
     return () => { observer.disconnect(); if (rafId !== null) cancelAnimationFrame(rafId) }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [])  
 
   // Workspace is display:none in live mode — repaint when editor becomes visible.
   useEffect(() => {
@@ -3667,13 +4443,33 @@ function App() {
           URL.revokeObjectURL(p.previewUrl)
           return { ...p, blob, previewUrl: nextUrl, edited: true }
         }))
+        setOriginalBlobByPhoto((cur) => ({ ...cur, [photoId]: blob }))
+        setZonesByPhoto((cur) => ({
+          ...cur,
+          [photoId]: rotateZones90(cur[photoId] ?? [], direction),
+        }))
         if (activePhotoId === photoId) {
+          eraserSourcePhotoIdRef.current = null
+          eraserSourceCanvasRef.current = null
+          setActiveImageSize({ width: canvas.width, height: canvas.height })
+          setResEditW(canvas.width)
+          setResEditH(canvas.height)
+          setMobileViewZoom(1)
+          setMobileViewPan({ x: 0, y: 0 })
+          setMobileViewRotation(0)
+          mobileViewZoomRef.current = 1
+          mobileViewPanRef.current = { x: 0, y: 0 }
+          mobileViewRotationRef.current = 0
+          setMobileViewTransformDirty(false)
           const wc = workCanvasRef.current
           if (wc) {
             createImageBitmap(blob).then((bmp) => {
-              wc.width = bmp.width; wc.height = bmp.height
+              wc.width = bmp.width
+              wc.height = bmp.height
+              workCtxRef.current = null
               wc.getContext('2d')!.drawImage(bmp, 0, 0)
               bmp.close()
+              renderCanvasRef.current()
             }).catch(() => {})
           }
         }
@@ -3691,7 +4487,7 @@ function App() {
       const tr = localToCanvas(lx, ly, t)
       return { id: zone.id, top: tr.y, left: tr.x + 2 }
     })
-  }, [effectiveZones, showBoxes, activeImageSize, mobileViewZoom, mobileViewPan, mobileViewRotation])
+  }, [effectiveZones, showBoxes, activeImageSize, mobileViewZoom, mobileViewPan, mobileViewRotation, canvasLayoutVersion])
 
   const openVideoPicker = useCallback(() => {
     const input = uploadInputRef.current
@@ -3787,7 +4583,9 @@ function App() {
 
   const selectToolCategory = useCallback((cat: MobileToolCategory) => {
     setActiveCategory(cat)
-    if (cat !== 'zone' && cat !== 'crop') {
+    if (cat === 'crop') {
+      mobileCanvasEditRef.current = true
+    } else if (cat !== 'zone') {
       mobileCanvasEditRef.current = toolMode === 'brush' || toolMode === 'zone' || toolMode === 'crop'
     }
     if (cat === 'gallery') {
@@ -3853,6 +4651,7 @@ function App() {
 
   const exitLiveToWorkspace = useCallback(() => {
     setMobilePanel(null)
+    setLastDetectFailed(false)
     const id = lastAddedPhotoIdRef.current ?? photos[photos.length - 1]?.id ?? null
     if (photos.length > 0) {
       setMobileMode('editor')
@@ -4007,6 +4806,7 @@ function App() {
     activePhoto,
     activePhotoId,
     activeZones,
+    videoPreviewFaceCount: videoPreviewFaceZones.length,
     displayedPhotos,
     sidebarView,
     selectedForBatch,
@@ -4090,6 +4890,8 @@ function App() {
     setBrushStrength,
     toolMode,
     setToolMode,
+    cropDraft,
+    cropToSelection,
     selectedEffect,
     setSelectedEffect,
     customImageSource,
@@ -4296,7 +5098,7 @@ function App() {
 
   return (
     <div
-      className={`app-shell${isMobile ? ' app-shell-mobile' : ' app-shell-desktop-v2'}${isMobile && mobileMode === 'video' ? ' app-shell-mobile--video' : ''}${isMobile && mobileMode === 'editor' ? ' app-shell-mobile--image' : ''}`}
+      className={`app-shell${isMobile ? ' app-shell-mobile' : ' app-shell-desktop-v2'}${isMobile && mobileMode === 'live' ? ' app-shell-mobile--live' : ''}${isMobile && mobileMode === 'video' ? ' app-shell-mobile--video' : ''}${isMobile && mobileMode === 'editor' ? ' app-shell-mobile--image' : ''}`}
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
       onDragOver={handleDragOver}
@@ -4402,6 +5204,7 @@ function App() {
           <DesktopHomeDefault
             isDragOver={isDragOver}
             isBusy={isBusy}
+            detectorLoading={detectorLoading}
             onAbout={() => setAboutOpen(true)}
             onSelectMedia={openUnifiedPicker}
             onLoadDemo={loadDemoPhotos}
@@ -4964,7 +5767,7 @@ function App() {
                   </button>
                 ))}
               </div>
-              {selectedEffect === 'custom-image' && !activePhoto?.isVideo && (
+              {selectedEffect === 'custom-image' && (
                 <div className="ts-custom-image-controls">
                   <label className="ts-custom-image-label" htmlFor="desktop-custom-image-source">Source</label>
                   <select
@@ -5245,7 +6048,7 @@ function App() {
                         )}
                         {normalizeSettings.cropMode === 'template' && (
                           <div className="crop-box">
-                            <button className="btn btn-sm" type="button" onClick={() => { if (!activePhoto) { setNotice('Select a photo first.'); return }; setIsNormalizeCropPicking((v) => !v); setNormalizeCropDraft(null); pointerSessionRef.current = { mode: 'idle' } }} disabled={isNormalizing}>
+                            <button className="btn btn-sm" type="button" onClick={() => { if (!activePhoto) { setNotice('Select a photo first.'); return } setIsNormalizeCropPicking((v) => !v); setNormalizeCropDraft(null); pointerSessionRef.current = { mode: 'idle' } }} disabled={isNormalizing}>
                               {isNormalizeCropPicking ? 'Cancel' : 'Draw with mouse'}
                             </button>
                             <div className="btn-row">
@@ -5676,24 +6479,18 @@ function App() {
               </div>
             )}
 
-            {/* Video processing overlay */}
-            {videoProcessing && videoProgress && isMobile && (
-              <MobileVideoProgress
-                phase={videoProgress.phase}
-                current={videoProgress.current}
-                total={videoProgress.total}
-                onCancel={cancelVideoProcessing}
-              />
-            )}
+            {/* Video processing overlay — desktop only; mobile sits under action row */}
             {videoProcessing && videoProgress && !isMobile && (
-              <div className="detecting-overlay" style={{ flexDirection: 'column', gap: '0.6rem' }}>
+              <div className="detecting-overlay video-processing-overlay" style={{ flexDirection: 'column', gap: '0.6rem' }}>
                 <span>🎬</span>
                 <span>
                   {videoProgress.phase === 'analyzing'
-                    ? 'Analyzing video tracks'
+                    ? 'Analyzing face tracks'
                     : videoProgress.phase === 'preparing'
                       ? 'Preparing frame map'
-                      : 'Rendering video'}… {videoProgress.current}/{videoProgress.total}
+                      : videoProgress.renderFrame != null && videoProgress.renderTotal
+                        ? `Rendering frame ${videoProgress.renderFrame}/${videoProgress.renderTotal}`
+                        : 'Rendering video'}… {videoProgress.current}/{videoProgress.total}
                 </span>
                 <div style={{ width: '60%', maxWidth: 300, height: 6, background: 'rgba(255,255,255,0.15)', borderRadius: 3, overflow: 'hidden' }}>
                   <div style={{ width: `${(videoProgress.current / videoProgress.total) * 100}%`, height: '100%', background: 'var(--accent)', borderRadius: 3, transition: 'width 0.1s' }} />
@@ -5708,139 +6505,280 @@ function App() {
             {activePhoto?.isVideo && activeVideoUrl && (
               <div className="video-player-wrap">
                 <div className="video-stage">
-                  <video
-                    key={activeVideoUrl}
-                    ref={activeVideoRef}
-                    src={activeVideoUrl}
-                    controls
-                    className="video-player"
-                    style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
-                    onTimeUpdate={(event) => setActiveVideoTime(event.currentTarget.currentTime)}
-                    onSeeked={(event) => setActiveVideoTime(event.currentTarget.currentTime)}
-                    onLoadedMetadata={(event) => setActiveVideoTime(event.currentTarget.currentTime)}
-                  />
-                  <div
-                    className={`video-mask-layer${videoMaskDrawActive ? ' drawing' : ''}`}
-                    onPointerDown={handleVideoMaskPointerDown}
-                    onPointerMove={handleVideoMaskPointerMove}
-                    onPointerUp={handleVideoMaskPointerUp}
-                    onPointerCancel={handleVideoMaskPointerUp}
-                  >
-                    {[...visibleVideoTimedZones.map((item) => item.zone), ...(videoDraftZone ? [videoDraftZone] : [])].map((zone) => (
-                      <div
-                        key={zone.id}
-                        className={`video-mask-rect video-mask-rect--${zone.maskShape ?? 'rectangle'}${zone.id === 'draft-video-mask' ? ' draft' : ''}`}
-                        style={{
-                          left: `${zone.x * 100}%`,
-                          top: `${zone.y * 100}%`,
-                          width: `${zone.width * 100}%`,
-                          height: `${zone.height * 100}%`,
-                        }}
-                      />
-                    ))}
-                  </div>
-                  {activeVideoFrameOverrides.length > 0 && Number.isFinite(activePhoto.videoDuration) && (activePhoto.videoDuration ?? 0) > 0 && (
-                    <div className="video-frame-marker-layer" aria-hidden="true">
-                      {activeVideoFrameOverrides.map((item) => (
-                        <span
-                          key={`${item.timeSec}`}
-                          className="video-frame-marker"
-                          style={{ left: `${clamp((item.timeSec / (activePhoto.videoDuration ?? 1)) * 100, 0, 100)}%` }}
+                  <div className="video-media" ref={videoMediaRef}>
+                    <video
+                      key={`${activePhoto.id}-${processedVideoEpoch}-${activeVideoUrl}`}
+                      ref={activeVideoRef}
+                      src={activeVideoUrl}
+                      className="video-player"
+                      style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
+                      onTimeUpdate={(event) => setActiveVideoTime(event.currentTarget.currentTime)}
+                      onSeeked={(event) => setActiveVideoTime(event.currentTarget.currentTime)}
+                      onLoadedMetadata={(event) => {
+                        setActiveVideoTime(event.currentTarget.currentTime)
+                        syncVideoContentLayout()
+                        setVideoReadyTick((t) => t + 1)
+                      }}
+                      onLoadedData={() => setVideoReadyTick((t) => t + 1)}
+                      onPlay={() => setVideoPlaying(true)}
+                      onPause={() => setVideoPlaying(false)}
+                      onEnded={() => setVideoPlaying(false)}
+                    />
+                    <canvas
+                      ref={videoDistortPreviewCanvasRef}
+                      className={`video-distort-preview${videoDistortPreviewVisible ? ' visible' : ''}`}
+                      style={videoOverlayLayerStyle(videoContentLayout)}
+                      aria-hidden="true"
+                    />
+                    <div
+                      className={`video-mask-layer${videoMaskDrawActive ? ' drawing' : ''}`}
+                      style={videoOverlayLayerStyle(videoContentLayout)}
+                      onPointerDown={handleVideoMaskPointerDown}
+                      onPointerMove={handleVideoMaskPointerMove}
+                      onPointerUp={handleVideoMaskPointerUp}
+                      onPointerCancel={handleVideoMaskPointerUp}
+                    >
+                      {showBoxes && videoPreviewFaceZones.map((zone) => (
+                        <div
+                          key={zone.id}
+                          className="video-face-rect"
+                          style={{
+                            left: `${zone.x * 100}%`,
+                            top: `${zone.y * 100}%`,
+                            width: `${zone.width * 100}%`,
+                            height: `${zone.height * 100}%`,
+                          }}
+                        >
+                          <button
+                            type="button"
+                            className="video-face-rect-dismiss zone-delete-btn"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              removeVideoPreviewFaceZone(zone.id)
+                            }}
+                            title="Remove this face box"
+                            aria-label="Remove this face box"
+                          >
+                            <Icon name="close" size={12} />
+                          </button>
+                        </div>
+                      ))}
+                      {[...visibleVideoTimedZones.map((item) => item.zone), ...(videoDraftZone ? [videoDraftZone] : [])].map((zone) => (
+                        <div
+                          key={zone.id}
+                          className={`video-mask-rect video-mask-rect--${zone.maskShape ?? 'rectangle'}${zone.id === 'draft-video-mask' ? ' draft' : ''}`}
+                          style={{
+                            left: `${zone.x * 100}%`,
+                            top: `${zone.y * 100}%`,
+                            width: `${zone.width * 100}%`,
+                            height: `${zone.height * 100}%`,
+                          }}
                         />
                       ))}
                     </div>
+                  </div>
+                  {isMobile && (
+                    <>
+                      {!videoProcessing && (
+                      <div className="video-action-row mobile-canvas-bottom-bar mobile-canvas-bottom-bar--video mobile-canvas-bottom-bar--inline">
+                        <button
+                          type="button"
+                          className="mobile-zoom-side-btn"
+                          {...framePrevHold}
+                          disabled={isBusy}
+                          aria-label="Previous frame"
+                        >
+                          <Icon name="skip_previous" size={16} />
+                        </button>
+                        <div className="mobile-canvas-action-cluster">
+                          {activeVideoFrameLabel && (
+                            <div className="mobile-video-frame-indicator" aria-live="polite">
+                              {activeVideoFrameLabel}
+                            </div>
+                          )}
+                          <button
+                            type="button"
+                            className={`mobile-canvas-secondary-btn${videoMaskDrawActive ? ' active' : ''}`}
+                            onClick={() => setVideoMaskDrawActive((cur) => !cur)}
+                            disabled={isBusy}
+                          >
+                            DRAW MASK
+                          </button>
+                          <button
+                            type="button"
+                            className="mobile-anonymize-btn"
+                            onClick={processActiveVideo}
+                            disabled={isBusy}
+                          >
+                            {autoDetect ? 'ANONYMIZE' : 'PROCESS'}
+                          </button>
+                          <button
+                            type="button"
+                            className="mobile-canvas-secondary-btn"
+                            onClick={openCurrentVideoFrameAsSnapshot}
+                            disabled={isBusy}
+                          >
+                            EDIT FRAME
+                          </button>
+                        </div>
+                        <button
+                          type="button"
+                          className="mobile-zoom-side-btn"
+                          {...frameNextHold}
+                          disabled={isBusy}
+                          aria-label="Next frame"
+                        >
+                          <Icon name="skip_next" size={16} />
+                        </button>
+                      </div>
+                      )}
+                      {videoProcessing && videoProgress && (
+                        <MobileVideoProgress
+                          phase={videoProgress.phase}
+                          current={videoProgress.current}
+                          total={videoProgress.total}
+                          renderFrame={videoProgress.renderFrame}
+                          renderTotal={videoProgress.renderTotal}
+                          onCancel={cancelVideoProcessing}
+                        />
+                      )}
+                      {!videoProcessing && videoMaskDrawActive && <MobileDrawMaskPanel b={mobileBindings} />}
+                    </>
                   )}
-                </div>
-                <div className={`video-controls-bar${isMobile ? ' video-controls-bar--hidden-mobile' : ''}`}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                    <span>Export</span>
-                    <select
-                      className="field-select"
-                      value={videoExportFormat}
-                      onChange={(e) => setVideoExportFormat(e.target.value as VideoExportFormatId)}
-                      disabled={videoProcessing || isBusy}
-                      style={{ minWidth: 110 }}
-                    >
-                      {videoExportOptions.map((opt) => (
-                        <option key={opt.id} value={opt.id} disabled={!opt.supported}>
-                          {opt.label}{opt.supported ? '' : ' — unavailable'}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <button
-                    className="btn btn-sm"
-                    type="button"
-                    {...framePrevHold}
-                    disabled={videoProcessing || isBusy}
-                    title="Step one frame back (hold to scrub)"
-                    aria-label="Step one frame back"
-                  >
-                    <Icon name="skip_previous" size={16} />
-                  </button>
-                  <button
-                    className="btn btn-primary"
-                    type="button"
-                    onClick={processActiveVideo}
-                    disabled={videoProcessing || isBusy}
-                    style={{ margin: '0 16px' }}
-                  >
-                    <Icon name="auto_awesome" size={16} /> {hasPendingVideoEdits ? 'Apply & Anonymize' : 'Anonymize'}
-                  </button>
-                  <button
-                    className={`btn btn-sm${videoMaskDrawActive ? ' active' : ''}`}
-                    type="button"
-                    onClick={() => setVideoMaskDrawActive((cur) => !cur)}
-                    disabled={videoProcessing || isBusy}
-                    title="Draw a rectangle over the video and bake it into a time range"
-                  >
-                    <Icon name="select" size={14} /> Draw Mask
-                  </button>
-                  <button
-                    className="btn btn-sm"
-                    type="button"
-                    onClick={openCurrentVideoFrameAsSnapshot}
-                    disabled={videoProcessing || isBusy}
-                    title="Open the current video frame as an editable snapshot"
-                  >
-                    <Icon name="image" size={14} /> Edit Frame
-                  </button>
-                  <button
-                    className="btn btn-sm"
-                    type="button"
-                    {...frameNextHold}
-                    disabled={videoProcessing || isBusy}
-                    title="Step one frame forward (hold to scrub)"
-                    aria-label="Step one frame forward"
-                  >
-                    <Icon name="skip_next" size={16} />
-                  </button>
-                  {videoMaskDrawActive && (
-                    <label className="video-mask-range-label">
-                      <span>Range</span>
-                      <input
-                        type="number"
-                        min={0.2}
-                        max={30}
-                        step={0.5}
-                        value={videoMaskRangeSec}
-                        onChange={(event) => setVideoMaskRangeSec(clamp(Number(event.target.value) || 0.2, 0.2, 30))}
+                  {!videoProcessing && (
+                  <>
+                  <div className={`video-controls-bar${isMobile ? ' video-controls-bar--hidden-mobile' : ''}`}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                      <span>Export</span>
+                      <select
+                        className="field-select"
+                        value={videoExportFormat}
+                        onChange={(e) => setVideoExportFormat(e.target.value as VideoExportFormatId)}
                         disabled={videoProcessing || isBusy}
-                      />
-                      <span>s</span>
+                        style={{ minWidth: 110 }}
+                      >
+                        {videoExportOptions.map((opt) => (
+                          <option key={opt.id} value={opt.id} disabled={!opt.supported}>
+                            {opt.label}{opt.supported ? '' : ' — unavailable'}
+                          </option>
+                        ))}
+                      </select>
                     </label>
-                  )}
-                  {activeVideoTimedZones.length > 0 && (
-                    <button className="btn btn-sm" type="button" onClick={clearVideoTimedZones} disabled={videoProcessing} title="Remove all timeline masks">
-                      <Icon name="layers_clear" size={14} /> Reset Masks
+                    <button
+                      className="btn btn-sm"
+                      type="button"
+                      {...framePrevHold}
+                      disabled={videoProcessing || isBusy}
+                      title="Step one frame back (hold to scrub)"
+                      aria-label="Step one frame back"
+                    >
+                      <Icon name="skip_previous" size={16} />
                     </button>
-                  )}
-                  {activePhoto.videoDuration != null && (
-                    <span className="video-meta-badge">
-                      {formatVideoTime(activePhoto.videoDuration)}
-                      {activePhoto.videoWidth ? ` · ${activePhoto.videoWidth}×${activePhoto.videoHeight}` : ''}
-                      {activePhoto.videoFps ? ` · ${Math.round(activePhoto.videoFps)} fps` : ''}
+                    <button
+                      className="btn btn-primary"
+                      type="button"
+                      onClick={processActiveVideo}
+                      disabled={videoProcessing || isBusy}
+                      style={{ margin: '0 16px' }}
+                    >
+                      <Icon name="auto_awesome" size={16} /> {hasPendingVideoEdits ? 'Apply & Anonymize' : 'Anonymize'}
+                    </button>
+                    <button
+                      className={`btn btn-sm${videoMaskDrawActive ? ' active' : ''}`}
+                      type="button"
+                      onClick={() => setVideoMaskDrawActive((cur) => !cur)}
+                      disabled={videoProcessing || isBusy}
+                      title="Draw a rectangle over the video and bake it into a time range"
+                    >
+                      <Icon name="select" size={14} /> Draw Mask
+                    </button>
+                    <button
+                      className="btn btn-sm"
+                      type="button"
+                      onClick={openCurrentVideoFrameAsSnapshot}
+                      disabled={videoProcessing || isBusy}
+                      title="Open the current video frame as an editable snapshot"
+                    >
+                      <Icon name="image" size={14} /> Edit Frame
+                    </button>
+                    <button
+                      className="btn btn-sm"
+                      type="button"
+                      {...frameNextHold}
+                      disabled={videoProcessing || isBusy}
+                      title="Step one frame forward (hold to scrub)"
+                      aria-label="Step one frame forward"
+                    >
+                      <Icon name="skip_next" size={16} />
+                    </button>
+                    {videoMaskDrawActive && (
+                      <label className="video-mask-range-label">
+                        <span>Range</span>
+                        <input
+                          type="number"
+                          min={0.2}
+                          max={30}
+                          step={0.5}
+                          value={videoMaskRangeSec}
+                          onChange={(event) => setVideoMaskRangeSec(clamp(Number(event.target.value) || 0.2, 0.2, 30))}
+                          disabled={videoProcessing || isBusy}
+                        />
+                        <span>s</span>
+                      </label>
+                    )}
+                    {activeVideoTimedZones.length > 0 && (
+                      <button className="btn btn-sm" type="button" onClick={clearVideoTimedZones} disabled={videoProcessing} title="Remove all timeline masks">
+                        <Icon name="layers_clear" size={14} /> Reset Masks
+                      </button>
+                    )}
+                    {activePhoto.videoDuration != null && (
+                      <span className="video-meta-badge">
+                        {formatVideoTime(activePhoto.videoDuration)}
+                        {activePhoto.videoWidth ? ` · ${activePhoto.videoWidth}×${activePhoto.videoHeight}` : ''}
+                        {activePhoto.videoFps ? ` · ${Math.round(activePhoto.videoFps)} fps` : ''}
+                      </span>
+                    )}
+                  </div>
+                  <div className="video-timeline-row">
+                    <button
+                      type="button"
+                      className="btn btn-sm video-timeline-play"
+                      onClick={toggleVideoPlayback}
+                      disabled={videoProcessing || isBusy}
+                      aria-label={videoPlaying ? 'Pause video' : 'Play video'}
+                    >
+                      <Icon name={videoPlaying ? 'pause' : 'play_arrow'} size={18} />
+                    </button>
+                    <div className="video-timeline-track-wrap">
+                      <input
+                        type="range"
+                        className="video-timeline-scrubber"
+                        min={0}
+                        max={activePhoto.videoDuration ?? activeVideoRef.current?.duration ?? 0}
+                        step={0.001}
+                        value={activeVideoTime}
+                        disabled={videoProcessing || isBusy}
+                        aria-label="Video timeline"
+                        onChange={(event) => seekActiveVideo(parseFloat(event.target.value))}
+                      />
+                      {activeVideoFrameOverrides.length > 0 && Number.isFinite(activePhoto.videoDuration) && (activePhoto.videoDuration ?? 0) > 0 && (
+                        <div className="video-frame-marker-layer" aria-hidden="true">
+                          {activeVideoFrameOverrides.map((item) => (
+                            <span
+                              key={`${item.timeSec}`}
+                              className="video-frame-marker"
+                              style={{ left: `${clamp((item.timeSec / (activePhoto.videoDuration ?? 1)) * 100, 0, 100)}%` }}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <span className="video-timeline-time">
+                      {formatVideoTime(activeVideoTime)}
+                      {activePhoto.videoDuration != null ? ` / ${formatVideoTime(activePhoto.videoDuration)}` : ''}
                     </span>
+                  </div>
+                  </>
                   )}
                 </div>
               </div>
@@ -6060,9 +6998,6 @@ function App() {
           {showMobileEmbed && activePhoto && !activePhoto.isVideo && (
             <MobileImageCanvasControls b={mobileBindings} />
           )}
-          {showMobileEmbed && activePhoto?.isVideo && (
-            <MobileVideoCanvasControls b={mobileBindings} />
-          )}
 
         </div>
         </>)}
@@ -6094,31 +7029,15 @@ function App() {
         onUploadCustomImages={openCustomImagePicker}
       />
 
-      {detectorLoading && modelLoadProgress && modelLoadProgress.phase !== 'ready' && (
-        <div className="model-load-toast" role="status" aria-live="polite">
-          <span className="model-load-toast-spinner" aria-hidden="true" />
-          <div className="model-load-toast-body">
-            <span className="model-load-toast-label">
-              {modelLoadProgress.phase === 'init'
-                ? 'Initializing face model…'
-                : 'Loading face model'}
-            </span>
-            {modelLoadProgress.phase === 'download' && modelLoadProgress.total > 0 && (
-              <>
-                <span className="model-load-toast-bytes">
-                  {(modelLoadProgress.loaded / 1048576).toFixed(1)} / {(modelLoadProgress.total / 1048576).toFixed(1)} MB
-                </span>
-                <span className="model-load-toast-bar">
-                  <span
-                    className="model-load-toast-fill"
-                    style={{ width: `${Math.min(100, Math.round((modelLoadProgress.loaded / modelLoadProgress.total) * 100))}%` }}
-                  />
-                </span>
-              </>
-            )}
-          </div>
-        </div>
-      )}
+      <ModelLoadStatus
+        active={detectorLoading}
+        progress={modelLoadProgress}
+        variant={
+          (isMobile && photos.length === 0 && mobileMode !== 'live') || (!isMobile && photos.length === 0)
+            ? 'overlay'
+            : 'toast'
+        }
+      />
 
       <DetectionSettingsDrawer
         open={detectSettingsOpen}

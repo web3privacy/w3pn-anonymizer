@@ -35,6 +35,8 @@ export function MobileShell({
   const showHome = b.photos.length === 0 && b.mobileMode !== 'live'
   const showLive = b.mobileMode === 'live'
 
+  // Auto-sync mobileMode with library state. Intentionally overrides stale modes
+  // (e.g. home after addRecords, editor/video after activePhoto type change).
   useEffect(() => {
     if (b.photos.length > 0 && b.mobileMode === 'home') {
       b.setMobileMode(b.activePhoto?.isVideo ? 'video' : 'editor')
@@ -165,7 +167,7 @@ export function MobileShell({
               showGalleryButton
               onOpenGallery={openGallery}
               showLiveButton
-              onLiveMode={() => { b.setMobileMode('live'); b.setMobilePanel(null) }}
+              onLiveMode={() => { if (b.detectorLoading) return; b.setMobileMode('live'); b.setMobilePanel(null) }}
             />
             <MobileEditorToolbar b={b} />
           </>

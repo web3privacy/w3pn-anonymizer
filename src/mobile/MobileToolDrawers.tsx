@@ -20,6 +20,7 @@ interface MobileToolDrawersProps {
 
 export function MobileToolDrawers({ b, liveMode = false }: MobileToolDrawersProps) {
   const close = () => b.setMobilePanel(null)
+  const videoEditor = Boolean(b.activePhoto?.isVideo && !liveMode)
 
   const drawer = (panel: MobilePanel, title: string, children: React.ReactNode) => (
     <MobileToolDrawer open={b.mobilePanel === panel} onClose={close} title={title} variant="tool">
@@ -63,35 +64,48 @@ export function MobileToolDrawers({ b, liveMode = false }: MobileToolDrawersProp
         </div>
       ))}
 
-      {drawer('tool-adjust', 'Adjust colors', (
-        <>
-          <div className="color-sliders">
+      {drawer('tool-adjust', 'ADJUST', (
+        <div className="mobile-tool-drawer-v2">
+          <div className="mobile-tool-drawer-v2-body">
             {([['brightness', 'Brightness'], ['contrast', 'Contrast'], ['saturation', 'Saturation']] as const).map(([key, label]) => (
-              <div key={key} className="color-slider-row">
-                <span className="color-slider-label">{label}</span>
+              <div key={key} className="mobile-slider-row-v2">
+                <span className="mobile-slider-row-v2-label">{label}</span>
                 <input
                   type="range"
-                  className="color-slider-input"
                   min={-100}
                   max={100}
                   value={b.batch.colorAdj[key]}
                   onChange={(e) => b.setColorAdj((cur) => ({ ...cur, [key]: Number(e.target.value), preset: 'none' }))}
                 />
-                <span className="color-slider-val">{b.batch.colorAdj[key] > 0 ? '+' : ''}{b.batch.colorAdj[key]}</span>
+                <span className="mobile-slider-row-v2-val">
+                  {b.batch.colorAdj[key] > 0 ? '+' : ''}{b.batch.colorAdj[key]}
+                </span>
               </div>
             ))}
           </div>
-          <div className="color-actions" style={{ marginTop: '0.5rem' }}>
-            {!liveMode && (
-              <button className="btn btn-sm btn-primary" type="button" onClick={() => { b.applyColorAdjToActive(); close() }} disabled={!b.activePhoto}>
-                Apply to photo
+          <div className="mobile-distort-list-actions">
+            <button
+              className="mobile-distort-reset-btn"
+              type="button"
+              onClick={() => b.setColorAdj(DEFAULT_COLOR_ADJUSTMENTS)}
+            >
+              RESET ALL
+            </button>
+            {videoEditor && (
+              <p className="mobile-distort-video-hint">Applied when you Process video</p>
+            )}
+            {!liveMode && !videoEditor && (
+              <button
+                className="mobile-distort-apply-btn"
+                type="button"
+                onClick={() => { b.applyColorAdjToActive(); close() }}
+                disabled={!b.activePhoto}
+              >
+                APPLY TO PHOTO
               </button>
             )}
-            <button className="btn btn-sm" type="button" onClick={() => b.setColorAdj(DEFAULT_COLOR_ADJUSTMENTS)}>
-              Reset
-            </button>
           </div>
-        </>
+        </div>
       ))}
 
       <MobileDistortDrawer b={b} liveMode={liveMode} />
@@ -103,7 +117,12 @@ export function MobileToolDrawers({ b, liveMode = false }: MobileToolDrawersProp
           <button type="button" className="mobile-tool-drawer-item" onClick={() => { b.setMobilePanel('gallery'); b.setGalleryBatchSelect(false) }}>
             <Icon name="photo_library" size={18} /> Open library
           </button>
-          <button type="button" className="mobile-tool-drawer-item" onClick={() => { b.setMobileMode('live'); close() }}>
+          <button
+            type="button"
+            className="mobile-tool-drawer-item"
+            disabled={b.detectorLoading}
+            onClick={() => { if (b.detectorLoading) return; b.setMobileMode('live'); close() }}
+          >
             <Icon name="photo_camera" size={18} /> Live mode
           </button>
           {b.activePhoto?.isVideo && (

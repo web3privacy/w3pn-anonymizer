@@ -95,6 +95,12 @@ export function MobileFaceDrawer({ b, liveMode = false }: MobileFaceDrawerProps)
               </span>
             </label>
           )}
+
+          {isVideo && (
+            <p className="mobile-face-hint">
+              Scans the current frame immediately, then re-analyses at +30%, +40% and +50% sensitivity each second you stay on the same frame.
+            </p>
+          )}
         </div>
 
         {!liveMode && !isVideo && (

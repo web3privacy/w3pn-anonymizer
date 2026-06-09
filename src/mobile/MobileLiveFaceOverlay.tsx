@@ -36,15 +36,24 @@ export function MobileLiveFaceOverlay({
 
   useEffect(() => {
     let raf = 0
-    // Cache the canvas rect; recompute only when its size/position changes.
     let cachedRect: DOMRect | null = null
     let cachedRootRect: DOMRect | null = null
-    let frame = 0
+    let layoutDirty = true
+
+    const invalidateLayout = () => {
+      layoutDirty = true
+    }
+
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(invalidateLayout) : null
+    const canvas = canvasRef.current
+    const root = rootRef.current
+    if (ro && canvas) ro.observe(canvas)
+    if (ro && root) ro.observe(root)
 
     const update = () => {
       raf = requestAnimationFrame(update)
-      const canvas = canvasRef.current
-      const root = rootRef.current
+      const canvasEl = canvasRef.current
+      const rootEl = rootRef.current
       const zones = zonesRef.current ?? []
 
       // Keep the rendered id set in sync (cheap string compare, rare setState).
@@ -54,18 +63,17 @@ export function MobileLiveFaceOverlay({
         setIds(zones.map((z) => z.id))
       }
 
-      if (!canvas || !root || canvas.width === 0 || zones.length === 0) return
+      if (!canvasEl || !rootEl || canvasEl.width === 0 || zones.length === 0) return
 
-      // getBoundingClientRect forces reflow, so only sample it a few times/sec.
-      frame += 1
-      if (!cachedRect || frame % 6 === 0) {
-        cachedRect = canvas.getBoundingClientRect()
-        cachedRootRect = root.getBoundingClientRect()
+      if (layoutDirty || !cachedRect || !cachedRootRect) {
+        cachedRect = canvasEl.getBoundingClientRect()
+        cachedRootRect = rootEl.getBoundingClientRect()
+        layoutDirty = false
       }
       const rect = cachedRect
-      const rootRect = cachedRootRect!
-      const bw = canvas.width
-      const bh = canvas.height
+      const rootRect = cachedRootRect
+      const bw = canvasEl.width
+      const bh = canvasEl.height
       const scale = displayFit === 'cover'
         ? Math.max(rect.width / bw, rect.height / bh)
         : Math.min(rect.width / bw, rect.height / bh)
@@ -79,14 +87,17 @@ export function MobileLiveFaceOverlay({
       for (const z of zones) {
         const el = boxRefs.current.get(z.id)
         if (!el) continue
-        const rect = liveZoneDisplayRect(z, faceOffsetPercent)
-        el.style.transform = `translate(${baseLeft + ox + rect.x * imgW}px, ${baseTop + oy + rect.y * imgH}px)`
-        el.style.width = `${rect.width * imgW}px`
-        el.style.height = `${rect.height * imgH}px`
+        const zoneRect = liveZoneDisplayRect(z, faceOffsetPercent)
+        el.style.transform = `translate(${baseLeft + ox + zoneRect.x * imgW}px, ${baseTop + oy + zoneRect.y * imgH}px)`
+        el.style.width = `${zoneRect.width * imgW}px`
+        el.style.height = `${zoneRect.height * imgH}px`
       }
     }
     raf = requestAnimationFrame(update)
-    return () => cancelAnimationFrame(raf)
+    return () => {
+      cancelAnimationFrame(raf)
+      ro?.disconnect()
+    }
   }, [canvasRef, zonesRef, displayFit, faceOffsetPercent])
 
   return (

@@ -26,7 +26,7 @@ export function MobileToast({
 
   return (
     <div className="mobile-toast" role="status" aria-live="polite">
-      <Icon name="check_circle" size={18} />
+      <Icon name="check_circle" size={12} />
       <span className="mobile-toast-text">{message}</span>
       {actionLabel && onAction && (
         <button type="button" className="mobile-toast-action" onClick={() => { onAction(); onDismiss() }}>

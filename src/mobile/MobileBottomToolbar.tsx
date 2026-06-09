@@ -8,7 +8,7 @@ import { panelForCategory } from './toolRotation'
 import type { MobileToolCategory } from './types'
 
 const EDITOR_CATEGORIES: MobileToolCategory[] = ['face', 'zone', 'effects', 'crop', 'adjust', 'distort']
-const VIDEO_CATEGORIES: MobileToolCategory[] = ['face', 'adjust', 'distort']
+const VIDEO_CATEGORIES: MobileToolCategory[] = ['face', 'effects', 'adjust', 'distort']
 // Effects (the anonymization tool) sits immediately after FACE detect in live.
 const LIVE_CATEGORIES: MobileToolCategory[] = ['effects', 'adjust', 'distort']
 
@@ -31,10 +31,14 @@ export function MobileBottomToolbar({ b, liveMode = false, liveFaceCount = 0 }: 
   const detectorBusy = b.detectorLoading || b.detector.mode === 'unavailable'
 
   const faceActive = liveMode ? b.liveDetectEnabled : b.autoDetect
-  const faceBtnClass = !liveMode && b.lastDetectFailed && b.autoDetect
+  const faceCount = liveMode
+    ? liveFaceCount
+    : isVideoEditor
+      ? b.videoPreviewFaceCount
+      : b.activeZones.length
+  const faceBtnClass = !liveMode && b.lastDetectFailed && b.autoDetect && faceCount === 0
     ? ' ts-btn-fail'
     : !liveMode && detectorOff ? ' ts-btn-setup' : ''
-  const faceCount = liveMode ? liveFaceCount : b.activeZones.length
 
   const categories = liveMode
     ? LIVE_CATEGORIES
@@ -64,7 +68,8 @@ export function MobileBottomToolbar({ b, liveMode = false, liveFaceCount = 0 }: 
     : 'STR'
 
   return (
-    <div className="mobile-bottom-toolbar">
+    <div className={`mobile-bottom-toolbar${isVideoEditor && b.videoProcessing ? ' mobile-bottom-toolbar--processing' : ''}`}>
+      {!b.videoProcessing || !isVideoEditor ? (
       <div className="mobile-sliders-row">
         <div className="mobile-slider-group">
           <span className="mobile-slider-label">{strLabel}</span>
@@ -97,6 +102,7 @@ export function MobileBottomToolbar({ b, liveMode = false, liveFaceCount = 0 }: 
           </div>
         )}
       </div>
+      ) : null}
       <div className="mobile-tool-categories">
         <button
           type="button"

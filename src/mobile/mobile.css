@@ -1,4 +1,5 @@
-/* Mobile shell — only applies at max-width: 1024px via .mobile-shell wrapper */
+/* Mobile shell — only applies at max-width: 1024px via .mobile-shell wrapper.
+   Breakpoint must match MOBILE_BREAKPOINT_PX in src/mobile/types.ts and index.html. */
 
 @media (max-width: 1024px) {
   html, body, #root {
@@ -1678,7 +1679,7 @@
 .mobile-drawer-body:has(.mobile-distort-viewport),
 .mobile-drawer-body:has(.mobile-effects-viewport) {
   overflow-x: hidden;
-  padding-bottom: 0.35rem;
+  padding-bottom: 0.2rem;
 }
 
 .mobile-drawer-side .mobile-drawer-body:has(.mobile-gallery-inner) {
@@ -1961,15 +1962,28 @@
 }
 
 /* ── Live mode ───────────────────────────────────────────────── */
+.app-shell-mobile--live {
+  --mobile-bottom-toolbar-h: 150px;
+  --mobile-live-capture-gap: 10px;
+}
+
+.app-shell-mobile--live > .mobile-shell-live {
+  flex: 1 1 0;
+  min-height: 0;
+  height: 100%;
+}
+
 .mobile-shell-live {
   position: relative;
   flex: 1;
   min-height: 0;
+  height: 100%;
 }
 
 .mobile-live {
   flex: 1;
   min-height: 0;
+  height: 100%;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -2183,10 +2197,10 @@
 }
 
 .mobile-live-floating-controls {
-  position: fixed;
+  position: absolute;
   left: 0;
   right: 0;
-  bottom: calc(var(--mobile-bottom-toolbar-h) + 12px + env(safe-area-inset-bottom, 0));
+  bottom: calc(var(--mobile-bottom-toolbar-h) + var(--mobile-live-capture-gap, 10px) + env(safe-area-inset-bottom, 0));
   padding: 0 12px;
   z-index: 45;
   display: flex;
@@ -2303,8 +2317,17 @@
 }
 
 .mobile-live-toolbar-wrap {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
   flex-shrink: 0;
   z-index: 30;
+  pointer-events: none;
+}
+
+.mobile-live-toolbar-wrap > * {
+  pointer-events: auto;
 }
 
 .mobile-live-download-wrap {
@@ -2417,19 +2440,20 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 0.4rem;
-  padding: 0.4rem 0.7rem;
+  gap: 0.35rem;
+  padding: 0.35rem 0.6rem;
   border-radius: 999px;
   background: var(--panel-bg);
   border: 1px solid var(--border);
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
   color: var(--text-primary);
-  font-size: var(--mobile-font-xs);
+  font-size: calc(var(--mobile-font-xs) - 8px);
 }
 
 .mobile-toast-text {
   flex: 1;
   min-width: 0;
+  font-size: calc(var(--mobile-font-xs) - 8px);
 }
 
 .mobile-toast-action {
@@ -2438,8 +2462,8 @@
   color: var(--accent);
   border: none;
   border-radius: 6px;
-  padding: 0.3rem 0.55rem;
-  font-size: var(--mobile-font-xs);
+  padding: 0.25rem 0.45rem;
+  font-size: calc(var(--mobile-font-xs) - 8px);
   font-weight: 700;
   cursor: pointer;
 }
@@ -2590,18 +2614,7 @@
   border-bottom: 1px solid var(--mobile-glass-border);
 }
 
-.mobile-live--cover .mobile-live-toolbar-wrap {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 30;
-  pointer-events: none;
-}
-
-.mobile-live--cover .mobile-live-toolbar-wrap > * {
-  pointer-events: auto;
-}
+/* Toolbar pinning handled by .mobile-live-toolbar-wrap (all fit modes). */
 
 .mobile-live-preview--contain {
   align-items: center;
@@ -2855,29 +2868,30 @@
 .mobile-distort-list {
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
+  gap: 8px;
 }
 
 .mobile-distort-list-row {
   display: flex;
   align-items: center;
-  gap: 0.35rem;
-  padding: 0.35rem 0.45rem;
-  border-radius: 8px;
-  background: var(--surface-2, rgba(255, 255, 255, 0.04));
+  gap: 0.25rem;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
 }
 
 .mobile-distort-list-row.active {
-  background: rgba(76, 175, 80, 0.12);
+  background: transparent;
 }
 
 .mobile-distort-toggle {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  min-height: 44px;
-  padding: 0 0.45rem 0 0;
+  gap: 0.45rem;
+  min-height: 32px;
+  padding: 0 0.35rem 0 8px;
   border: none;
   background: transparent;
   color: inherit;
@@ -2918,8 +2932,8 @@
   align-items: center;
   justify-content: flex-end;
   gap: 0.3rem;
-  min-height: 44px;
-  padding: 0 0.35rem;
+  min-height: 32px;
+  padding: 0 0.25rem;
   border: none;
   background: transparent;
   color: var(--text-muted);
@@ -2949,11 +2963,11 @@
 
 .mobile-distort-list-actions,
 .mobile-distort-settings-actions {
-  margin-top: 0.65rem;
+  margin-top: 0;
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: 0.4rem;
+  gap: 8px;
 }
 
 .mobile-distort-row .color-slider-label {

@@ -870,6 +870,20 @@ export const buildColorLUT = (adj: ColorAdjustments): Uint8ClampedArray => {
   return lut
 }
 
+export const isColorAdjNoop = (adj: ColorAdjustments): boolean =>
+  adj.brightness === 0 && adj.contrast === 0 && adj.saturation === 0 &&
+  adj.shadows === 0 && adj.highlights === 0 && adj.preset === 'none'
+
+export const colorAdjExportKey = (adj: ColorAdjustments): string =>
+  JSON.stringify({
+    brightness: adj.brightness,
+    contrast: adj.contrast,
+    saturation: adj.saturation,
+    shadows: adj.shadows,
+    highlights: adj.highlights,
+    preset: adj.preset,
+  })
+
 export const applyColorAdjustments = (
   ctx: CanvasRenderingContext2D,
   adj: ColorAdjustments,
@@ -1427,7 +1441,7 @@ function applyColorShiftEffect(
       let b = src[bi + 2]
       // Apply hue rotation and saturation boost if requested
       if (hueRotation || satBoost) {
-        ;[r, g, b] = rotateHueSat(r, g, b, hueRotation ?? 0, (satBoost ?? 0) / 100)
+        [r, g, b] = rotateHueSat(r, g, b, hueRotation ?? 0, (satBoost ?? 0) / 100)
       }
       d[i] = r; d[i + 1] = g; d[i + 2] = b; d[i + 3] = src[i + 3]
     }

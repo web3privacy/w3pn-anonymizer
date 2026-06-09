@@ -9,6 +9,7 @@ interface MobileHomeDefaultProps {
     | 'setAboutOpen'
     | 'loadDemoPhotos'
     | 'isBusy'
+    | 'detectorLoading'
     | 'openUnifiedPicker'
     | 'setMobileMode'
     | 'setMobilePanel'
@@ -17,14 +18,16 @@ interface MobileHomeDefaultProps {
 
 export function MobileHomeDefault({ b }: MobileHomeDefaultProps) {
   const { mode, activate, cancel, isActive } = useOpticalCalibration()
+  const homeBusy = b.isBusy || b.detectorLoading || isActive
 
   const enterLive = () => {
+    if (b.detectorLoading) return
     b.setMobileMode('live')
     b.setMobilePanel(null)
   }
 
   return (
-    <div className={`mobile-home-v2${b.isDragOver ? ' drag-active' : ''}`}>
+    <div className={`mobile-home-v2${b.isDragOver ? ' drag-active' : ''}${isActive ? ' home-v2--calibrating' : ''}`}>
       <header className="mobile-home-v2-header">
         <a
           href="https://www.web3privacy.info"
@@ -44,56 +47,62 @@ export function MobileHomeDefault({ b }: MobileHomeDefaultProps) {
         </button>
       </header>
 
-      <div className="mobile-home-v2-center">
-        <div className="mobile-home-v2-spiral-wrap">
-          <AnonymizerLogoMotion
-            mode={mode}
-            onActivate={activate}
-            onCancel={cancel}
-          />
-        </div>
-        {!isActive && (
-          <button
-            type="button"
-            className="mobile-home-v2-wordmark-btn"
-            onClick={() => b.setAboutOpen(true)}
-            aria-label="What is this app?"
-          >
-            <img
-              src="/brand/anonymizer-logo.svg"
-              alt="ANONYMIZER"
-              className="mobile-home-v2-wordmark"
-              draggable={false}
+      <div className="mobile-home-v2-hero">
+        <div className="mobile-home-v2-center">
+          <div className="mobile-home-v2-spiral-wrap">
+            <AnonymizerLogoMotion
+              mode={mode}
+              onActivate={activate}
+              onCancel={cancel}
             />
-          </button>
-        )}
-      </div>
+          </div>
+          {!isActive && (
+            <button
+              type="button"
+              className="mobile-home-v2-wordmark-btn"
+              onClick={() => b.setAboutOpen(true)}
+              aria-label="What is this app?"
+            >
+              <img
+                src="/brand/anonymizer-wordmark.png"
+                alt="ANONYMIZER"
+                className="mobile-home-v2-wordmark"
+                draggable={false}
+              />
+            </button>
+          )}
+        </div>
 
-      <div className="mobile-home-v2-cta">
-        <button
-          type="button"
-          className="mobile-cta-primary"
-          onClick={enterLive}
-          disabled={isActive}
-        >
-          TURN ON CAMERA
-        </button>
-        <button
-          type="button"
-          className="mobile-cta-secondary"
-          onClick={b.openUnifiedPicker}
-          disabled={isActive}
-        >
-          SELECT MEDIA
-        </button>
-        <button
-          type="button"
-          className="mobile-cta-muted"
-          onClick={b.loadDemoPhotos}
-          disabled={b.isBusy || isActive}
-        >
-          LOAD DEMO
-        </button>
+        {!isActive && (
+          <div className="mobile-home-v2-cta">
+            <div className="mobile-home-v2-cta-row">
+              <button
+                type="button"
+                className="mobile-cta-primary"
+                onClick={enterLive}
+                disabled={homeBusy}
+              >
+                TURN ON CAMERA
+              </button>
+              <button
+                type="button"
+                className="mobile-cta-secondary"
+                onClick={b.openUnifiedPicker}
+                disabled={homeBusy}
+              >
+                SELECT MEDIA
+              </button>
+            </div>
+            <button
+              type="button"
+              className="mobile-cta-muted"
+              onClick={b.loadDemoPhotos}
+              disabled={homeBusy}
+            >
+              LOAD DEMO
+            </button>
+          </div>
+        )}
       </div>
     </div>
   )

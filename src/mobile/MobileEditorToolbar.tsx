@@ -93,37 +93,42 @@ export function MobileEditorToolbar({ b }: MobileEditorToolbarProps) {
         <div className="mobile-editor-toolbar-v2-panel">
           {isPhoto && draft ? (
             <>
-              <div className="mobile-tb-v2-panel-row mobile-tb-v2-size-format-row">
-                <span className="mobile-tb-v2-label">Size</span>
-                <div className="mobile-tb-v2-res">
-                  <input
-                    type="number"
-                    value={draft.width}
-                    min={1}
-                    max={25000}
-                    onChange={(e) => b.updateMobileExportDraft({ width: Number(e.target.value) })}
-                  />
-                  <span>×</span>
-                  <input
-                    type="number"
-                    value={draft.height}
-                    min={1}
-                    max={25000}
-                    onChange={(e) => b.updateMobileExportDraft({ height: Number(e.target.value) })}
-                  />
+              <div className="mobile-tb-v2-export-fields">
+                <div className="mobile-tb-v2-field-row mobile-tb-v2-size-row">
+                  <span className="mobile-tb-v2-field-label">Size</span>
+                  <div className="mobile-tb-v2-res mobile-tb-v2-res--split">
+                    <input
+                      type="number"
+                      value={draft.width}
+                      min={1}
+                      max={25000}
+                      onChange={(e) => b.updateMobileExportDraft({ width: Number(e.target.value) })}
+                    />
+                    <span className="mobile-tb-v2-res-sep">×</span>
+                    <input
+                      type="number"
+                      value={draft.height}
+                      min={1}
+                      max={25000}
+                      onChange={(e) => b.updateMobileExportDraft({ height: Number(e.target.value) })}
+                    />
+                  </div>
                 </div>
-                <span className="mobile-tb-v2-label">Format</span>
-                <select
-                  value={draft.format}
-                  onChange={(e) => b.updateMobileExportDraft({ format: e.target.value as NormalizeFormat })}
-                >
-                  <option value="image/jpeg">JPG</option>
-                  <option value="image/png">PNG</option>
-                  <option value="image/webp">WebP</option>
-                  <option value="image/bmp">BMP</option>
-                  <option value="image/gif">GIF</option>
-                  <option value="image/tiff">TIFF</option>
-                </select>
+                <div className="mobile-tb-v2-field-row mobile-tb-v2-format-row">
+                  <span className="mobile-tb-v2-field-label">Format</span>
+                  <select
+                    className="mobile-tb-v2-format-select"
+                    value={draft.format}
+                    onChange={(e) => b.updateMobileExportDraft({ format: e.target.value as NormalizeFormat })}
+                  >
+                    <option value="image/jpeg">JPG</option>
+                    <option value="image/png">PNG</option>
+                    <option value="image/webp">WebP</option>
+                    <option value="image/bmp">BMP</option>
+                    <option value="image/gif">GIF</option>
+                    <option value="image/tiff">TIFF</option>
+                  </select>
+                </div>
               </div>
               {showQuality && (
                 <div className="mobile-tb-v2-panel-row mobile-tb-v2-quality-row">
@@ -144,16 +149,19 @@ export function MobileEditorToolbar({ b }: MobileEditorToolbarProps) {
                 </div>
               )}
               {!showQuality && (
-                <button type="button" className="mobile-tb-v2-ok" onClick={() => { void handleOk() }} disabled={b.isBusy}>
-                  OK
-                </button>
+                <div className="mobile-tb-v2-export-actions">
+                  <button type="button" className="mobile-tb-v2-ok" onClick={() => { void handleOk() }} disabled={b.isBusy}>
+                    OK
+                  </button>
+                </div>
               )}
             </>
           ) : (
-            <div className="mobile-video-settings-panel">
-              <label className="mobile-video-setting-card mobile-video-setting-card--format">
-                <span className="mobile-tb-v2-label">Format</span>
+            <div className="mobile-tb-v2-export-fields mobile-tb-v2-export-fields--video">
+              <div className="mobile-tb-v2-field-row mobile-tb-v2-format-row">
+                <span className="mobile-tb-v2-field-label">Format</span>
                 <select
+                  className="mobile-tb-v2-format-select"
                   value={b.videoExportFormat}
                   onChange={(e) => b.setVideoExportFormat(e.target.value as VideoExportFormatId)}
                   disabled={b.videoProcessing || b.isBusy}
@@ -164,24 +172,28 @@ export function MobileEditorToolbar({ b }: MobileEditorToolbarProps) {
                     </option>
                   ))}
                 </select>
-              </label>
+              </div>
               {photo.videoDuration != null && (
-                <div className="mobile-video-setting-card">
-                  <span className="mobile-tb-v2-label">Duration</span>
-                  <strong>
-                  {formatVideoTime(photo.videoDuration)}
-                  </strong>
-                  {photo.videoFps ? <small>{Math.round(photo.videoFps)} fps</small> : null}
+                <div className="mobile-tb-v2-field-row mobile-tb-v2-field-row--meta">
+                  <span className="mobile-tb-v2-field-label">Duration</span>
+                  <div className="mobile-tb-v2-meta-value">
+                    <span>{formatVideoTime(photo.videoDuration)}</span>
+                    {photo.videoFps ? (
+                      <span className="mobile-tb-v2-meta-sub">{Math.round(photo.videoFps)} fps</span>
+                    ) : null}
+                  </div>
                 </div>
               )}
-              <div className="mobile-video-setting-card">
-                <span className="mobile-tb-v2-label">Edits</span>
-                <strong>{b.activeVideoFrameOverrides.length + b.activeVideoTimedZones.length}</strong>
-                <small>
-                  {b.activeVideoFrameOverrides.length} frames · {b.activeVideoTimedZones.length} masks
-                </small>
+              <div className="mobile-tb-v2-field-row mobile-tb-v2-field-row--meta">
+                <span className="mobile-tb-v2-field-label">Edits</span>
+                <div className="mobile-tb-v2-meta-value">
+                  <span>{b.activeVideoFrameOverrides.length + b.activeVideoTimedZones.length}</span>
+                  <span className="mobile-tb-v2-meta-sub">
+                    {b.activeVideoFrameOverrides.length} frames · {b.activeVideoTimedZones.length} masks
+                  </span>
+                </div>
               </div>
-              <details className="mobile-tb-v2-advanced mobile-video-setting-card mobile-video-setting-card--wide">
+              <details className="mobile-tb-v2-advanced mobile-tb-v2-advanced--video">
                 <summary>Pipeline</summary>
                 <div>
                   {b.videoPipelineCapabilities.timelineWorker ? 'worker' : 'main'} ·{' '}

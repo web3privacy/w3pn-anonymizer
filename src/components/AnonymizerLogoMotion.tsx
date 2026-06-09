@@ -1,31 +1,21 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import { OPTICAL, type OpticalMode } from '../lib/optical-calibration'
+import { loadSpiralLogoPaths, getSpiralLogoPathsCache, type SpiralLogoPaths } from '../lib/spiral-logo-paths'
+import { usePhoneCalibrationChrome } from '../hooks/usePhoneCalibrationChrome'
 import './anonymizer-logo-motion.css'
 
-const CX = 203.5
-const CY = 203.5
+const SIZE = 407
+const CX = SIZE / 2
+const CY = SIZE / 2
+const OUTER_R = 145
+const INNER_R = 148
+/** Geometric center of green diamond + inner disc (407 artboard coords). */
+const CENTER_PIVOT_X = 204.773
+const CENTER_PIVOT_Y = 204.825
+const CENTER_DOT_SIZE = 8
 
 function lerp(a: number, b: number, t: number) { return a + (b - a) * t }
-
-interface SvgPaths { spiral: string; center: string }
-
-let _svgPathsCache: SvgPaths | null = null
-
-function loadSvgPaths(): Promise<SvgPaths> {
-  if (_svgPathsCache) return Promise.resolve(_svgPathsCache)
-  return fetch('/brand/spiral-logo.svg')
-    .then(r => r.text())
-    .then(text => {
-      const doc = new DOMParser().parseFromString(text, 'image/svg+xml')
-      const paths = doc.querySelectorAll('path')
-      const result: SvgPaths = {
-        spiral: paths[0]?.getAttribute('d') || '',
-        center: paths[paths.length - 1]?.getAttribute('d') || '',
-      }
-      _svgPathsCache = result
-      return result
-    })
-}
 
 interface Props {
   mode: OpticalMode
@@ -34,8 +24,53 @@ interface Props {
   className?: string
 }
 
+function CenterArt({ paths }: { paths: SpiralLogoPaths }) {
+  return (
+    <>
+      <path
+        d={paths.center}
+        fill="#00FF78"
+        stroke="black"
+        strokeWidth="0.5"
+        vectorEffect="non-scaling-stroke"
+      />
+      {paths.centerDisc && (
+        <path
+          d={paths.centerDisc}
+          fill="black"
+          stroke="black"
+          strokeWidth="0.5"
+          vectorEffect="non-scaling-stroke"
+        />
+      )}
+      <rect
+        x={CENTER_PIVOT_X - CENTER_DOT_SIZE / 2}
+        y={CENTER_PIVOT_Y - CENTER_DOT_SIZE / 2}
+        width={CENTER_DOT_SIZE}
+        height={CENTER_DOT_SIZE}
+        fill="white"
+      />
+    </>
+  )
+}
+
+function SpiralArt({ paths, maskId }: { paths: SpiralLogoPaths; maskId: string }) {
+  return (
+    <>
+      <path
+        d={paths.spiral}
+        fill="white"
+        stroke="black"
+        vectorEffect="non-scaling-stroke"
+        mask={`url(#${maskId})`}
+      />
+      <CenterArt paths={paths} />
+    </>
+  )
+}
+
 export function AnonymizerLogoMotion({ mode, onActivate, onCancel, className = '' }: Props) {
-  const imgRef = useRef<HTMLDivElement>(null)
+  const idleRef = useRef<SVGGElement>(null)
   const outerRef = useRef<SVGGElement>(null)
   const innerRef = useRef<SVGGElement>(null)
   const centerRef = useRef<SVGGElement>(null)
@@ -47,33 +82,29 @@ export function AnonymizerLogoMotion({ mode, onActivate, onCancel, className = '
   const speedsRef = useRef({
     outer: OPTICAL.idleRotationDegPerSec,
     inner: OPTICAL.idleRotationDegPerSec,
-    center: 0,
     intensity: 0,
   })
   const outerAngleRef = useRef(0)
   const innerAngleRef = useRef(0)
-  const centerAngleRef = useRef(0)
   const prevModeRef = useRef<OpticalMode>('idle')
 
-  const [svgPaths, setSvgPaths] = useState<SvgPaths | null>(_svgPathsCache)
+  const [svgPaths, setSvgPaths] = useState<SpiralLogoPaths | null>(getSpiralLogoPathsCache())
   const [countdown, setCountdown] = useState(0)
   const [showComplete, setShowComplete] = useState(false)
+  const phoneChrome = usePhoneCalibrationChrome()
 
   const isActive = mode === 'spinUp' || mode === 'illusion' || mode === 'coolDown'
-  const showSvg = isActive && svgPaths != null
+  const maskId = 'lm-spiral-mask'
 
-  // Preload SVG paths on mount
   useEffect(() => {
-    loadSvgPaths().then(setSvgPaths).catch(() => {})
+    loadSpiralLogoPaths().then(setSvgPaths).catch(() => {})
   }, [])
 
-  // Sync angles when transitioning idle ↔ active
   useEffect(() => {
     const prev = prevModeRef.current
     if (mode === 'spinUp' && prev === 'idle') {
       outerAngleRef.current = angleRef.current
       innerAngleRef.current = angleRef.current
-      centerAngleRef.current = angleRef.current
     }
     if (mode === 'idle' && prev !== 'idle' && prev !== 'disabledReducedMotion') {
       angleRef.current = outerAngleRef.current % 360
@@ -81,7 +112,6 @@ export function AnonymizerLogoMotion({ mode, onActivate, onCancel, className = '
     prevModeRef.current = mode
   }, [mode])
 
-  // Completion message after coolDown → idle
   useEffect(() => {
     if (mode === 'idle' && (prevModeRef.current === 'coolDown')) {
       setShowComplete(true)
@@ -89,11 +119,8 @@ export function AnonymizerLogoMotion({ mode, onActivate, onCancel, className = '
       return () => window.clearTimeout(t)
     }
     return undefined
-    // prevModeRef is updated in the other effect which runs first
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode])
 
-  // Countdown during illusion
   useEffect(() => {
     if (mode !== 'illusion') { setCountdown(0); return }
     const start = Date.now()
@@ -106,39 +133,33 @@ export function AnonymizerLogoMotion({ mode, onActivate, onCancel, className = '
     return () => window.clearInterval(iv)
   }, [mode])
 
-  // ── RAF animation loop ──
   const tick = useCallback((ts: number) => {
     const dt = Math.min(0.05, (ts - (lastTsRef.current || ts)) / 1000)
     lastTsRef.current = ts
     const s = speedsRef.current
     const m = prevModeRef.current
 
-    // Target speeds based on current mode
-    let tOuter: number, tInner: number, tCenter: number, tIntensity: number
+    let tOuter: number, tInner: number, tIntensity: number
     let lerpRate: number
 
     if (m === 'spinUp') {
       tOuter = OPTICAL.outerRotationDegPerSec
       tInner = OPTICAL.innerRotationDegPerSec
-      tCenter = OPTICAL.centerRotationDegPerSec
       tIntensity = 1
       lerpRate = 2.5
     } else if (m === 'illusion') {
       tOuter = OPTICAL.outerRotationDegPerSec
       tInner = OPTICAL.innerRotationDegPerSec
-      tCenter = OPTICAL.centerRotationDegPerSec
       tIntensity = 1
       lerpRate = 4
     } else if (m === 'coolDown') {
       tOuter = OPTICAL.idleRotationDegPerSec
       tInner = OPTICAL.idleRotationDegPerSec
-      tCenter = 0
       tIntensity = 0
       lerpRate = 1.8
     } else {
       tOuter = OPTICAL.idleRotationDegPerSec
       tInner = OPTICAL.idleRotationDegPerSec
-      tCenter = 0
       tIntensity = 0
       lerpRate = 3
     }
@@ -146,36 +167,32 @@ export function AnonymizerLogoMotion({ mode, onActivate, onCancel, className = '
     const f = Math.min(1, dt * lerpRate)
     s.outer += (tOuter - s.outer) * f
     s.inner += (tInner - s.inner) * f
-    s.center += (tCenter - s.center) * f
     s.intensity += (tIntensity - s.intensity) * f
 
     if (m === 'idle' || m === 'disabledReducedMotion') {
       if (m === 'idle') {
         angleRef.current = (angleRef.current + OPTICAL.idleRotationDegPerSec * dt) % 360
-        const el = imgRef.current
+        const el = idleRef.current
         if (el) el.style.transform = `rotate(${angleRef.current}deg)`
       }
     } else {
       outerAngleRef.current += s.outer * dt
       innerAngleRef.current += s.inner * dt
-      centerAngleRef.current += s.center * dt
 
       if (outerRef.current)
         outerRef.current.style.transform = `rotate(${outerAngleRef.current % 360}deg)`
       if (innerRef.current)
         innerRef.current.style.transform = `rotate(${innerAngleRef.current % 360}deg)`
 
-      // Center: slight scale pulse + slow rotation — fixation point stays stable
       const intensity = s.intensity
       if (centerRef.current) {
         const cycle = (ts / OPTICAL.pulsePeriodMs) * Math.PI * 2
         const scale = lerp(OPTICAL.pulseScale.min, OPTICAL.pulseScale.max,
           (Math.sin(cycle) + 1) / 2 * intensity)
         centerRef.current.style.transform =
-          `rotate(${centerAngleRef.current % 360}deg) scale(${scale})`
+          `rotate(${outerAngleRef.current % 360}deg) scale(${scale})`
       }
 
-      // Ghost rings: pulse opacity + blur for Troxler peripheral fading
       for (let i = 0; i < ghostRefs.current.length; i++) {
         const el = ghostRefs.current[i]
         if (!el) continue
@@ -197,8 +214,6 @@ export function AnonymizerLogoMotion({ mode, onActivate, onCancel, className = '
     return () => cancelAnimationFrame(rafRef.current)
   }, [tick])
 
-  // ── Render ──
-
   const handleClick = () => {
     if (isActive) onCancel()
     else onActivate()
@@ -209,109 +224,127 @@ export function AnonymizerLogoMotion({ mode, onActivate, onCancel, className = '
     ? `Focus on the green center \u00B7 ${countdown}s`
     : 'Focus on the green center'
 
-  return (
-    <>
-      <div className={`logo-motion-wrap${isActive ? ' logo-motion-calibrating' : ''} ${className}`}>
-        {/* Idle: rotating <img>, same as today's HP */}
-        <div
-          ref={imgRef}
-          className={`logo-motion-idle${showSvg ? ' logo-motion-idle--hidden' : ''}`}
-          onClick={handleClick}
-          role="img"
-          aria-label="Anonymizer logo"
-        >
-          <img src="/brand/spiral-logo.svg" alt="" draggable={false} />
-        </div>
+  const chromeLayout = phoneChrome ? 'phone' : 'corner'
 
-        {/* Active: layered SVG with split rotation */}
-        {showSvg && (
-          <svg
-            viewBox="0 0 407 407"
-            className="logo-motion-svg"
-            onClick={handleClick}
-            aria-label="Privacy calibration animation"
-          >
-            <defs>
-              <path id="lm-spiral" d={svgPaths.spiral} fill="white" />
-              {/* Annulus: everything outside r=145 from center */}
-              <clipPath id="lm-clip-outer">
-                <path
-                  fillRule="evenodd"
-                  d={`M-10-10h427v427H-10z M${CX} ${CY - 145}a145 145 0 1 0 0 290 145 145 0 1 0 0-290z`}
-                />
-              </clipPath>
-              {/* Inner disc: r ≤ 148 (slight overlap avoids seam) */}
-              <clipPath id="lm-clip-inner">
-                <circle cx={CX} cy={CY} r={148} />
-              </clipPath>
-            </defs>
-
-            {/* Outer rings — rotate CW */}
-            <g
-              ref={outerRef}
-              className="logo-motion-layer-outer"
-              style={{ transformOrigin: `${CX}px ${CY}px` }}
-              clipPath="url(#lm-clip-outer)"
-            >
-              <use href="#lm-spiral" />
-            </g>
-
-            {/* Inner spiral — rotate CCW */}
-            <g
-              ref={innerRef}
-              className="logo-motion-layer-inner"
-              style={{ transformOrigin: `${CX}px ${CY}px` }}
-              clipPath="url(#lm-clip-inner)"
-            >
-              <use href="#lm-spiral" />
-            </g>
-
-            {/* Ghost rings for Troxler peripheral fading */}
-            <g className="logo-motion-ghost">
-              {Array.from({ length: OPTICAL.ghostRingCount }, (_, i) => (
-                <circle
-                  key={i}
-                  ref={el => { ghostRefs.current[i] = el }}
-                  cx={CX}
-                  cy={CY}
-                  r={160 + i * 14}
-                  fill="none"
-                  stroke="white"
-                  strokeWidth="0.6"
-                  opacity="0"
-                />
-              ))}
-            </g>
-
-            {/* Green center — stable fixation point */}
-            <g
-              ref={centerRef}
-              className="logo-motion-center"
-              style={{ transformOrigin: `${CX}px ${CY}px` }}
-            >
-              <path d={svgPaths.center} fill="#00FF78" />
-            </g>
-          </svg>
-        )}
-      </div>
-
-      {/* Calibration copy */}
-      {showCopy && (
-        <div className={`logo-motion-copy${showCopy ? ' logo-motion-copy--visible' : ''}`}>
+  const copyPortal = showCopy && typeof document !== 'undefined'
+    ? createPortal(
+        <div className={`logo-motion-copy logo-motion-copy--visible logo-motion-copy--${chromeLayout}`}>
           <p className="logo-motion-copy-title">Privacy Calibration</p>
           <p className="logo-motion-copy-hint">{hintText}</p>
           <button type="button" className="logo-motion-skip" onClick={onCancel}>
             Skip
           </button>
-        </div>
-      )}
+        </div>,
+        document.body,
+      )
+    : null
 
-      {/* Completion flash */}
-      {showComplete && (
-        <div className={`logo-motion-complete${showComplete ? ' logo-motion-complete--visible' : ''}`}>
+  const completePortal = showComplete && typeof document !== 'undefined'
+    ? createPortal(
+        <div className={`logo-motion-complete logo-motion-complete--visible logo-motion-complete--${chromeLayout}`}>
           Vision restored. Privacy engaged.
-        </div>
-      )}
+        </div>,
+        document.body,
+      )
+    : null
+
+  const spiralOnly = svgPaths ? (
+    <path
+      d={svgPaths.spiral}
+      fill="white"
+      stroke="black"
+      vectorEffect="non-scaling-stroke"
+      mask={`url(#${maskId})`}
+    />
+  ) : null
+
+  return (
+    <>
+      <div className={`logo-motion-wrap${isActive ? ' logo-motion-calibrating' : ''} ${className}`}>
+        <svg
+          viewBox={`0 0 ${SIZE} ${SIZE}`}
+          className="logo-motion-svg"
+          onClick={handleClick}
+          role="img"
+          aria-label={isActive ? 'Privacy calibration animation' : 'Anonymizer logo'}
+        >
+          {svgPaths && (
+            <defs>
+              <mask id={maskId} fill="white">
+                <path d={svgPaths.mask} />
+              </mask>
+              <clipPath id="lm-clip-outer">
+                <path
+                  fillRule="evenodd"
+                  d={`M-10-10h${SIZE + 20}v${SIZE + 20}H-10z M${CX} ${CY - OUTER_R}a${OUTER_R} ${OUTER_R} 0 1 0 0 ${OUTER_R * 2} ${OUTER_R} ${OUTER_R} 0 1 0 0-${OUTER_R * 2}z`}
+                />
+              </clipPath>
+              <clipPath id="lm-clip-inner">
+                <circle cx={CX} cy={CY} r={INNER_R} />
+              </clipPath>
+            </defs>
+          )}
+
+          {!isActive && svgPaths && (
+            <g
+              ref={idleRef}
+              className="logo-motion-idle"
+              style={{ transformOrigin: `${CX}px ${CY}px` }}
+            >
+              <SpiralArt paths={svgPaths} maskId={maskId} />
+            </g>
+          )}
+
+          {isActive && svgPaths && (
+            <>
+              <g
+                ref={outerRef}
+                className="logo-motion-layer-outer"
+                style={{ transformOrigin: `${CX}px ${CY}px` }}
+                clipPath="url(#lm-clip-outer)"
+              >
+                {spiralOnly}
+              </g>
+
+              <g
+                ref={innerRef}
+                className="logo-motion-layer-inner"
+                style={{ transformOrigin: `${CX}px ${CY}px` }}
+                clipPath="url(#lm-clip-inner)"
+              >
+                {spiralOnly}
+              </g>
+
+              <g className="logo-motion-ghost">
+                {Array.from({ length: OPTICAL.ghostRingCount }, (_, i) => (
+                  <circle
+                    key={i}
+                    ref={el => { ghostRefs.current[i] = el }}
+                    cx={CX}
+                    cy={CY}
+                    r={160 + i * 14}
+                    fill="none"
+                    stroke="white"
+                    strokeWidth="0.6"
+                    opacity="0"
+                  />
+                ))}
+              </g>
+
+              <g
+                ref={centerRef}
+                className="logo-motion-center"
+                style={{ transformOrigin: `${CENTER_PIVOT_X}px ${CENTER_PIVOT_Y}px` }}
+              >
+                <CenterArt paths={svgPaths} />
+              </g>
+            </>
+          )}
+        </svg>
+      </div>
+
+      {copyPortal}
+      {completePortal}
     </>
   )
 }

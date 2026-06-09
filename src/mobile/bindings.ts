@@ -60,6 +60,8 @@ export interface AppMobileBindings {
   activePhoto: PhotoItem | null
   activePhotoId: string | null
   activeZones: Zone[]
+  /** Detected faces on the current video frame (preview only). */
+  videoPreviewFaceCount: number
   displayedPhotos: PhotoItem[]
   sidebarView: 'grid' | 'list'
   selectedForBatch: Set<string>
@@ -86,7 +88,7 @@ export interface AppMobileBindings {
   exportAllLibraryZip: (photoIds?: string[]) => void
   exportAllLibraryIndividual: (photoIds?: string[]) => void
   videoProcessing: boolean
-  videoProgress: { current: number; total: number; phase: VideoProcessingPhase } | null
+  videoProgress: { current: number; total: number; phase: VideoProcessingPhase; renderFrame?: number; renderTotal?: number } | null
   cancelVideoProcessing: () => void
   processActiveVideo: () => void
   videoExportFormat: VideoExportFormatId
@@ -156,6 +158,8 @@ export interface AppMobileBindings {
   setBrushStrength: (v: number) => void
   toolMode: ToolMode
   setToolMode: (m: ToolMode) => void
+  cropDraft: { x: number; y: number; w: number; h: number } | null
+  cropToSelection: () => void
   selectedEffect: AnonymizeEffectId
   setSelectedEffect: (e: AnonymizeEffectId) => void
   customImageSource: CustomImageSource

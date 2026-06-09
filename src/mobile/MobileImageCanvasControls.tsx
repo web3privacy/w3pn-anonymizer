@@ -17,6 +17,8 @@ export function MobileImageCanvasControls({ b }: MobileImageCanvasControlsProps)
   const editFrame = photo ? isEditFrameMode(b) : false
   const hasZones = b.activeZones.length > 0
   const canAnonymize = hasZones && !b.zonesAnonymized
+  const cropMode = b.toolMode === 'crop'
+  const canApplyCrop = cropMode && b.cropDraft != null && b.cropDraft.w > 0.002 && b.cropDraft.h > 0.002
   const busy = b.isBusy
   const zoomPct = Math.round(b.mobileViewZoom * 100)
   const canUndo = b.undoCount > 0
@@ -119,13 +121,32 @@ export function MobileImageCanvasControls({ b }: MobileImageCanvasControlsProps)
               {zoomPct}%
             </div>
           {editFrame ? (
+            <div className="mobile-edit-frame-actions">
+              <button
+                type="button"
+                className="mobile-canvas-secondary-btn"
+                onClick={b.jumpToSourceVideoFromSnapshot}
+                disabled={busy}
+              >
+                CANCEL
+              </button>
+              <button
+                type="button"
+                className="mobile-anonymize-btn mobile-anonymize-btn--save-video"
+                onClick={b.applySnapshotToSourceVideo}
+                disabled={busy}
+              >
+                SAVE TO VIDEO
+              </button>
+            </div>
+          ) : cropMode ? (
             <button
+              className="mobile-anonymize-btn"
               type="button"
-              className="mobile-anonymize-btn mobile-anonymize-btn--save-video"
-              onClick={b.applySnapshotToSourceVideo}
-              disabled={busy}
+              onClick={b.cropToSelection}
+              disabled={busy || !canApplyCrop}
             >
-              SAVE TO VIDEO
+              APPLY CROP
             </button>
           ) : (
             <button

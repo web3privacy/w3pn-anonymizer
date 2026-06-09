@@ -18,10 +18,12 @@ function DistortSettingsPanel({
   id,
   b,
   liveMode,
+  videoEditor,
 }: {
   id: DistortEffectId
   b: AppMobileBindings
   liveMode: boolean
+  videoEditor: boolean
 }) {
   const strength = b.distortStrengthByEffect[id] ?? DEFAULT_DISTORT_STRENGTHS[id]
 
@@ -93,15 +95,17 @@ function DistortSettingsPanel({
         />
         <span className="mobile-slider-row-v2-val">{strength}</span>
       </div>
-      {!liveMode && (
-        <button
-          className="mobile-distort-apply-btn"
-          type="button"
-          onClick={() => b.commitAdjTransform()}
-          disabled={!b.activePhoto || !b.enabledDistorts.includes(id)}
-        >
-          APPLY
-        </button>
+      {!liveMode && !videoEditor && (
+        <div className="mobile-distort-list-actions mobile-distort-list-actions--inline">
+          <button
+            className="mobile-distort-apply-btn"
+            type="button"
+            onClick={() => b.commitAdjTransform()}
+            disabled={!b.activePhoto || !b.enabledDistorts.includes(id)}
+          >
+            APPLY
+          </button>
+        </div>
       )}
     </div>
   )
@@ -111,6 +115,7 @@ const DISTORT_SLIDE_MS = 220
 
 export function MobileDistortDrawer({ b, liveMode = false }: MobileDistortDrawerProps) {
   const open = b.mobilePanel === 'tool-distort'
+  const videoEditor = Boolean(b.activePhoto?.isVideo && !liveMode)
   const [settingsView, setSettingsView] = useState<DistortEffectId | null>(null)
   const [slideToSettings, setSlideToSettings] = useState(false)
   const slideTimerRef = useRef<ReturnType<typeof setTimeout>>()
@@ -180,6 +185,7 @@ export function MobileDistortDrawer({ b, liveMode = false }: MobileDistortDrawer
       <div className="mobile-distort-viewport">
         <div className={`mobile-distort-panels${slideToSettings ? ' show-settings' : ''}`}>
           <div className="mobile-distort-panel mobile-distort-panel-list">
+            <div className="mobile-tool-drawer-v2">
             <div className="mobile-distort-list">
               {DISTORT_EFFECT_ORDER.map((id) => {
                 const meta = DISTORT_EFFECT_META[id]
@@ -218,22 +224,26 @@ export function MobileDistortDrawer({ b, liveMode = false }: MobileDistortDrawer
               <button className="mobile-distort-reset-btn" type="button" onClick={b.resetAdjTransformPreview}>
                 RESET ALL
               </button>
-              {!liveMode && (
+              {videoEditor && (
+                <p className="mobile-distort-video-hint">Applied when you Process video</p>
+              )}
+              {!liveMode && !videoEditor && (
                 <button
                   className="mobile-distort-apply-btn"
                   type="button"
                   onClick={() => { b.commitAdjTransform(); close() }}
                   disabled={!b.activePhoto || b.enabledDistorts.length === 0}
                 >
-                  APPLY ALL
+                  APPLY TO PHOTO
                 </button>
               )}
+            </div>
             </div>
           </div>
 
           <div className="mobile-distort-panel mobile-distort-panel-settings">
             {settingsView ? (
-              <DistortSettingsPanel id={settingsView} b={b} liveMode={liveMode} />
+              <DistortSettingsPanel id={settingsView} b={b} liveMode={liveMode} videoEditor={videoEditor} />
             ) : (
               <div className="mobile-distort-settings-placeholder" aria-hidden="true" />
             )}

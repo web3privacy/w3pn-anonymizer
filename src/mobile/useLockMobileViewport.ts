@@ -13,6 +13,7 @@ const SCROLL_GESTURE_SELECTOR = [
   '.mobile-effects-viewport',
   '.mobile-gallery-inner',
   '.mobile-home-v2',
+  '.mobile-home-v2-hero',
   '.mobile-live-settings',
 ].join(', ')
 

@@ -28,6 +28,7 @@ export function isCategoryEffectActive(
       return b.enabledDistorts.length > 0
     case 'effects':
       if (liveMode) return b.liveDetectEnabled
+      if (b.activePhoto?.isVideo) return b.autoDetect
       return b.activeZones.length > 0 || b.zonesAnonymized
     case 'zone':
       return !liveMode && b.activeZones.length > 0 && !b.autoDetect
@@ -44,5 +45,6 @@ export function isEffectApplied(
   liveMode: boolean,
 ): boolean {
   if (liveMode) return b.liveDetectEnabled && b.selectedEffect === effectId
+  if (b.activePhoto?.isVideo) return b.selectedEffect === effectId
   return b.activeZones.some((z) => z.effect === effectId)
 }
