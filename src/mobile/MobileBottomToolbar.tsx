@@ -1,7 +1,8 @@
 import { Icon } from '../components/Icon'
-import { memo, type CSSProperties } from 'react'
+import { memo } from 'react'
 import { EFFECTS, getMobileStrengthLabel } from '../lib/effects'
 import type { AppMobileBindings } from './bindings'
+import { MobileRangeWithThumb } from './MobileRangeWithThumb'
 import { isCategoryEffectActive } from './categoryActivity'
 import { getCategoryToolDisplay } from './categoryToolDisplay'
 import { panelForCategory } from './toolRotation'
@@ -19,12 +20,8 @@ interface MobileBottomToolbarProps {
 }
 
 export const MobileBottomToolbar = memo(function MobileBottomToolbar({ b, liveMode = false, liveFaceCount = 0 }: MobileBottomToolbarProps) {
-  const strVal = Math.min(99, Math.max(0, Math.round(b.brushStrength * 100)))
+  const strVal = Math.min(100, Math.max(1, Math.round(b.brushStrength * 100)))
   const sizeVal = Math.min(99, Math.max(0, Math.round(b.brushSize)))
-  // Slider max is 99, so the thumb sits at value/99 of the track. Mirror that
-  // exact fraction (0..100) for the in-thumb label so it never drifts sideways.
-  const strPct = (strVal / 99) * 100
-  const sizePct = (sizeVal / 99) * 100
   const isVideoEditor = !liveMode && Boolean(b.activePhoto?.isVideo)
   const detMode = b.detector.mode
   const detectorOff = detMode !== 'yunet-wasm'
@@ -67,36 +64,28 @@ export const MobileBottomToolbar = memo(function MobileBottomToolbar({ b, liveMo
 
   return (
     <div className={`mobile-bottom-toolbar${isVideoEditor && b.videoProcessing ? ' mobile-bottom-toolbar--processing' : ''}`}>
-      {!b.videoProcessing || !isVideoEditor ? (
+      {!b.videoProcessing && !isVideoEditor && b.toolMode !== 'crop' ? (
       <div className="mobile-sliders-row">
         <div className="mobile-slider-group">
           <span className="mobile-slider-label">{strLabel}</span>
-          <div className="mobile-range-with-thumb" style={{ '--mobile-range-pct': strPct } as CSSProperties}>
-            <input
-              type="range"
-              min={0}
-              max={99}
-              value={strVal}
-              onChange={(e) => b.setBrushStrength(Number(e.target.value) / 100)}
-              aria-label="Strength"
-            />
-            <span className="mobile-range-thumb-label">{strVal}</span>
-          </div>
+          <MobileRangeWithThumb
+            min={1}
+            max={100}
+            value={strVal}
+            onChange={(v) => b.setBrushStrength(v / 100)}
+            ariaLabel="Strength"
+          />
         </div>
         {!liveMode && !isVideoEditor && (
           <div className="mobile-slider-group">
             <span className="mobile-slider-label">BRUSH</span>
-            <div className="mobile-range-with-thumb" style={{ '--mobile-range-pct': sizePct } as CSSProperties}>
-              <input
-                type="range"
-                min={0}
-                max={99}
-                value={sizeVal}
-                onChange={(e) => b.setBrushSize(Number(e.target.value))}
-                aria-label="Brush size"
-              />
-              <span className="mobile-range-thumb-label">{sizeVal}</span>
-            </div>
+            <MobileRangeWithThumb
+              min={0}
+              max={99}
+              value={sizeVal}
+              onChange={b.setBrushSize}
+              ariaLabel="Brush size"
+            />
           </div>
         )}
       </div>

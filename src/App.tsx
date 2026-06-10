@@ -16,7 +16,12 @@ import './desktop/desktop-v2.css'
 import { DesktopHomeDefault } from './desktop/DesktopHomeDefault'
 import { Icon } from './components/Icon'
 import { EffectPickerDialog } from './components/EffectPickerDialog'
-import { DetectionSettingsDrawer } from './components/DetectionSettingsDrawer'
+import { AdjustToolPanel } from './components/tool-panels/AdjustToolPanel'
+import { RangeWithThumb } from './components/RangeWithThumb'
+import { DistortToolPanel } from './components/tool-panels/DistortToolPanel'
+import { FaceSettingsPanel } from './components/tool-panels/FaceSettingsPanel'
+import { ToolSliderRow } from './components/ToolSliderRow'
+import './components/tool-panels/tool-panels.css'
 import { useHoldRepeat } from './lib/useHoldRepeat'
 import { useIsMobile } from './mobile/useIsMobile'
 import { usePinchZoom } from './mobile/usePinchZoom'
@@ -35,7 +40,6 @@ import { bakePhotoToCanvas } from './lib/bake-photo-export'
 import {
   DEFAULT_CUSTOM_IMAGE_PRESET_ID,
   customImageFolderForSource,
-  customImagePresetOptions,
 } from './lib/custom-image-presets'
 import { exportCanvasToBlob as exportCanvasToBlobLib } from './lib/export-canvas'
 import type { MobileMode, MobilePanel, MobileToolCategory } from './mobile/types'
@@ -50,11 +54,11 @@ import {
   distortPipelineKey,
   type DistortEffectId,
 } from './lib/distort-effects'
-import { EFFECTS, applyColorAdjustments, applyEffectBrush, applyEffectRect, applyGlitchEffect, colorAdjExportKey, isColorAdjNoop, pickEmojiFromSeed, pickRandomEmoji, pickUniqueEmojis, previewEffectBrush } from './lib/effects'
+import { EFFECTS, applyColorAdjustments, applyEffectBrush, applyEffectRect, applyGlitchEffect, colorAdjExportKey, getMobileStrengthLabel, isColorAdjNoop, pickEmojiFromSeed, pickRandomEmoji, pickUniqueEmojis, previewEffectBrush } from './lib/effects'
 import type { PixelShiftType } from './lib/effects'
 import { canvasToBmpBlob, canvasToGifBlob, canvasToTiffBlob, FORMAT_EXT, isLosslessFormat } from './lib/image-encoders'
 import { canvasToSvg, canvasToSvgBlob, VECTORIZE_PRESETS, DEFAULT_VECTORIZE_PARAMS, type VectorizeParams, type VectorizePreset } from './lib/vectorize'
-import { extractPosterFrame, getSupportedVideoExportOptions, getVideoMetadata, getVideoPipelineCapabilities, mimeTypeToVideoExtension, processVideo, VideoFaceTrackStabilizer, type VideoDistortOptions, type VideoExportFormatId, type VideoFrameOverride, type VideoProcessingPhase, type VideoTimedZone } from './lib/video'
+import { extractPosterFrame, getSupportedVideoExportOptions, getVideoMetadata, getVideoPipelineCapabilities, mimeTypeToVideoExtension, processVideo, videoZoneStrength, VideoFaceTrackStabilizer, type VideoDistortOptions, type VideoExportFormatId, type VideoFrameOverride, type VideoProcessingPhase, type VideoTimedZone } from './lib/video'
 import {
   detectFrameCropFromBlob,
   getCropRectNormalized,
@@ -622,6 +626,7 @@ function App() {
   const [dirtyByPhoto, setDirtyByPhoto] = useState<Record<string, boolean>>({})
   const [selectedZoneId, setSelectedZoneId] = useState<string | null>(null)
   const [toolMode, setToolMode] = useState<ToolMode>('brush')
+  const toolModeRef = useRef<ToolMode>('brush')
   const [selectedEffect, setSelectedEffectState] = useState<AnonymizeEffectId>('pixelate')
   const selectedEffectRef = useRef<AnonymizeEffectId>('pixelate')
   const [lastZoneTool, setLastZoneTool] = useState<'brush' | 'rectangle'>('brush')
@@ -669,7 +674,6 @@ function App() {
   const [autoDetect, setAutoDetect] = useState(true)   // auto-detect faces on photo open
   const [showBoxes, setShowBoxes] = useState(true)     // show/hide zone outlines
   // Editable detection settings (exposed via the detection settings drawer).
-  const [detectSettingsOpen, setDetectSettingsOpen] = useState(false)
   const [detectTarget, setDetectTarget] = useState<DetectionTarget>('faces')
   const [detectSensitivity, setDetectSensitivity] = useState(1) // 0..100 — low default reduces false positives
   const [detectThorough, setDetectThorough] = useState(false)
@@ -816,6 +820,7 @@ function App() {
   const adjFlyoutBtnRef = useRef<HTMLButtonElement>(null)
   const transformFlyoutBtnRef = useRef<HTMLButtonElement>(null)
   const effectFlyoutBtnRef = useRef<HTMLButtonElement>(null)
+  const faceFlyoutBtnRef = useRef<HTMLButtonElement>(null)
   const filenameTipRef = useRef<HTMLSpanElement>(null)
   const [filenameTipPos, setFilenameTipPos] = useState<{ top: number; left: number } | null>(null)
   const [adjFlyoutAnchor, setAdjFlyoutAnchor] = useState<{ top: number; left: number } | null>(null)
@@ -825,6 +830,8 @@ function App() {
   const colorPanelOpen = adjFlyoutOpen || (isMobile && mobilePanel === 'tool-adjust')
   const transformPanelOpen = transformFlyoutOpen || (isMobile && mobilePanel === 'tool-distort')
   const [effectFlyoutAnchor, setEffectFlyoutAnchor] = useState<{ top: number; left: number } | null>(null)
+  const [faceFlyoutOpen, setFaceFlyoutOpen] = useState(false)
+  const [faceFlyoutAnchor, setFaceFlyoutAnchor] = useState<{ top: number; left: number } | null>(null)
   const [adjTransform, setAdjTransform] = useState<string>('none')   // none | glitch | halftone | pixel-shift | color-shift
   const [adjTransformStrength, setAdjTransformStrength] = useState(35)
   // Per-effect extra parameters
@@ -841,9 +848,9 @@ function App() {
   const [videoDistortPreviewVisible, setVideoDistortPreviewVisible] = useState(false)
 
   const getActiveDistorts = useCallback((): DistortEffectId[] => {
-    if (isMobile) return enabledDistorts
+    if (enabledDistorts.length > 0) return enabledDistorts
     return adjTransform !== 'none' ? [adjTransform as DistortEffectId] : []
-  }, [adjTransform, enabledDistorts, isMobile])
+  }, [adjTransform, enabledDistorts])
 
   const toggleDistortEffect = useCallback((id: DistortEffectId) => {
     setEnabledDistorts((cur) => {
@@ -878,7 +885,7 @@ function App() {
 
   // Close flyouts on outside click
   useEffect(() => {
-    if (!adjFlyoutOpen && !effectFlyoutOpen && !transformFlyoutOpen) return
+    if (!adjFlyoutOpen && !effectFlyoutOpen && !transformFlyoutOpen && !faceFlyoutOpen) return
     const handler = (e: MouseEvent) => {
       const target = e.target as Node
       const flyouts = document.querySelectorAll('.ts-flyout-portal')
@@ -886,13 +893,20 @@ function App() {
       if (adjFlyoutBtnRef.current?.contains(target)) return
       if (effectFlyoutBtnRef.current?.contains(target)) return
       if (transformFlyoutBtnRef.current?.contains(target)) return
+      if (faceFlyoutBtnRef.current?.contains(target)) return
       setAdjFlyoutOpen(false)
       setEffectFlyoutOpen(false)
       setTransformFlyoutOpen(false)
+      setFaceFlyoutOpen(false)
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
-  }, [adjFlyoutOpen, effectFlyoutOpen, transformFlyoutOpen])
+  }, [adjFlyoutOpen, effectFlyoutOpen, faceFlyoutOpen, transformFlyoutOpen])
+
+  useEffect(() => {
+    if (!transformFlyoutOpen || enabledDistorts.length > 0 || adjTransform === 'none') return
+    setEnabledDistorts([adjTransform as DistortEffectId])
+  }, [adjTransform, enabledDistorts.length, transformFlyoutOpen])
   const [activeBatchTasks, setActiveBatchTasks] = useState<Set<BatchTaskId>>(new Set(['format']))
   const [expandedBatchTasks, setExpandedBatchTasks] = useState<Set<BatchTaskId>>(new Set(['format']))
   const [zonesAnonymized, setZonesAnonymized] = useState(false)
@@ -950,6 +964,8 @@ function App() {
   const videoMediaRef = useRef<HTMLDivElement | null>(null)
   const mobilePreviewTransformRef = useRef<HTMLDivElement | null>(null)
   const mobilePinchActiveRef = useRef(false)
+  const [mobileGestureActive, setMobileGestureActive] = useState(false)
+  const [videoDismissedTick, setVideoDismissedTick] = useState(0)
   const activeVideoTimeRef = useRef(0)
   const pendingVideoSeekRef = useRef<number | null>(null)
   const [videoPreviewFaceZones, setVideoPreviewFaceZones] = useState<Zone[]>([])
@@ -1516,9 +1532,9 @@ function App() {
     ctx.rotate(viewRot)
     ctx.drawImage(drawSource, -drawWidth / 2, -drawHeight / 2, drawWidth, drawHeight)
 
-    const hasDistortPreview = isMobile ? enabledDistorts.length > 0 : adjTransform !== 'none'
+    const hasDistortPreview = getActiveDistorts().length > 0
     const previewing = ((adjFlyoutOpen || transformPanelOpen) && hasDistortPreview) || (!isColorNoop && colorPanelOpen)
-    if (showBoxes && !previewing) {
+    if (showBoxes && toolMode !== 'crop' && !previewing && !mobileGestureActive) {
       effectiveZones.forEach((zone) => drawZoneInView(ctx, zone, drawWidth, drawHeight, zone.id === selectedZoneId))
       if (draftZone) drawZoneInView(ctx, draftZone, drawWidth, drawHeight, true)
     }
@@ -1539,8 +1555,8 @@ function App() {
 
   }, [
     activePhoto, activeNormalizeCrop, effectiveZones, adjFlyoutOpen, adjTransform, batchPanelOpen,
-    colorAdj, colorPanelOpen, draftZone, enabledDistorts, exportFormat, isMobile, isNormalizeCropPicking, transformPanelOpen,
-    normalizeCropDraft, normalizeSettings.cropMode, selectedZoneId, showBoxes, effectiveTheme, mobileViewZoom, mobileViewPan, mobileViewRotation, transformPanelOpen, mobileExportDraft,
+    colorAdj, colorPanelOpen, draftZone, enabledDistorts, exportFormat, getActiveDistorts, isMobile, isNormalizeCropPicking, transformPanelOpen,
+    normalizeCropDraft, normalizeSettings.cropMode, selectedZoneId, showBoxes, toolMode, effectiveTheme, mobileViewZoom, mobileViewPan, mobileViewRotation, mobileGestureActive, transformPanelOpen, mobileExportDraft,
     syncOverlayLayout,
     applyMobilePreviewTransform,
   ])
@@ -2192,6 +2208,15 @@ function App() {
     renderCanvas()
   }, [activePhoto, activePhotoId, effectiveZones, brushStrength, customEffectOptions, getWorkCtx, renderCanvas, setActiveDirty])
 
+  const cancelCropMode = useCallback(() => {
+    setCropDraft(null)
+    setToolMode('brush')
+    toolModeRef.current = 'brush'
+    mobileCanvasEditRef.current = false
+    pointerSessionRef.current = { mode: 'idle' }
+    renderCanvas()
+  }, [renderCanvas])
+
   const cropToSelection = useCallback(() => {
     if (!activePhoto || !cropDraft) return
     const workCanvas = workCanvasRef.current
@@ -2215,6 +2240,7 @@ function App() {
     setResEditW(pw); setResEditH(ph)
     setCropDraft(null)
     setToolMode('brush')
+    toolModeRef.current = 'brush'
     mobileCanvasEditRef.current = false
     setMobileViewZoom(1)
     setMobileViewPan({ x: 0, y: 0 })
@@ -3463,7 +3489,7 @@ function App() {
               zone.y * H,
               zone.width * W,
               zone.height * H,
-              brushStrength,
+              videoZoneStrength(zone, brushStrength),
               emoji,
               customEffectOptions({ ...zone, effect }, `${zone.id}-${i}`),
             )
@@ -3577,7 +3603,7 @@ function App() {
     const clear = () => {
       if (transformPreviewCanvasRef.current) { transformPreviewCanvasRef.current.width = 0 }
     }
-    const active = isMobile ? enabledDistorts : (adjTransform !== 'none' ? [adjTransform as DistortEffectId] : [])
+    const active = getActiveDistorts()
     if ((!adjFlyoutOpen && !transformPanelOpen) || active.length === 0) {
       clear(); renderCanvasRef.current(); return
     }
@@ -3604,7 +3630,7 @@ function App() {
     }, isMobile && mobilePanel === 'tool-distort' ? 0 : 40)
     return () => { if (transformPreviewDebounceRef.current) clearTimeout(transformPreviewDebounceRef.current) }
    
-  }, [adjFlyoutOpen, transformPanelOpen, mobilePanel, adjTransform, enabledDistorts, distortStrengthByEffect, adjTransformParams, adjPixelShiftType, activePhoto?.id, isMobile])
+  }, [adjFlyoutOpen, transformPanelOpen, mobilePanel, getActiveDistorts, distortStrengthByEffect, adjTransformParams, adjPixelShiftType, activePhoto?.id, isMobile])
 
   const runVideoFaceDetectPass = useCallback(async (passIndex: number, targetTime: number, gen: number) => {
     const video = activeVideoRef.current
@@ -3927,8 +3953,21 @@ function App() {
       height: zone.height,
     })
     setVideoPreviewFaceZones((zones) => zones.filter((item) => item.id !== zoneId))
+    setVideoDismissedTick((tick) => tick + 1)
     void refreshVideoFramePreview()
   }, [activePhotoId, refreshVideoFramePreview])
+
+  const restoreVideoPreviewFaceZone = useCallback((rect: NormalizedFaceRect) => {
+    if (!activePhotoId) return
+    const frameKey = Math.round(activeVideoTimeRef.current * 1000)
+    const byPhoto = videoDismissedFacesByPhotoRef.current
+    const list = byPhoto[activePhotoId]?.[frameKey]
+    if (!list?.length) return
+    byPhoto[activePhotoId][frameKey] = list.filter((item) => !faceRectsSimilar(item, rect))
+    setVideoDismissedTick((tick) => tick + 1)
+    const gen = ++videoFaceDetectGenRef.current
+    void runVideoFaceDetectPass(0, activeVideoTimeRef.current, gen)
+  }, [activePhotoId, runVideoFaceDetectPass])
 
   const clearZones = useCallback(() => { setActiveZones(() => []); setSelectedZoneId(null); setDraftZone(null) }, [setActiveZones])
 
@@ -3943,16 +3982,16 @@ function App() {
       return
     }
     if (!activePhoto) return
-    if (isMobile && !mobileCanvasEditRef.current) return
+    if (isMobile && !mobileCanvasEditRef.current && toolMode !== 'crop') return
     const mapped = mapPointerToImage(
       event.clientX,
       event.clientY,
       toolMode === 'crop' || toolMode === 'brush',
     )
     if (!mapped) return
+    event.preventDefault()
     canvasRef.current?.setPointerCapture(event.pointerId)
     if (toolMode === 'crop') {
-      canvasRef.current?.setPointerCapture(event.pointerId)
       pointerSessionRef.current = { mode: 'crop-draw', startX: mapped.normalizedX, startY: mapped.normalizedY }
       setCropDraft({ x: mapped.normalizedX, y: mapped.normalizedY, w: 0.001, h: 0.001 })
       return
@@ -4093,6 +4132,11 @@ function App() {
         const octx = overlay.getContext('2d')
         if (octx) octx.clearRect(0, 0, overlay.width, overlay.height)
       }
+    }
+    if (s.mode === 'crop-draw') {
+      pointerSessionRef.current = { mode: 'idle' }
+      renderCanvas()
+      return
     }
     if (s.mode === 'create-zone' && draftZone && draftZone.width > 0.01 && draftZone.height > 0.01) {
       const committed = { ...draftZone, id: createId() }
@@ -4264,6 +4308,7 @@ function App() {
 
   // Sync brushSizeRef when slider changes
   useEffect(() => { brushSizeRef.current = brushSize }, [brushSize])
+  useEffect(() => { toolModeRef.current = toolMode }, [toolMode])
 
   // Sync photosRef for cleanup
   useEffect(() => { photosRef.current = photos }, [photos])
@@ -4696,17 +4741,21 @@ function App() {
     } catch { setNotice('Rotation failed.') }
   }, [photos, activePhotoId])
 
-  // Compute zone delete button positions from current transform
-  const zoneDeletePositions = useMemo(() => {
-    if (!showBoxes) return []
+  const zoneOverlayRects = useMemo(() => {
+    if (!showBoxes || mobileGestureActive || toolMode === 'crop') return []
     const t = transformRef.current
     if (t.drawWidth === 0) return []
     return effectiveZones.map((zone) => {
-      const { lx, ly } = normalizedToLocal(zone.x + zone.width, zone.y, t)
-      const tr = localToCanvas(lx, ly, t)
-      return { id: zone.id, top: tr.y, left: tr.x + 2 }
+      const rect = zoneToCanvasRect(zone, t)
+      return { id: zone.id, ...rect }
     })
-  }, [effectiveZones, showBoxes, activeImageSize, mobileViewZoom, mobileViewPan, mobileViewRotation, canvasLayoutVersion])
+  }, [effectiveZones, showBoxes, toolMode, activeImageSize, mobileViewZoom, mobileViewPan, mobileViewRotation, canvasLayoutVersion, mobileGestureActive])
+
+  const videoDismissedAtFrame = useMemo(() => {
+    if (!activePhotoId) return [] as NormalizedFaceRect[]
+    const frameKey = Math.round(activeVideoTime * 1000)
+    return videoDismissedFacesByPhotoRef.current[activePhotoId]?.[frameKey] ?? []
+  }, [activePhotoId, activeVideoTime, videoDismissedTick])
 
   const openVideoPicker = useCallback(() => {
     const input = uploadInputRef.current
@@ -4773,12 +4822,23 @@ function App() {
 
   const applyCropTool = useCallback((id: CropToolId) => {
     setActiveCategory('crop')
-    mobileCanvasEditRef.current = true
+    setMobilePanel(null)
     const idx = CROP_TOOLS.indexOf(id)
     if (idx >= 0) setCategoryIndex('crop', idx)
     switch (id) {
       case 'crop':
+        mobileCanvasEditRef.current = true
+        setCropDraft(null)
         setToolMode('crop')
+        toolModeRef.current = 'crop'
+        pointerSessionRef.current = { mode: 'idle' }
+        setMobileViewZoom(1)
+        setMobileViewPan({ x: 0, y: 0 })
+        setMobileViewRotation(0)
+        mobileViewZoomRef.current = 1
+        mobileViewPanRef.current = { x: 0, y: 0 }
+        mobileViewRotationRef.current = 0
+        setMobileViewTransformDirty(false)
         break
       case 'rotate-left':
         if (activePhotoId) rotatePhoto(activePhotoId, -1)
@@ -5141,6 +5201,7 @@ function App() {
     setToolMode,
     cropDraft,
     cropToSelection,
+    cancelCropMode,
     selectedEffect,
     setSelectedEffect,
     customImageSource,
@@ -5173,7 +5234,12 @@ function App() {
     setShowBoxes,
     showBoxes,
     detectFacesOnActiveImage,
-    openDetectSettings: () => setDetectSettingsOpen(true),
+    openDetectSettings: () => {
+      if (isMobile) return
+      const rect = faceFlyoutBtnRef.current?.getBoundingClientRect()
+      if (rect) setFaceFlyoutAnchor({ top: rect.top, left: rect.right + 6 })
+      setFaceFlyoutOpen(true)
+    },
     removeZoneById,
     removeSelectedZone,
     clearZones,
@@ -5289,8 +5355,19 @@ function App() {
     }
   }, [mobileViewZoom, mobileViewPan, mobileViewRotation, isMobile, activePhoto, applyMobilePreviewTransform])
 
+  const commitMobileViewTransform = useCallback(() => {
+    setMobileViewZoom(mobileViewZoomRef.current)
+    setMobileViewPan({ ...mobileViewPanRef.current })
+    setMobileViewRotation(mobileViewRotationRef.current)
+    updateMobileViewTransformDirty()
+  }, [updateMobileViewTransformDirty])
+
   const handleMobileZoomChange = useCallback((z: number) => {
     mobileViewZoomRef.current = z
+    if (mobilePinchActiveRef.current) {
+      applyMobilePreviewTransform()
+      return
+    }
     setMobileViewZoom(z)
     updateMobileViewTransformDirty()
     if (isMobile && activePhoto && !activePhoto.isVideo) {
@@ -5302,6 +5379,10 @@ function App() {
 
   const handleMobilePanChange = useCallback((pan: { x: number; y: number }) => {
     mobileViewPanRef.current = pan
+    if (mobilePinchActiveRef.current) {
+      applyMobilePreviewTransform()
+      return
+    }
     setMobileViewPan(pan)
     updateMobileViewTransformDirty()
     if (isMobile && activePhoto && !activePhoto.isVideo) {
@@ -5313,6 +5394,10 @@ function App() {
 
   const handleMobileRotationChange = useCallback((rot: number) => {
     mobileViewRotationRef.current = rot
+    if (mobilePinchActiveRef.current) {
+      applyMobilePreviewTransform()
+      return
+    }
     setMobileViewRotation(rot)
     updateMobileViewTransformDirty()
     if (isMobile && activePhoto && !activePhoto.isVideo) {
@@ -5340,6 +5425,7 @@ function App() {
   const mobilePinchEnabled = showMobileEmbed
     && !hideWorkspace
     && Boolean(activePhoto && !activePhoto.isVideo)
+    && toolMode !== 'crop'
 
   usePinchZoom(viewportRef, {
     enabled: mobilePinchEnabled,
@@ -5356,9 +5442,14 @@ function App() {
     isPanGestureAllowed: () => (
       !mobilePinchActiveRef.current
       && pointerSessionRef.current.mode === 'idle'
+      && toolModeRef.current !== 'crop'
     ),
     onPinchStart: () => {
       mobilePinchActiveRef.current = true
+      setMobileGestureActive(true)
+      videoFaceDetectGenRef.current += 1
+      videoFaceScanTimersRef.current.forEach(clearTimeout)
+      videoFaceScanTimersRef.current = []
       pointerSessionRef.current = { mode: 'idle' }
       stopBrushLoop()
       setCursorPoint(null)
@@ -5372,8 +5463,19 @@ function App() {
     },
     onPinchEnd: () => {
       mobilePinchActiveRef.current = false
+      setMobileGestureActive(false)
       const canvas = canvasRef.current
       if (canvas) canvas.style.pointerEvents = ''
+      commitMobileViewTransform()
+      const photo = activePhotoRef.current
+      if (autoDetect && photo && !photo.isVideo && !photo.edited) {
+        window.setTimeout(() => {
+          if (!mobilePinchActiveRef.current) void detectFacesOnActiveImage(true)
+        }, 180)
+      } else if (photo?.isVideo && !photo.edited && autoDetect) {
+        const gen = ++videoFaceDetectGenRef.current
+        void runVideoFaceDetectPass(0, activeVideoTimeRef.current, gen)
+      }
     },
     minZoom: 0.5,
     maxZoom: 3,
@@ -5794,9 +5896,17 @@ function App() {
               const btnClass = detectorOff ? ' ts-btn-setup' : ''
               return (<>
                 <button
-                  className={`ts-btn ts-btn-autodetect${autoDetect ? ' active' : ''}${btnClass}`}
+                  ref={faceFlyoutBtnRef}
+                  className={`ts-btn ts-btn-autodetect${autoDetect ? ' active' : ''}${faceFlyoutOpen ? ' flyout-open' : ''}${btnClass}`}
                   type="button"
-                  onClick={() => setDetectSettingsOpen(true)}
+                  onClick={() => {
+                    const rect = faceFlyoutBtnRef.current?.getBoundingClientRect()
+                    if (rect) setFaceFlyoutAnchor({ top: rect.top, left: rect.right + 6 })
+                    setFaceFlyoutOpen((v) => !v)
+                    setAdjFlyoutOpen(false)
+                    setTransformFlyoutOpen(false)
+                    setEffectFlyoutOpen(false)
+                  }}
                   onDoubleClick={() => { void refreshDetector(true).then((s) => setNotice(s.message)) }}
                   title="Detection settings (double-click to refresh detector)"
                 >
@@ -5827,6 +5937,8 @@ function App() {
                 if (rect) setEffectFlyoutAnchor({ top: rect.top, left: rect.right + 6 })
                 setEffectFlyoutOpen((v) => !v)
                 setAdjFlyoutOpen(false)
+                setTransformFlyoutOpen(false)
+                setFaceFlyoutOpen(false)
               }}
               title={`Effect: ${selectedEffect} — click to change`}
               aria-label={`Effect: ${selectedEffect}`}
@@ -5869,140 +5981,76 @@ function App() {
             >
               <Icon name="brush" size={18} />
             </button>
-            <span className="ts-tooltip">{toolMode === 'brush' ? 'Brush (active)' : 'Brush'}</span>
+            <span className="ts-tooltip">Brush</span>
           </div>
 
-          {/* Color Adjustments flyout */}
-          {adjFlyoutOpen && adjFlyoutAnchor && createPortal(
+          {faceFlyoutOpen && faceFlyoutAnchor && createPortal(
             <div
-              className="ts-flyout-portal ts-flyout"
-              style={{ position: 'fixed', top: adjFlyoutAnchor.top, left: adjFlyoutAnchor.left, zIndex: 9999 }}
+              className="ts-flyout-portal ts-flyout ts-flyout--wide"
+              style={{ position: 'fixed', top: faceFlyoutAnchor.top, left: faceFlyoutAnchor.left, zIndex: 9999 }}
               onMouseDown={(e) => e.stopPropagation()}
             >
-              <div className="ts-flyout-title">Color adjustments</div>
-              <div className="color-presets">
-                {COLOR_PRESETS.filter((p) => !['faded', 'newspaper', '4-colors'].includes(p.id)).map((p) => (
-                  <button key={p.id} type="button" className={`color-preset-btn ${colorAdj.preset === p.id ? 'active' : ''}`} onClick={() => setColorPreset(p.id)}>
-                    {p.label}
-                  </button>
-                ))}
-              </div>
-              <div className="color-sliders" style={{ marginTop: '0.4rem' }}>
-                {([
-                  ['brightness', 'Bright'],
-                  ['contrast', 'Contrast'],
-                  ['saturation', 'Sat'],
-                  ['shadows', 'Shadows'],
-                  ['highlights', 'High'],
-                ] as [keyof ColorAdjustments, string][]).map(([key, label]) => (
-                  <div key={key} className="color-slider-row">
-                    <span className="color-slider-label" style={{ fontSize: '0.65rem' }}>{label}</span>
-                    <input
-                      type="range"
-                      className="color-slider-input"
-                      min={-100}
-                      max={100}
-                      value={colorAdj[key] as number}
-                      onChange={(e) => setColorAdj((cur) => ({ ...cur, [key]: Number(e.target.value), preset: 'none' }))}
-                    />
-                    <span className="color-slider-val">{(colorAdj[key] as number) > 0 ? '+' : ''}{colorAdj[key]}</span>
-                  </div>
-                ))}
-              </div>
-              <div className="color-actions" style={{ marginTop: '0.4rem' }}>
-                <button className="btn btn-sm" type="button" onClick={() => {
-                  setColorAdj(DEFAULT_COLOR_ADJUSTMENTS)
-                  renderCanvas()
-                }} title="Reset color adjustments">Reset</button>
-              </div>
+              <div className="ts-flyout-title">Face detection</div>
+              <FaceSettingsPanel
+                target={detectTarget}
+                onTargetChange={setDetectTarget}
+                sensitivity={detectSensitivity}
+                onSensitivityChange={setDetectSensitivity}
+                faceOffset={detectFaceOffset}
+                onFaceOffsetChange={setDetectFaceOffset}
+                thorough={detectThorough}
+                onThoroughChange={setDetectThorough}
+                detectEnabled={autoDetect}
+                onDetectEnabledChange={(v) => { setAutoDetect(v); setShowBoxes(v) }}
+                showBoxes={showBoxes}
+                onShowBoxesChange={setShowBoxes}
+                detectorReady={detector.mode === 'yunet-wasm'}
+                isVideo={Boolean(activePhoto?.isVideo)}
+                onDetectNow={() => { void detectFacesOnActiveImage(detectThorough); setFaceFlyoutOpen(false) }}
+                compact
+              />
             </div>,
             document.body
           )}
 
-          {/* Transform Effects flyout */}
+          {adjFlyoutOpen && adjFlyoutAnchor && createPortal(
+            <div
+              className="ts-flyout-portal ts-flyout ts-flyout--wide"
+              style={{ position: 'fixed', top: adjFlyoutAnchor.top, left: adjFlyoutAnchor.left, zIndex: 9999 }}
+              onMouseDown={(e) => e.stopPropagation()}
+            >
+              <div className="ts-flyout-title">Adjust</div>
+              <AdjustToolPanel
+                colorAdj={colorAdj}
+                onChange={setColorAdj}
+                onReset={() => { setColorAdj(DEFAULT_COLOR_ADJUSTMENTS); renderCanvas() }}
+                showPresets
+                showExtended
+              />
+            </div>,
+            document.body
+          )}
+
           {transformFlyoutOpen && transformFlyoutAnchor && createPortal(
             <div
-              className="ts-flyout-portal ts-flyout"
+              className="ts-flyout-portal ts-flyout ts-flyout--wide"
               style={{ position: 'fixed', top: transformFlyoutAnchor.top, left: transformFlyoutAnchor.left, zIndex: 9999 }}
               onMouseDown={(e) => e.stopPropagation()}
             >
-              <div className="ts-flyout-title">Transform effects</div>
-              <select
-                className="field-select"
-                style={{ width: '100%', marginBottom: '0.3rem' }}
-                value={adjTransform}
-                onChange={(e) => setAdjTransform(e.target.value)}
-              >
-                <option value="none">None</option>
-                <option value="halftone">Halftone</option>
-                <option value="glitch">Glitch</option>
-                <option value="pixel-shift">Pixel shift</option>
-                <option value="color-shift">Color shift</option>
-              </select>
-              {adjTransform === 'halftone' && (<>
-                {[['Dot size', 'dotSize', 2, 30] as const, ['Contrast', 'halftoneContrast', 0, 100] as const, ['Angle', 'halftoneAngle', 0, 360] as const].map(([label, key, min, max]) => (
-                  <div key={key} className="color-slider-row">
-                    <span className="color-slider-label" style={{ fontSize: '0.62rem' }}>{label}</span>
-                    <input type="range" className="color-slider-input" min={min} max={max} value={adjTransformParams[key]} onChange={(e) => setAdjParam(key, Number(e.target.value))} />
-                    <span className="color-slider-val">{adjTransformParams[key]}</span>
-                  </div>
-                ))}
-              </>)}
-              {adjTransform === 'glitch' && (
-                <div className="color-slider-row">
-                  <span className="color-slider-label" style={{ fontSize: '0.62rem' }}>Shift</span>
-                  <input type="range" className="color-slider-input" min={1} max={40} value={adjTransformParams.glitchShift} onChange={(e) => setAdjParam('glitchShift', Number(e.target.value))} />
-                  <span className="color-slider-val">{adjTransformParams.glitchShift}</span>
-                </div>
-              )}
-              {adjTransform === 'pixel-shift' && (<>
-                <div className="color-slider-row" style={{ gridTemplateColumns: '72px 1fr' }}>
-                  <span className="color-slider-label" style={{ fontSize: '0.62rem' }}>Type</span>
-                  <select className="field-select" style={{ fontSize: '0.66rem', padding: '0.15rem 0.3rem' }} value={adjPixelShiftType} onChange={(e) => setAdjPixelShiftType(e.target.value as PixelShiftType)}>
-                    <option value="wave">Wave</option>
-                    <option value="shear">Shear</option>
-                    <option value="ripple">Ripple</option>
-                    <option value="mirror">Mirror</option>
-                  </select>
-                </div>
-                {[['X shift', 'pixelShiftX', 1, 60] as const, ['Y shift', 'pixelShiftY', 1, 60] as const].map(([label, key, min, max]) => (
-                  <div key={key} className="color-slider-row">
-                    <span className="color-slider-label" style={{ fontSize: '0.62rem' }}>{label}</span>
-                    <input type="range" className="color-slider-input" min={min} max={max} value={adjTransformParams[key]} onChange={(e) => setAdjParam(key, Number(e.target.value))} />
-                    <span className="color-slider-val">{adjTransformParams[key]}</span>
-                  </div>
-                ))}
-              </>)}
-              {adjTransform === 'color-shift' && (<>
-                {[['Hue rotate', 'colorShiftHue', 0, 360] as const, ['Sat boost', 'colorShiftSat', 0, 100] as const].map(([label, key, min, max]) => (
-                  <div key={key} className="color-slider-row">
-                    <span className="color-slider-label" style={{ fontSize: '0.62rem' }}>{label}</span>
-                    <input type="range" className="color-slider-input" min={min} max={max} value={adjTransformParams[key]} onChange={(e) => setAdjParam(key, Number(e.target.value))} />
-                    <span className="color-slider-val">{adjTransformParams[key]}</span>
-                  </div>
-                ))}
-              </>)}
-              {adjTransform !== 'none' && (
-                <div className="color-slider-row">
-                  <span className="color-slider-label" style={{ fontSize: '0.62rem' }}>Amount</span>
-                  <input type="range" className="color-slider-input" min={1} max={80} value={adjTransformStrength} onChange={(e) => setAdjTransformStrength(Number(e.target.value))} />
-                  <span className="color-slider-val">{adjTransformStrength}</span>
-                </div>
-              )}
-              <div className="color-actions" style={{ marginTop: '0.4rem' }}>
-                <button className="btn btn-sm" type="button" onClick={() => {
-                  resetAdjTransformPreview()
-                }} title="Reset transform effects">Reset</button>
-                <button
-                  className="btn btn-sm btn-primary"
-                  type="button"
-                  onClick={() => { void applyAdjTransformToCanvas() }}
-                  disabled={!activePhoto || adjTransform === 'none'}
-                  title="Apply transform to photo"
-                >
-                  Apply
-                </button>
-              </div>
+              <div className="ts-flyout-title">Distort</div>
+              <DistortToolPanel
+                enabledDistorts={enabledDistorts}
+                toggleDistortEffect={toggleDistortEffect}
+                distortStrengthByEffect={distortStrengthByEffect}
+                setDistortStrength={setDistortStrength}
+                adjTransformParams={adjTransformParams}
+                setAdjParam={setAdjParam}
+                adjPixelShiftType={adjPixelShiftType}
+                setAdjPixelShiftType={setAdjPixelShiftType}
+                onReset={resetAdjTransformPreview}
+                onApply={() => { void applyAdjTransformToCanvas() }}
+                canApply={Boolean(activePhoto && enabledDistorts.length > 0)}
+              />
             </div>,
             document.body
           )}
@@ -6035,6 +6083,7 @@ function App() {
                 setAdjFlyoutOpen((v) => !v)
                 setEffectFlyoutOpen(false)
                 setTransformFlyoutOpen(false)
+                setFaceFlyoutOpen(false)
               }}
               disabled={!activePhoto}
               title="Color adjustments"
@@ -6056,6 +6105,7 @@ function App() {
                 setTransformFlyoutOpen((v) => !v)
                 setAdjFlyoutOpen(false)
                 setEffectFlyoutOpen(false)
+                setFaceFlyoutOpen(false)
               }}
               disabled={!activePhoto}
               title="Transform effects (halftone, glitch, pixel-shift, color-shift)"
@@ -6082,6 +6132,7 @@ function App() {
                     onClick={() => {
                       updateSelectedZoneEffect(ef.id)
                       if (ef.id === 'emoji' || ef.id === 'custom-image') {
+                        setEffectFlyoutOpen(false)
                         setEffectPickerOpen(ef.id)
                         if (ef.id === 'custom-image' && customImageAssets.length === 0) {
                           void loadCustomImagePreset(customImageSource === 'custom' ? DEFAULT_CUSTOM_IMAGE_PRESET_ID : customImageSource)
@@ -6095,60 +6146,35 @@ function App() {
                   </button>
                 ))}
               </div>
-              {selectedEffect === 'custom-image' && (
-                <div className="ts-custom-image-controls">
-                  <label className="ts-custom-image-label" htmlFor="desktop-custom-image-source">Source</label>
-                  <select
-                    id="desktop-custom-image-source"
-                    className="ts-custom-image-select"
-                    value={customImageSource}
-                    onChange={(e) => { void loadCustomImagePreset(e.target.value as CustomImageSource) }}
-                  >
-                    <option value="custom">Custom</option>
-                    {customImagePresetOptions().map((source) => (
-                      <option key={source.id} value={source.id}>{source.label}</option>
-                    ))}
-                  </select>
-                  <button type="button" className="btn btn-sm ts-custom-image-upload" onClick={openCustomImagePicker}>
-                    <Icon name="upload" size={14} /> Upload images
-                  </button>
-                  <div className="ts-custom-image-count">{customImageAssets.length} image{customImageAssets.length === 1 ? '' : 's'} ready</div>
-                </div>
-              )}
             </div>,
             document.body
           )}
 
           <div className="ts-sep" />
 
-          {/* 7. Brush size slider */}
-          <div className="ts-slider-group">
-            <span className="ts-slider-label">SIZE</span>
-            <input
-              className="ts-slider"
-              type="range"
-              min={4}
-              max={100}
-              value={Math.min(brushSize, 100)}
-              onChange={(e) => { const v = Number(e.target.value); brushSizeRef.current = v; setBrushSize(v) }}
-              title={`Brush size: ${brushSize}px`}
-            />
-            <span className="ts-slider-val">{Math.min(brushSize, 100)}</span>
-          </div>
-
-          {/* 8. Strength slider */}
-          <div className="ts-slider-group">
-            <span className="ts-slider-label">STR</span>
-            <input
-              className="ts-slider"
-              type="range"
-              min={1}
-              max={100}
-              value={Math.round(brushStrength * 100)}
-              onChange={(e) => { const v = Number(e.target.value) / 100; setBrushStrength(v) }}
-              title={`Strength: ${Math.round(brushStrength * 100)}%`}
-            />
-            <span className="ts-slider-val">{Math.round(brushStrength * 100)}%</span>
+          <div className="ts-sliders-fill">
+            <div className="ts-slider-group">
+              <span className="ts-slider-label">SIZE</span>
+              <RangeWithThumb
+                orientation="vertical"
+                min={4}
+                max={100}
+                value={Math.min(brushSize, 100)}
+                onChange={(v) => { brushSizeRef.current = v; setBrushSize(v) }}
+                ariaLabel="Brush size"
+              />
+            </div>
+            <div className="ts-slider-group">
+              <span className="ts-slider-label">{getMobileStrengthLabel(selectedEffect)}</span>
+              <RangeWithThumb
+                orientation="vertical"
+                min={1}
+                max={100}
+                value={Math.min(100, Math.max(1, Math.round(brushStrength * 100)))}
+                onChange={(v) => setBrushStrength(v / 100)}
+                ariaLabel="Effect strength"
+              />
+            </div>
           </div>
 
         </div>
@@ -6722,6 +6748,7 @@ function App() {
             className={[
               'viewer',
               showMobileEmbed ? 'viewer-mobile-pinch' : '',
+              showMobileEmbed && toolMode === 'crop' ? 'viewer-crop-mode' : '',
               batchPanelOpen && !isNormalizeCropPicking ? 'viewer-readonly' : '',
               isNormalizeCropPicking ? 'viewer-crop-picking' : '',
               isDragOver ? 'drag-over' : '',
@@ -6866,9 +6893,10 @@ function App() {
                       onPointerUp={handleVideoMaskPointerUp}
                       onPointerCancel={handleVideoMaskPointerUp}
                     >
-                      {showBoxes && !activePhoto.edited && videoPreviewFaceZones.map((zone) => (
-                        <div
+                      {showBoxes && !activePhoto.edited && !mobileGestureActive && videoPreviewFaceZones.map((zone) => (
+                        <button
                           key={zone.id}
+                          type="button"
                           className="video-face-rect"
                           style={{
                             left: `${zone.x * 100}%`,
@@ -6876,20 +6904,40 @@ function App() {
                             width: `${zone.width * 100}%`,
                             height: `${zone.height * 100}%`,
                           }}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            removeVideoPreviewFaceZone(zone.id)
+                          }}
+                          title="Exclude this face from anonymization"
+                          aria-label="Exclude this face from anonymization"
                         >
-                          <button
-                            type="button"
-                            className="video-face-rect-dismiss zone-delete-btn"
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              removeVideoPreviewFaceZone(zone.id)
-                            }}
-                            title="Remove this face box"
-                            aria-label="Remove this face box"
-                          >
+                          <span className="video-face-rect-dismiss zone-delete-btn" aria-hidden="true">
                             <Icon name="close" size={12} />
-                          </button>
-                        </div>
+                          </span>
+                        </button>
+                      ))}
+                      {showBoxes && !activePhoto.edited && !mobileGestureActive && videoDismissedAtFrame.map((rect, index) => (
+                        <button
+                          key={`dismissed-${index}-${Math.round(rect.x * 1000)}`}
+                          type="button"
+                          className="video-face-rect video-face-rect--dismissed"
+                          style={{
+                            left: `${rect.x * 100}%`,
+                            top: `${rect.y * 100}%`,
+                            width: `${rect.width * 100}%`,
+                            height: `${rect.height * 100}%`,
+                          }}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            restoreVideoPreviewFaceZone(rect)
+                          }}
+                          title="Restore anonymization for this face"
+                          aria-label="Restore anonymization for this face"
+                        >
+                          <span className="video-face-rect-restore zone-delete-btn" aria-hidden="true">
+                            <Icon name="add" size={12} />
+                          </span>
+                        </button>
                       ))}
                       {[...visibleVideoTimedZones.map((item) => item.zone), ...(videoDraftZone ? [videoDraftZone] : [])].map((zone) => (
                         <div
@@ -7123,7 +7171,7 @@ function App() {
               <canvas
                 ref={canvasRef}
                 className={batchPanelOpen && !isNormalizeCropPicking ? 'readonly-canvas' : ''}
-                style={activePhoto?.isVideo ? { display: 'none' } : (toolMode === 'crop' ? { cursor: 'crosshair' } : undefined)}
+                style={activePhoto?.isVideo ? { display: 'none' } : (toolMode === 'crop' ? { cursor: 'crosshair', touchAction: 'none' } : undefined)}
                 onPointerDown={handleCanvasPointerDown}
                 onPointerMove={handleCanvasPointerMove}
                 onPointerUp={handleCanvasPointerUp}
@@ -7140,26 +7188,34 @@ function App() {
               <canvas ref={overlayCanvasRef} className="brush-preview-overlay" />
 
               {/* Zone × delete buttons overlay */}
-              {showBoxes && !activePhoto?.isVideo && activeZones.length > 0 && (
+              {showBoxes && toolMode !== 'crop' && !activePhoto?.isVideo && zoneOverlayRects.length > 0 && (
                 <div className="zone-delete-layer" style={{ pointerEvents: toolMode === 'brush' ? 'none' : undefined }}>
-                  {zoneDeletePositions.map(({ id, top, left }) => (
+                  {zoneOverlayRects.map(({ id, x, y, width, height }) => (
                     <button
                       key={id}
-                      className="zone-delete-btn"
+                      className="zone-overlay-hit"
                       type="button"
-                      style={{ top, left }}
+                      style={{ left: x, top: y, width, height }}
                       onClick={(e) => { e.stopPropagation(); removeZoneById(id) }}
                       title="Remove this face box"
                       aria-label="Remove this face box"
                     >
-                      <Icon name="close" size={12} />
+                      <span className="zone-delete-btn zone-overlay-hit-icon" aria-hidden="true">
+                        <Icon name="close" size={12} />
+                      </span>
                     </button>
                   ))}
                 </div>
               )}
 
+              {toolMode === 'crop' && isMobile && (
+                <div className="mobile-crop-hint" aria-live="polite">
+                  Drag to select the crop area
+                </div>
+              )}
+
               {/* Crop draft overlay */}
-              {toolMode === 'crop' && cropDraft && cropDraft.w > 0.002 && (() => {
+              {toolMode === 'crop' && cropDraft && cropDraft.w > 0.0005 && cropDraft.h > 0.0005 && (() => {
                 const t = transformRef.current
                 const rect = zoneToCanvasRect({
                   id: 'crop',
@@ -7172,10 +7228,9 @@ function App() {
                 }, t)
                 return (
                   <div
+                    className="mobile-crop-selection"
                     style={{
                       position: 'absolute', left: rect.x, top: rect.y, width: rect.width, height: rect.height,
-                      border: '2px dashed var(--accent)',
-                      background: 'rgba(112,255,136,0.08)',
                       pointerEvents: 'none', boxSizing: 'border-box',
                     }}
                   />
@@ -7224,19 +7279,35 @@ function App() {
                   ))}
                 </select>
 
-                {vectorizeParams.preset === 'default' && (<>
-                  <label className="vectorize-label">Colors: {vectorizeParams.colorCount}</label>
-                  <input type="range" min={2} max={64} value={vectorizeParams.colorCount}
-                    onChange={(e) => updateVectorizeParam('colorCount', Number(e.target.value))} />
-
-                  <label className="vectorize-label">Smoothing: {vectorizeParams.minPathLength.toFixed(1)}</label>
-                  <input type="range" min={0.5} max={10} step={0.5} value={vectorizeParams.minPathLength}
-                    onChange={(e) => updateVectorizeParam('minPathLength', Number(e.target.value))} />
-
-                  <label className="vectorize-label">Corner rounding: {vectorizeParams.cornerThreshold.toFixed(1)}</label>
-                  <input type="range" min={0} max={2} step={0.1} value={vectorizeParams.cornerThreshold}
-                    onChange={(e) => updateVectorizeParam('cornerThreshold', Number(e.target.value))} />
-                </>)}
+                {vectorizeParams.preset === 'default' && (
+                  <div className="tool-panel-sliders">
+                    <ToolSliderRow
+                      label="Colors"
+                      min={2}
+                      max={64}
+                      value={vectorizeParams.colorCount}
+                      onChange={(v) => updateVectorizeParam('colorCount', v)}
+                    />
+                    <ToolSliderRow
+                      label="Smooth"
+                      min={0.5}
+                      max={10}
+                      step={0.5}
+                      value={vectorizeParams.minPathLength}
+                      format={(v) => v.toFixed(1)}
+                      onChange={(v) => updateVectorizeParam('minPathLength', v)}
+                    />
+                    <ToolSliderRow
+                      label="Corners"
+                      min={0}
+                      max={2}
+                      step={0.1}
+                      value={vectorizeParams.cornerThreshold}
+                      format={(v) => v.toFixed(1)}
+                      onChange={(v) => updateVectorizeParam('cornerThreshold', v)}
+                    />
+                  </div>
+                )}
 
                 {vectorizing && (
                   <div className="vectorize-progress">
@@ -7359,6 +7430,7 @@ function App() {
         customImageRandom={customImageRandom}
         customImageSource={customImageSource}
         customImageAssets={customImageAssets}
+        customImagePresetLoading={customImagePresetLoading}
         selectedCustomImageId={selectedCustomImageId}
         onToggleCustomRandom={handleToggleCustomRandom}
         onChangeCustomSource={(source) => { void loadCustomImagePreset(source) }}
@@ -7374,30 +7446,6 @@ function App() {
             ? 'overlay'
             : 'toast'
         }
-      />
-
-      <DetectionSettingsDrawer
-        open={detectSettingsOpen}
-        onClose={() => setDetectSettingsOpen(false)}
-        target={detectTarget}
-        onTargetChange={setDetectTarget}
-        sensitivity={detectSensitivity}
-        onSensitivityChange={setDetectSensitivity}
-        faceOffset={detectFaceOffset}
-        onFaceOffsetChange={setDetectFaceOffset}
-        thorough={detectThorough}
-        onThoroughChange={setDetectThorough}
-        liveMode={isMobile && mobileMode === 'live'}
-        detectEnabled={isMobile && mobileMode === 'live' ? liveDetectEnabled : autoDetect}
-        onDetectEnabledChange={(v) => {
-          if (isMobile && mobileMode === 'live') setLiveDetectEnabled(v)
-          else { setAutoDetect(v); setShowBoxes(v) }
-        }}
-        showBoxes={showBoxes}
-        onShowBoxesChange={setShowBoxes}
-        detectorReady={detector.mode === 'yunet-wasm'}
-        isVideo={Boolean(activePhoto?.isVideo)}
-        onDetectNow={() => { void detectFacesOnActiveImage(detectThorough) }}
       />
 
       {!isMobile && desktopLiveOpen && (

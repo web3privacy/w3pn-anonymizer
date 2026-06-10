@@ -1,0 +1,277 @@
+/* Shared tool panel layout — desktop flyouts + mobile drawers */
+.tool-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.tool-panel-sliders {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tool-slider-row {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  min-height: 46px;
+}
+
+.tool-slider-row-label {
+  font-size: 0.62rem;
+  color: var(--text-secondary);
+  text-transform: capitalize;
+}
+
+.tool-slider-row--segmented {
+  grid-template-columns: 72px 1fr;
+  align-items: start;
+}
+
+.tool-panel-actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin-top: 0.15rem;
+}
+
+.tool-panel-actions--distort {
+  margin-top: 0.35rem;
+}
+
+.tool-panel-detect-btn {
+  width: 100%;
+  justify-content: center;
+  margin-top: 0.15rem;
+}
+
+/* Desktop flyout: horizontal thumb sliders (match mobile) */
+.ts-flyout .range-with-thumb,
+.ts-flyout .mobile-range-with-thumb {
+  --mobile-slider-track-h: 4px;
+  --mobile-thumb-size: 28px;
+  --mobile-thumb-half: calc(var(--mobile-thumb-size) / 2);
+  --mobile-range-hit: calc(var(--mobile-thumb-size) + 12px);
+  --mobile-slider-thumb-margin: calc((var(--mobile-slider-track-h) - var(--mobile-thumb-size)) / 2);
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: var(--mobile-range-hit);
+  display: flex;
+  align-items: center;
+}
+
+.ts-flyout .range-with-thumb input[type="range"],
+.ts-flyout .mobile-range-with-thumb input[type="range"] {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: var(--mobile-range-hit);
+  margin: 0;
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  accent-color: transparent;
+}
+
+.ts-flyout .range-with-thumb input[type="range"]::-webkit-slider-runnable-track,
+.ts-flyout .mobile-range-with-thumb input[type="range"]::-webkit-slider-runnable-track {
+  height: var(--mobile-slider-track-h);
+  border-radius: 999px;
+  background: transparent;
+  border: 1px solid var(--border);
+}
+
+.ts-flyout .range-with-thumb input[type="range"]::-moz-range-track,
+.ts-flyout .mobile-range-with-thumb input[type="range"]::-moz-range-track {
+  height: var(--mobile-slider-track-h);
+  border-radius: 999px;
+  background: transparent;
+  border: 1px solid var(--border);
+}
+
+.ts-flyout .range-with-thumb input[type="range"]::-webkit-slider-thumb,
+.ts-flyout .mobile-range-with-thumb input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: var(--mobile-thumb-size);
+  height: var(--mobile-thumb-size);
+  border-radius: 8px;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  opacity: 0;
+  margin-top: var(--mobile-slider-thumb-margin);
+}
+
+.ts-flyout .range-with-thumb input[type="range"]::-moz-range-thumb,
+.ts-flyout .mobile-range-with-thumb input[type="range"]::-moz-range-thumb {
+  appearance: none;
+  width: var(--mobile-thumb-size);
+  height: var(--mobile-thumb-size);
+  border-radius: 8px;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  opacity: 0;
+}
+
+.ts-flyout .mobile-range-thumb-label {
+  position: absolute;
+  top: 50%;
+  left: calc(
+    var(--mobile-thumb-half)
+    + (var(--mobile-range-pct, 0) / 100) * (100% - var(--mobile-thumb-size))
+  );
+  transform: translate(-50%, -50%);
+  width: var(--mobile-thumb-size);
+  height: var(--mobile-thumb-size);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.28);
+  color: #03120a;
+  font-size: 9px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.ts-flyout--wide {
+  width: min(300px, calc(100vw - 96px));
+}
+
+.ts-flyout .tool-panel--face .detect-settings-targets {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.35rem;
+}
+
+.ts-flyout .tool-panel--face .detect-settings-target {
+  min-height: 52px;
+}
+
+.ts-flyout .tool-panel--face .detect-settings-toggle {
+  font-size: 0.68rem;
+}
+
+.tool-distort-settings-inline {
+  grid-column: 1 / -1;
+  padding: 0.35rem 0 0.15rem 0.35rem;
+  border-top: 1px solid var(--border);
+}
+
+.ts-flyout .mobile-distort-list-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: auto auto;
+  align-items: center;
+  gap: 0.15rem 0.35rem;
+}
+
+.ts-flyout .tool-distort-settings-inline {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ts-flyout .mobile-distort-settings-open.expanded .material-symbols-outlined {
+  transform: rotate(180deg);
+}
+
+/* Mobile drawers reuse the same slider rows */
+.mobile-tool-drawer-v2 .tool-slider-row,
+.mobile-distort-settings .tool-slider-row,
+.mobile-distort-settings-v2 .tool-slider-row {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  min-height: 46px;
+}
+
+.mobile-tool-drawer-v2 .tool-panel-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin-top: 0.35rem;
+}
+
+.mobile-tool-drawer-v2 .tool-panel-actions .btn {
+  width: 100%;
+  justify-content: center;
+  min-height: 44px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.mobile-tool-drawer-v2 .tool-panel-actions .btn-primary {
+  background: var(--accent, #00ff78);
+  border-color: var(--accent, #00ff78);
+  color: #03120a;
+}
+
+.vectorize-panel .tool-panel-sliders {
+  margin: 0.35rem 0;
+}
+
+.vectorize-panel .range-with-thumb,
+.vectorize-panel .mobile-range-with-thumb {
+  --mobile-slider-track-h: 4px;
+  --mobile-thumb-size: 26px;
+  --mobile-thumb-half: calc(var(--mobile-thumb-size) / 2);
+  --mobile-range-hit: calc(var(--mobile-thumb-size) + 10px);
+  --mobile-slider-thumb-margin: calc((var(--mobile-slider-track-h) - var(--mobile-thumb-size)) / 2);
+  position: relative;
+  width: 100%;
+  height: var(--mobile-range-hit);
+  display: flex;
+  align-items: center;
+}
+
+.vectorize-panel .range-with-thumb input[type="range"],
+.vectorize-panel .mobile-range-with-thumb input[type="range"] {
+  width: 100%;
+  height: var(--mobile-range-hit);
+  margin: 0;
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  accent-color: transparent;
+}
+
+.vectorize-panel .range-with-thumb input[type="range"]::-webkit-slider-thumb,
+.vectorize-panel .mobile-range-with-thumb input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  opacity: 0;
+  width: var(--mobile-thumb-size);
+  height: var(--mobile-thumb-size);
+}
+
+.vectorize-panel .mobile-range-thumb-label {
+  position: absolute;
+  top: 50%;
+  left: calc(var(--mobile-thumb-half) + (var(--mobile-range-pct, 0) / 100) * (100% - var(--mobile-thumb-size)));
+  transform: translate(-50%, -50%);
+  width: var(--mobile-thumb-size);
+  height: var(--mobile-thumb-size);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.28);
+  color: #03120a;
+  font-size: 9px;
+  font-weight: 800;
+  pointer-events: none;
+  z-index: 2;
+}

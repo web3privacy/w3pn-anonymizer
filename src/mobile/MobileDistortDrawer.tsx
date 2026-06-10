@@ -7,11 +7,45 @@ import {
   type DistortEffectId,
 } from '../lib/distort-effects'
 import type { AppMobileBindings } from './bindings'
+import { MobileRangeWithThumb } from './MobileRangeWithThumb'
 import { MobileToolDrawer } from './MobileToolDrawer'
 
 interface MobileDistortDrawerProps {
   b: AppMobileBindings
   liveMode?: boolean
+}
+
+function DistortSliderRow({
+  label,
+  min,
+  max,
+  value,
+  step,
+  onChange,
+  format,
+}: {
+  label: string
+  min: number
+  max: number
+  value: number
+  step?: number
+  onChange: (value: number) => void
+  format?: (value: number) => string
+}) {
+  return (
+    <div className="mobile-slider-row-v2">
+      <span className="mobile-slider-row-v2-label">{label}</span>
+      <MobileRangeWithThumb
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={onChange}
+        format={format}
+        ariaLabel={label}
+      />
+    </div>
+  )
 }
 
 function DistortSettingsPanel({
@@ -32,20 +66,25 @@ function DistortSettingsPanel({
       {id === 'halftone' && (
         <>
           {([['Dot size', 'dotSize', 2, 30], ['Contrast', 'halftoneContrast', 0, 100], ['Angle', 'halftoneAngle', 0, 360]] as const).map(([label, key, min, max]) => (
-            <div key={key} className="mobile-slider-row-v2">
-              <span className="mobile-slider-row-v2-label">{label}</span>
-              <input type="range" min={min} max={max} value={b.adjTransformParams[key]} onChange={(e) => b.setAdjParam(key, Number(e.target.value))} />
-              <span className="mobile-slider-row-v2-val">{b.adjTransformParams[key]}</span>
-            </div>
+            <DistortSliderRow
+              key={key}
+              label={label}
+              min={min}
+              max={max}
+              value={b.adjTransformParams[key]}
+              onChange={(v) => b.setAdjParam(key, v)}
+            />
           ))}
         </>
       )}
       {id === 'glitch' && (
-        <div className="mobile-slider-row-v2">
-          <span className="mobile-slider-row-v2-label">Shift</span>
-          <input type="range" min={1} max={40} value={b.adjTransformParams.glitchShift} onChange={(e) => b.setAdjParam('glitchShift', Number(e.target.value))} />
-          <span className="mobile-slider-row-v2-val">{b.adjTransformParams.glitchShift}</span>
-        </div>
+        <DistortSliderRow
+          label="Shift"
+          min={1}
+          max={40}
+          value={b.adjTransformParams.glitchShift}
+          onChange={(v) => b.setAdjParam('glitchShift', v)}
+        />
       )}
       {id === 'pixel-shift' && (
         <>
@@ -65,36 +104,38 @@ function DistortSettingsPanel({
             </div>
           </div>
           {([['X shift', 'pixelShiftX', 1, 60], ['Y shift', 'pixelShiftY', 1, 60]] as const).map(([label, key, min, max]) => (
-            <div key={key} className="mobile-slider-row-v2">
-              <span className="mobile-slider-row-v2-label">{label}</span>
-              <input type="range" min={min} max={max} value={b.adjTransformParams[key]} onChange={(e) => b.setAdjParam(key, Number(e.target.value))} />
-              <span className="mobile-slider-row-v2-val">{b.adjTransformParams[key]}</span>
-            </div>
+            <DistortSliderRow
+              key={key}
+              label={label}
+              min={min}
+              max={max}
+              value={b.adjTransformParams[key]}
+              onChange={(v) => b.setAdjParam(key, v)}
+            />
           ))}
         </>
       )}
       {id === 'color-shift' && (
         <>
           {([['Hue', 'colorShiftHue', 0, 360], ['Sat', 'colorShiftSat', 0, 100]] as const).map(([label, key, min, max]) => (
-            <div key={key} className="mobile-slider-row-v2">
-              <span className="mobile-slider-row-v2-label">{label}</span>
-              <input type="range" min={min} max={max} value={b.adjTransformParams[key]} onChange={(e) => b.setAdjParam(key, Number(e.target.value))} />
-              <span className="mobile-slider-row-v2-val">{b.adjTransformParams[key]}</span>
-            </div>
+            <DistortSliderRow
+              key={key}
+              label={label}
+              min={min}
+              max={max}
+              value={b.adjTransformParams[key]}
+              onChange={(v) => b.setAdjParam(key, v)}
+            />
           ))}
         </>
       )}
-      <div className="mobile-slider-row-v2">
-        <span className="mobile-slider-row-v2-label">Strength</span>
-        <input
-          type="range"
-          min={1}
-          max={80}
-          value={strength}
-          onChange={(e) => b.setDistortStrength(id, Number(e.target.value))}
-        />
-        <span className="mobile-slider-row-v2-val">{strength}</span>
-      </div>
+      <DistortSliderRow
+        label="Strength"
+        min={1}
+        max={80}
+        value={strength}
+        onChange={(v) => b.setDistortStrength(id, v)}
+      />
       {!liveMode && !videoEditor && (
         <div className="mobile-distort-list-actions mobile-distort-list-actions--inline">
           <button

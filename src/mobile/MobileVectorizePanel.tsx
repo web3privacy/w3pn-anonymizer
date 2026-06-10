@@ -1,6 +1,7 @@
 import { Icon } from '../components/Icon'
 import { VECTORIZE_PRESETS, type VectorizePreset } from '../lib/vectorize'
 import type { AppMobileBindings } from './bindings'
+import { MobileRangeWithThumb } from './MobileRangeWithThumb'
 
 interface MobileVectorizePanelProps {
   b: AppMobileBindings
@@ -35,40 +36,39 @@ export function MobileVectorizePanel({ b }: MobileVectorizePanelProps) {
         <>
           <div className="mobile-slider-row-v2">
             <span className="mobile-slider-row-v2-label">Colors</span>
-            <input
-              type="range"
+            <MobileRangeWithThumb
               min={2}
               max={64}
               value={params.colorCount}
-              onChange={(e) => b.updateVectorizeParam('colorCount', Number(e.target.value))}
+              onChange={(v) => b.updateVectorizeParam('colorCount', v)}
+              ariaLabel="Colors"
             />
-            <span className="mobile-slider-row-v2-val">{params.colorCount}</span>
           </div>
 
           <div className="mobile-slider-row-v2">
             <span className="mobile-slider-row-v2-label">Smooth</span>
-            <input
-              type="range"
+            <MobileRangeWithThumb
               min={0.5}
               max={10}
               step={0.5}
               value={params.minPathLength}
-              onChange={(e) => b.updateVectorizeParam('minPathLength', Number(e.target.value))}
+              onChange={(v) => b.updateVectorizeParam('minPathLength', v)}
+              format={(v) => v.toFixed(1)}
+              ariaLabel="Smooth"
             />
-            <span className="mobile-slider-row-v2-val">{params.minPathLength.toFixed(1)}</span>
           </div>
 
           <div className="mobile-slider-row-v2">
             <span className="mobile-slider-row-v2-label">Corners</span>
-            <input
-              type="range"
+            <MobileRangeWithThumb
               min={0}
               max={2}
               step={0.1}
               value={params.cornerThreshold}
-              onChange={(e) => b.updateVectorizeParam('cornerThreshold', Number(e.target.value))}
+              onChange={(v) => b.updateVectorizeParam('cornerThreshold', v)}
+              format={(v) => v.toFixed(1)}
+              ariaLabel="Corners"
             />
-            <span className="mobile-slider-row-v2-val">{params.cornerThreshold.toFixed(1)}</span>
           </div>
         </>
       )}

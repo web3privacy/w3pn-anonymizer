@@ -154,14 +154,24 @@ export const MobileImageCanvasControls = memo(function MobileImageCanvasControls
               </button>
             </div>
           ) : cropMode ? (
-            <button
-              className="mobile-anonymize-btn"
-              type="button"
-              onClick={b.cropToSelection}
-              disabled={busy || !canApplyCrop}
-            >
-              APPLY CROP
-            </button>
+            <div className="mobile-edit-frame-actions">
+              <button
+                type="button"
+                className="mobile-canvas-secondary-btn"
+                onClick={b.cancelCropMode}
+                disabled={busy}
+              >
+                CANCEL
+              </button>
+              <button
+                className="mobile-anonymize-btn"
+                type="button"
+                onClick={b.cropToSelection}
+                disabled={busy || !canApplyCrop}
+              >
+                APPLY CROP
+              </button>
+            </div>
           ) : (
             <button
               className="mobile-anonymize-btn"

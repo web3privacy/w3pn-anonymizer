@@ -176,6 +176,35 @@
   touch-action: none;
 }
 
+.viewer-crop-mode canvas {
+  touch-action: none;
+  cursor: crosshair;
+}
+
+.mobile-crop-hint {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 12;
+  padding: 0.35rem 0.65rem;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.62);
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.mobile-crop-selection {
+  border: 2px dashed var(--accent, #00ff78);
+  background: rgba(0, 255, 120, 0.08);
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.48);
+}
+
 .mobile-preview-transform {
   position: absolute;
   inset: 0;
@@ -1310,12 +1339,15 @@
 }
 
 .mobile-range-with-thumb input[type="range"] {
+  position: relative;
+  z-index: 1;
   width: 100%;
   height: var(--mobile-range-hit);
   margin: 0;
   -webkit-appearance: none;
   appearance: none;
   background: transparent;
+  accent-color: transparent;
 }
 
 .mobile-range-with-thumb input[type="range"]::-webkit-slider-runnable-track {
@@ -1334,22 +1366,26 @@
 
 .mobile-range-with-thumb input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
+  appearance: none;
   width: var(--mobile-thumb-size);
   height: var(--mobile-thumb-size);
   border-radius: 8px;
   background: transparent;
   border: none;
   box-shadow: none;
+  opacity: 0;
   margin-top: var(--mobile-slider-thumb-margin);
 }
 
 .mobile-range-with-thumb input[type="range"]::-moz-range-thumb {
+  appearance: none;
   width: var(--mobile-thumb-size);
   height: var(--mobile-thumb-size);
   border-radius: 8px;
   background: transparent;
   border: none;
   box-shadow: none;
+  opacity: 0;
 }
 
 .mobile-range-thumb-label {
@@ -1431,7 +1467,8 @@
   border: 1px solid var(--border);
 }
 
-.mobile-slider-group input[type="range"]::-webkit-slider-thumb {
+/* Direct range only — nested .mobile-range-with-thumb uses the label overlay instead */
+.mobile-slider-group > input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
   width: var(--mobile-slider-thumb, 30px);
   height: var(--mobile-slider-thumb, 30px);
@@ -1442,7 +1479,7 @@
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.28);
 }
 
-.mobile-slider-group input[type="range"]::-moz-range-thumb {
+.mobile-slider-group > input[type="range"]::-moz-range-thumb {
   width: var(--mobile-slider-thumb, 30px);
   height: var(--mobile-slider-thumb, 30px);
   border-radius: 8px;
@@ -2175,6 +2212,11 @@
   border: 1.5px solid rgba(255, 255, 255, 0.85);
   border-radius: 6px;
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  pointer-events: auto;
 }
 
 .mobile-live-face-box--ignored {
@@ -2184,8 +2226,8 @@
 
 .mobile-live-face-toggle {
   position: absolute;
-  top: -10px;
-  right: -10px;
+  top: 4px;
+  right: 4px;
   width: 22px;
   height: 22px;
   display: flex;
@@ -2195,8 +2237,7 @@
   border-radius: 50%;
   background: rgba(0, 0, 0, 0.7);
   color: #fff;
-  pointer-events: auto;
-  cursor: pointer;
+  pointer-events: none;
   padding: 0;
 }
 
@@ -3143,6 +3184,37 @@
   background: #fff;
   border: none;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.28);
+}
+
+/* Label overlay is the only visible thumb — must follow global white-thumb rules above */
+.app-shell-mobile .mobile-range-with-thumb input[type="range"],
+.mobile-slider-group .mobile-range-with-thumb input[type="range"],
+.mobile-slider-row-v2 .mobile-range-with-thumb input[type="range"],
+.mobile-shell-live .mobile-range-with-thumb input[type="range"] {
+  accent-color: transparent;
+}
+
+.app-shell-mobile .mobile-range-with-thumb input[type="range"]::-webkit-slider-thumb,
+.mobile-slider-group .mobile-range-with-thumb input[type="range"]::-webkit-slider-thumb,
+.mobile-slider-row-v2 .mobile-range-with-thumb input[type="range"]::-webkit-slider-thumb,
+.mobile-shell-live .mobile-range-with-thumb input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  opacity: 0 !important;
+}
+
+.app-shell-mobile .mobile-range-with-thumb input[type="range"]::-moz-range-thumb,
+.mobile-slider-group .mobile-range-with-thumb input[type="range"]::-moz-range-thumb,
+.mobile-slider-row-v2 .mobile-range-with-thumb input[type="range"]::-moz-range-thumb,
+.mobile-shell-live .mobile-range-with-thumb input[type="range"]::-moz-range-thumb {
+  appearance: none;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  opacity: 0 !important;
 }
 
 .app-shell-mobile .mobile-effect-grid .ts-effect-tile-label {

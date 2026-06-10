@@ -3,6 +3,7 @@ import type { AppMobileBindings } from './bindings'
 import { MobileDistortDrawer } from './MobileDistortDrawer'
 import { MobileEffectsDrawer } from './MobileEffectsDrawer'
 import { MobileFaceDrawer } from './MobileFaceDrawer'
+import { AdjustToolPanel } from '../components/tool-panels/AdjustToolPanel'
 import { MobileToolDrawer } from './MobileToolDrawer'
 import { DEFAULT_COLOR_ADJUSTMENTS } from '../types'
 import {
@@ -72,45 +73,19 @@ export function MobileToolDrawers({ b, liveMode = false }: MobileToolDrawersProp
 
       {drawer('tool-adjust', 'ADJUST', (
         <div className="mobile-tool-drawer-v2">
-          <div className="mobile-tool-drawer-v2-body">
-            {([['brightness', 'Brightness'], ['contrast', 'Contrast'], ['saturation', 'Saturation']] as const).map(([key, label]) => (
-              <div key={key} className="mobile-slider-row-v2">
-                <span className="mobile-slider-row-v2-label">{label}</span>
-                <input
-                  type="range"
-                  min={-100}
-                  max={100}
-                  value={b.batch.colorAdj[key]}
-                  onChange={(e) => b.setColorAdj((cur) => ({ ...cur, [key]: Number(e.target.value), preset: 'none' }))}
-                />
-                <span className="mobile-slider-row-v2-val">
-                  {b.batch.colorAdj[key] > 0 ? '+' : ''}{b.batch.colorAdj[key]}
-                </span>
-              </div>
-            ))}
-          </div>
-          <div className="mobile-distort-list-actions">
-            <button
-              className="mobile-distort-reset-btn"
-              type="button"
-              onClick={() => b.setColorAdj(DEFAULT_COLOR_ADJUSTMENTS)}
-            >
-              RESET ALL
-            </button>
-            {videoEditor && (
-              <p className="mobile-distort-video-hint">Applied when you Process video</p>
-            )}
-            {!liveMode && !videoEditor && (
-              <button
-                className="mobile-distort-apply-btn"
-                type="button"
-                onClick={() => { b.applyColorAdjToActive(); close() }}
-                disabled={!b.activePhoto}
-              >
-                APPLY TO PHOTO
-              </button>
-            )}
-          </div>
+          <AdjustToolPanel
+            colorAdj={b.batch.colorAdj}
+            onChange={(next) => b.setColorAdj(next)}
+            onReset={() => b.setColorAdj(DEFAULT_COLOR_ADJUSTMENTS)}
+            onApply={() => { b.applyColorAdjToActive(); close() }}
+            showPresets={false}
+            showExtended={false}
+            showApply={!liveMode && !videoEditor}
+            applyDisabled={!b.activePhoto}
+          />
+          {videoEditor && (
+            <p className="mobile-distort-video-hint">Applied when you Process video</p>
+          )}
         </div>
       ))}
 

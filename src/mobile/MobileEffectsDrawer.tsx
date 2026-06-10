@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Icon } from '../components/Icon'
-import { EFFECTS, EMOJI_POOL } from '../lib/effects'
+import { EmojiPickerPanel } from '../components/EmojiPickerPanel'
+import { EFFECTS } from '../lib/effects'
 import type { AppMobileBindings } from './bindings'
 import { MobileCustomImagePickerPanel } from './MobileCustomImagePickerPanel'
 import { MobileToolDrawer } from './MobileToolDrawer'
@@ -14,47 +15,6 @@ type EffectsSubView = 'emoji' | 'custom-image' | 'vectorize'
 interface MobileEffectsDrawerProps {
   b: AppMobileBindings
   liveMode?: boolean
-}
-
-function MobileEmojiPickerPanel({ b }: { b: AppMobileBindings }) {
-  return (
-    <div className="mobile-emoji-picker">
-      <label className="mobile-emoji-random-row">
-        <span className="mobile-emoji-random-label">
-          <Icon name="shuffle" size={18} />
-          <span>Random per face</span>
-        </span>
-        <span className={`mobile-switch${b.emojiRandom ? ' on' : ''}`}>
-          <input
-            type="checkbox"
-            checked={b.emojiRandom}
-            onChange={(e) => b.onToggleEmojiRandom(e.target.checked)}
-          />
-          <span className="mobile-switch-track" />
-          <span className="mobile-switch-knob" />
-        </span>
-      </label>
-      <p className="mobile-emoji-hint">
-        {b.emojiRandom
-          ? 'Each detected face gets a different emoji. Turn off random to pick one emoji for all.'
-          : 'Tap an emoji to use it on every face.'}
-      </p>
-      <div className="mobile-emoji-grid" role="listbox" aria-label="Choose emoji">
-        {EMOJI_POOL.map((emoji, i) => (
-          <button
-            key={`${emoji}-${i}`}
-            type="button"
-            role="option"
-            aria-selected={!b.emojiRandom && b.selectedEmoji === emoji}
-            className={`mobile-emoji-btn${!b.emojiRandom && b.selectedEmoji === emoji ? ' active' : ''}`}
-            onClick={() => b.onPickEmoji(emoji)}
-          >
-            {emoji}
-          </button>
-        ))}
-      </div>
-    </div>
-  )
 }
 
 export function MobileEffectsDrawer({ b, liveMode = false }: MobileEffectsDrawerProps) {
@@ -190,7 +150,12 @@ export function MobileEffectsDrawer({ b, liveMode = false }: MobileEffectsDrawer
 
           <div className="mobile-distort-panel mobile-effects-panel-sub">
             {subView === 'emoji' ? (
-              <MobileEmojiPickerPanel b={b} />
+              <EmojiPickerPanel
+                emojiRandom={b.emojiRandom}
+                selectedEmoji={b.selectedEmoji}
+                onToggleRandom={b.onToggleEmojiRandom}
+                onPickEmoji={b.onPickEmoji}
+              />
             ) : subView === 'custom-image' ? (
               <MobileCustomImagePickerPanel b={b} />
             ) : subView === 'vectorize' ? (

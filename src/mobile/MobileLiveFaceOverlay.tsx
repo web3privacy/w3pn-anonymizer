@@ -13,7 +13,7 @@ interface MobileLiveFaceOverlayProps {
 }
 
 /**
- * Draws a removal box over each tracked live face. Tapping the corner toggle
+ * Draws a removal box over each tracked live face. Tapping anywhere on the box
  * opts a face OUT of anonymization (kept un-blurred, remembered by track id).
  *
  * Perf: the React tree only re-renders when the SET of face ids changes. Box
@@ -29,8 +29,7 @@ export function MobileLiveFaceOverlay({
   onToggleFace,
 }: MobileLiveFaceOverlayProps) {
   const rootRef = useRef<HTMLDivElement>(null)
-  const boxRefs = useRef<Map<string, HTMLDivElement | null>>(new Map())
-  // Stable list of currently-tracked face ids (drives the React render).
+  const boxRefs = useRef<Map<string, HTMLButtonElement | null>>(new Map())
   const [ids, setIds] = useState<string[]>([])
   const idsKeyRef = useRef('')
 
@@ -56,7 +55,6 @@ export function MobileLiveFaceOverlay({
       const rootEl = rootRef.current
       const zones = zonesRef.current ?? []
 
-      // Keep the rendered id set in sync (cheap string compare, rare setState).
       const key = zones.map((z) => z.id).join(',')
       if (key !== idsKeyRef.current) {
         idsKeyRef.current = key
@@ -105,20 +103,18 @@ export function MobileLiveFaceOverlay({
       {ids.map((id) => {
         const ignored = ignoredFaceIds.has(id)
         return (
-          <div
+          <button
             key={id}
+            type="button"
             ref={(node) => { boxRefs.current.set(id, node) }}
             className={`mobile-live-face-box${ignored ? ' mobile-live-face-box--ignored' : ''}`}
+            onClick={() => onToggleFace(id)}
+            aria-label={ignored ? 'Restore anonymization for this face' : 'Exclude this face from anonymization'}
           >
-            <button
-              type="button"
-              className="mobile-live-face-toggle"
-              onClick={() => onToggleFace(id)}
-              aria-label={ignored ? 'Anonymize this face' : 'Keep this face un-anonymized'}
-            >
+            <span className="mobile-live-face-toggle" aria-hidden="true">
               <Icon name={ignored ? 'add' : 'close'} size={14} />
-            </button>
-          </div>
+            </span>
+          </button>
         )
       })}
     </div>

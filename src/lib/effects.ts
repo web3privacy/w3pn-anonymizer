@@ -290,6 +290,12 @@ const applyZoomBlurRect = (
   ctx.restore()
 }
 
+/** Maps 0–1 strength to pixel block size — fine at low end, very coarse at 100%. */
+export const mapPixelateBlockSize = (strength: number): number => {
+  const s = clamp(Number.isFinite(strength) ? strength : 0.5, 0, 1)
+  return Math.max(4, Math.round(4 + Math.pow(s, 1.7) * 48))
+}
+
 const applyPixelateRect = (
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -307,7 +313,7 @@ const applyPixelateRect = (
     ctx.canvas.height,
   )
 
-  const blockSize = Math.max(4, Math.round(6 + strength * 26))
+  const blockSize = mapPixelateBlockSize(strength)
   const scaledW = Math.max(1, Math.round(rw / blockSize))
   const scaledH = Math.max(1, Math.round(rh / blockSize))
 

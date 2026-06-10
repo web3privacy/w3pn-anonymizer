@@ -371,31 +371,6 @@
   flex-direction: row;
 }
 
-.app-shell-desktop-v2 .ts-custom-image-controls {
-  margin-top: 0.75rem;
-  padding-top: 0.75rem;
-  border-top: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  gap: 0.45rem;
-}
-
-.app-shell-desktop-v2 .ts-custom-image-label {
-  font-size: 0.62rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
-
-.app-shell-desktop-v2 .ts-custom-image-select {
-  width: 100%;
-}
-
-.app-shell-desktop-v2 .ts-custom-image-count {
-  font-size: 0.62rem;
-  color: var(--text-muted);
-}
-
 /* ── Privacy calibration: immersive fullscreen spiral (desktop) ── */
 .desktop-home-v2.home-v2--calibrating,
 .desktop-home-v2.home-v2--settling {

@@ -162,6 +162,7 @@ export interface AppMobileBindings {
   setToolMode: (m: ToolMode) => void
   cropDraft: { x: number; y: number; w: number; h: number } | null
   cropToSelection: () => void
+  cancelCropMode: () => void
   selectedEffect: AnonymizeEffectId
   setSelectedEffect: (e: AnonymizeEffectId) => void
   customImageSource: CustomImageSource

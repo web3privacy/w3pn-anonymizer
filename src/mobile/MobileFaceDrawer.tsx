@@ -1,5 +1,6 @@
 import { Icon } from '../components/Icon'
 import type { AppMobileBindings } from './bindings'
+import { MobileRangeWithThumb } from './MobileRangeWithThumb'
 import { MobileToolDrawer } from './MobileToolDrawer'
 
 interface MobileFaceDrawerProps {
@@ -45,27 +46,27 @@ export function MobileFaceDrawer({ b, liveMode = false }: MobileFaceDrawerProps)
         <div className="mobile-face-settings">
           <div className="mobile-slider-row-v2">
             <span className="mobile-slider-row-v2-label">Sensitivity</span>
-            <input
-              type="range"
+            <MobileRangeWithThumb
               min={0}
               max={100}
               value={b.detectSensitivity}
-              onChange={(e) => b.setDetectSensitivity(Number(e.target.value))}
+              onChange={b.setDetectSensitivity}
+              format={(v) => `${v}%`}
+              ariaLabel="Sensitivity"
             />
-            <span className="mobile-slider-row-v2-val">{b.detectSensitivity}%</span>
           </div>
           <p className="mobile-face-hint">Higher catches more faces (incl. small / turned) but may add false positives.</p>
 
           <div className="mobile-slider-row-v2">
             <span className="mobile-slider-row-v2-label">Face offset</span>
-            <input
-              type="range"
+            <MobileRangeWithThumb
               min={0}
               max={100}
               value={b.detectFaceOffset}
-              onChange={(e) => b.setDetectFaceOffset(Number(e.target.value))}
+              onChange={b.setDetectFaceOffset}
+              format={(v) => `+${v}%`}
+              ariaLabel="Face offset"
             />
-            <span className="mobile-slider-row-v2-val">+{b.detectFaceOffset}%</span>
           </div>
           <p className="mobile-face-hint">Grows the anonymized area around each face. Raise it if hair, ears or chin stay visible.</p>
 

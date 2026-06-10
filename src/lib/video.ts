@@ -119,7 +119,7 @@ const VIDEO_DETECTION_PREROLL_SEC = 0.16
 const VIDEO_MIN_FACE_SCORE = 0.58
 const VIDEO_MAX_FACE_REL_AREA = 0.14
 const VIDEO_TRACK_CONFIRM_HITS = 2
-const VIDEO_MIN_EFFECT_STRENGTH = 0.92
+const VIDEO_MIN_BLUR_STRENGTH = 0.55
 
 export const VIDEO_RUNTIME_LIMITS = {
   acceptedExtensions: ['mp4', 'webm', 'mov', 'avi', 'mkv', 'm4v', 'ogv'] as const,
@@ -657,13 +657,17 @@ function resolveRecorderFormat(preferred?: VideoExportFormatId): VideoExportOpti
   return null
 }
 
-function videoZoneStrength(zone: Zone, strength: number): number {
-  const base = Math.max(strength, VIDEO_MIN_EFFECT_STRENGTH)
+export function videoZoneStrength(zone: Zone, strength: number): number {
+  const base = clamp(strength, 0, 1)
   const size = Math.sqrt(Math.max(0, zone.width * zone.height))
   const foregroundBoost = clamp((size - 0.08) / 0.22, 0, 1)
 
-  if (zone.effect === 'blur' || zone.effect === 'zoom-blur') return base * (1.35 + foregroundBoost * 1.7)
-  if (zone.effect === 'pixelate' || zone.effect === 'noise' || zone.effect === 'static') return base * (1.15 + foregroundBoost * 0.75)
+  if (zone.effect === 'blur' || zone.effect === 'zoom-blur') {
+    return Math.min(1, Math.max(base, VIDEO_MIN_BLUR_STRENGTH) * (1.35 + foregroundBoost * 1.7))
+  }
+  if (zone.effect === 'pixelate' || zone.effect === 'noise' || zone.effect === 'static') {
+    return Math.min(1, base * (1.05 + foregroundBoost * 0.35))
+  }
   return Math.min(1, base)
 }
 
