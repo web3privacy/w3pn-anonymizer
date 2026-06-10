@@ -12,6 +12,14 @@ import { MobileLiveFloatingControls } from './MobileLiveFloatingControls'
 import { MobileToolDrawers } from './MobileToolDrawers'
 import { MobileTopBar } from './MobileTopBar'
 import { saveLiveCapture } from './liveSessionBuffer'
+import type { MobilePanel } from './types'
+
+/** Drawers where the user picks effects/distort/adjust — keep live preview running. */
+const LIVE_PREVIEW_PANELS: ReadonlySet<MobilePanel> = new Set([
+  'tool-effects',
+  'tool-distort',
+  'tool-adjust',
+])
 
 interface MobileLiveModeProps {
   b: AppMobileBindings
@@ -19,7 +27,7 @@ interface MobileLiveModeProps {
   onExitToWorkspace: () => void
   onFallbackUpload: () => void
   onCaptureSaved?: (blob: Blob, type: 'photo' | 'video') => string | null
-  onOpenCapturedPhoto?: (photoId: string, opts?: { slide?: boolean }) => void
+  onOpenCapturedPhoto?: (photoId: string, opts?: { slide?: boolean; returnTo?: 'live' }) => void
 }
 
 export function MobileLiveMode({
@@ -95,6 +103,11 @@ export function MobileLiveMode({
   const [error, setError] = useState<string | null>(null)
   const [ready, setReady] = useState(false)
   const [starting, setStarting] = useState(false)
+  const [liveRecording, setLiveRecording] = useState({ recording: false, elapsedSec: 0 })
+
+  const handleRecordingChange = useCallback((state: { recording: boolean; elapsedSec: number }) => {
+    setLiveRecording(state)
+  }, [])
 
   useEffect(() => {
     mountedRef.current = true
@@ -126,6 +139,9 @@ export function MobileLiveMode({
       .filter((z) => ignoredFaceIds.has(z.id))
       .map((z) => ({ x: z.x, y: z.y, width: z.width, height: z.height })),
     snapshotZones: liveSnapshotZonesRef.current,
+    uiSuspended:
+      (b.mobilePanel != null && !LIVE_PREVIEW_PANELS.has(b.mobilePanel))
+      || cameraSettingsOpen,
   }
 
   const updateFpsDom = useCallback((fps: number) => {
@@ -286,11 +302,14 @@ export function MobileLiveMode({
 
   useEffect(() => {
     void startCamera()
+  }, [startCamera])
+
+  useEffect(() => {
     return () => {
       cameraRequestRef.current += 1
       stopStream()
     }
-  }, [startCamera, stopStream])
+  }, [stopStream])
 
   useEffect(() => {
     const video = videoRef.current
@@ -322,7 +341,7 @@ export function MobileLiveMode({
     if (!video) return
     setCaptureFlash(true)
     window.setTimeout(() => setCaptureFlash(false), 300)
-    const blob = await captureLivePhotoBlob(video, () => optsRef.current)
+    const blob = await captureLivePhotoBlob(video, () => optsRef.current, canvasRef.current)
     if (blob) {
       const url = URL.createObjectURL(blob)
       if (capturePreviewUrlRef.current) URL.revokeObjectURL(capturePreviewUrlRef.current)
@@ -380,13 +399,24 @@ export function MobileLiveMode({
       <div className={`mobile-live-preview mobile-live-preview--${cameraSettings.displayFit}`}>
         <video ref={videoRef} playsInline muted style={{ display: 'none' }} />
         <canvas ref={canvasRef} className={`mobile-live-canvas ${canvasFitClass}`} />
+        {!ready && (
+          <div className="mobile-live-starting-overlay" aria-live="polite">
+            <span className="mobile-face-loader mobile-face-loader-lg" aria-hidden="true" />
+            <span className="mobile-live-starting-label">{starting ? 'Starting camera…' : 'Connecting…'}</span>
+          </div>
+        )}
         {captureFlash && <div className="mobile-live-capture-flash" aria-hidden="true" />}
+        {liveRecording.recording && (
+          <div className="mobile-live-recording-timer" aria-live="polite">
+            {`${Math.floor(liveRecording.elapsedSec / 60)}:${(liveRecording.elapsedSec % 60).toString().padStart(2, '0')}`}
+          </div>
+        )}
         {capturePreviewUrl && (
           <button
             type="button"
             className="mobile-live-capture-thumb"
             onClick={() => {
-              if (lastCapturePhotoId) onOpenCapturedPhoto?.(lastCapturePhotoId, { slide: true })
+              if (lastCapturePhotoId) onOpenCapturedPhoto?.(lastCapturePhotoId, { slide: true, returnTo: 'live' })
             }}
             aria-label="Edit captured photo"
           >
@@ -414,6 +444,7 @@ export function MobileLiveMode({
         flashActive={cameraSettings.torch}
         flashAvailable={trackCaps.torch}
         disabled={!ready}
+        onRecordingChange={handleRecordingChange}
       />
 
       <div className="mobile-shell-bottom mobile-live-toolbar-wrap">

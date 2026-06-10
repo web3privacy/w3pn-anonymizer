@@ -8,6 +8,8 @@ import { applyColorAdjustments, applyEffectRect, isColorAdjNoop, pickRandomEmoji
 import type { EffectRenderOptions } from '../types'
 import type { AnonymizeEffectId, ColorAdjustments, CustomImageAsset, CustomImageSource, Zone } from '../types'
 import fixWebmDuration from 'webm-duration-fix'
+import { Muxer as Mp4Muxer, ArrayBufferTarget as Mp4ArrayBufferTarget } from 'mp4-muxer'
+import { Muxer as WebmMuxer, ArrayBufferTarget as WebmArrayBufferTarget } from 'webm-muxer'
 
 export interface VideoDistortOptions {
   enabled: DistortEffectId[]
@@ -22,6 +24,8 @@ export interface VideoProcessingOptions {
   emoji: string
   /** When set, every detected face uses this exact emoji instead of random unique ones. */
   fixedEmoji?: string
+  /** When set, every custom-image zone uses this asset instead of random picks. */
+  fixedCustomImageId?: string
   customImages?: CustomImageAsset[]
   customImageSource?: CustomImageSource
   outputFormat?: VideoExportFormatId
@@ -56,7 +60,7 @@ export interface VideoTimedZone {
   zone: Zone
 }
 
-export type VideoProcessingPhase = 'analyzing' | 'preparing' | 'rendering'
+export type VideoProcessingPhase = 'analyzing' | 'preparing' | 'rendering' | 'finishing'
 
 export type VideoExportFormatId = 'mp4' | 'webm' | 'mov' | 'avi' | 'mpeg' | 'mkv' | 'ogv'
 
@@ -112,12 +116,16 @@ const TRACK_KEEPALIVE_SEC = 0.4
 const TRACK_SMOOTHING = 0.34
 const VIDEO_ZONE_PADDING = 0.46
 const VIDEO_DETECTION_PREROLL_SEC = 0.16
-const VIDEO_MIN_FACE_SCORE = 0.42
+const VIDEO_MIN_FACE_SCORE = 0.58
+const VIDEO_MAX_FACE_REL_AREA = 0.14
+const VIDEO_TRACK_CONFIRM_HITS = 2
 const VIDEO_MIN_EFFECT_STRENGTH = 0.92
 
 export const VIDEO_RUNTIME_LIMITS = {
   acceptedExtensions: ['mp4', 'webm', 'mov', 'avi', 'mkv', 'm4v', 'ogv'] as const,
   maxUploadBytes: 500 * 1024 * 1024,
+  /** Hard cap for anonymization pipeline (10 minutes). */
+  maxDurationSec: 600,
   detectMaxDimension: DETECT_MAX_DIM,
   defaultFps: FALLBACK_FPS,
   estimatedFpsRange: { min: 10, max: 60 },
@@ -125,39 +133,45 @@ export const VIDEO_RUNTIME_LIMITS = {
   audioBitrate: AUDIO_BITRATE,
 } as const
 
-type WindowWithWebCodecs = Window & {
-  VideoEncoder?: unknown
-  VideoFrame?: VideoFrameConstructor
-  MediaStreamTrackProcessor?: MediaStreamTrackProcessorConstructor
-  MediaStreamTrackGenerator?: MediaStreamTrackGeneratorConstructor
+interface WebCodecsHost {
+  VideoEncoder?: {
+    isConfigSupported(config: VideoEncoderConfig): Promise<{ supported: boolean }>
+    new (init: {
+      output: (chunk: EncodedVideoChunk, metadata?: EncodedVideoChunkMetadata) => void
+      error: (error: DOMException) => void
+    }): VideoEncoderInstance
+  }
+  AudioEncoder?: {
+    isConfigSupported(config: AudioEncoderConfig): Promise<{ supported: boolean }>
+    new (init: {
+      output: (chunk: EncodedAudioChunk, metadata?: EncodedAudioChunkMetadata) => void
+      error: (error: DOMException) => void
+    }): AudioEncoderInstance
+  }
+  VideoFrame?: new (source: CanvasImageSource, init: { timestamp: number; duration?: number }) => {
+    close(): void
+  }
+  MediaStreamTrackProcessor?: new (init: { track: MediaStreamTrack }) => {
+    readable: ReadableStream<AudioData>
+  }
 }
 
-interface BrowserVideoFrame {
-  timestamp?: number
-  duration?: number
-  close: () => void
+interface VideoEncoderInstance {
+  configure(config: VideoEncoderConfig): void
+  encode(frame: { close(): void }, options?: { keyFrame?: boolean }): void
+  flush(): Promise<void>
+  close(): void
 }
 
-interface VideoFrameConstructor {
-  new(source: CanvasImageSource, init: { timestamp: number; duration?: number }): BrowserVideoFrame
+interface AudioEncoderInstance {
+  configure(config: AudioEncoderConfig): void
+  encode(data: AudioData): void
+  flush(): Promise<void>
+  close(): void
 }
 
-interface MediaStreamTrackProcessorConstructor {
-  new(init: { track: MediaStreamTrack }): { readable: ReadableStream<BrowserVideoFrame> }
-}
-
-interface MediaStreamTrackGenerator extends MediaStreamTrack {
-  writable: WritableStream<BrowserVideoFrame>
-}
-
-interface MediaStreamTrackGeneratorConstructor {
-  new(init: { kind: 'video' }): MediaStreamTrackGenerator
-}
-
-interface WebCodecsVideoPipeline {
-  VideoFrame: VideoFrameConstructor
-  MediaStreamTrackProcessor: MediaStreamTrackProcessorConstructor
-  MediaStreamTrackGenerator: MediaStreamTrackGeneratorConstructor
+function getWebCodecsHost(): WebCodecsHost {
+  return window as unknown as WebCodecsHost
 }
 
 interface VideoTrackState {
@@ -168,28 +182,15 @@ interface VideoTrackState {
   lastSeenTime: number
   lastPredictTime: number
   missed: number
+  /** Consecutive detection matches — tracks need 2+ before export. */
+  hitStreak: number
+  confirmed: boolean
 }
 
 interface VideoTrackKeyframe {
   timeSec: number
   zones: Zone[]
 }
-
-interface TimelineWorkerProgress {
-  id: number
-  type: 'progress'
-  done: number
-}
-
-interface TimelineWorkerResult {
-  id: number
-  type: 'result'
-  frameZones: Zone[][]
-}
-
-type TimelineWorkerMessage = TimelineWorkerProgress | TimelineWorkerResult
-
-let timelineWorkerRequestId = 0
 
 function getCaptureStream(video: CaptureVideoElement): MediaStream | null {
   if (typeof video.captureStream === 'function') return video.captureStream()
@@ -218,20 +219,427 @@ function createCanvasStream(
   return { stream, videoTrack, requestFrame: null }
 }
 
-function getWebCodecsVideoPipeline(): WebCodecsVideoPipeline | null {
-  const win = window as WindowWithWebCodecs
-  if (
-    typeof win.VideoFrame !== 'function' ||
-    typeof win.MediaStreamTrackProcessor !== 'function' ||
-    typeof win.MediaStreamTrackGenerator !== 'function'
-  ) {
-    return null
+type MuxContainer = 'webm' | 'mp4'
+
+interface FrameEncoderFormat {
+  container: MuxContainer
+  encoderCodec: string
+  muxVideoCodec: 'V_VP9' | 'V_VP8' | 'avc'
+  mimeType: string
+}
+
+interface FrameMuxerSink {
+  addVideoChunk: (chunk: EncodedVideoChunk, meta?: EncodedVideoChunkMetadata) => void
+  addAudioChunk: (chunk: EncodedAudioChunk, meta?: EncodedAudioChunkMetadata) => void
+  finalize: () => void
+  getBuffer: () => ArrayBuffer
+  audioCodec: 'opus' | 'aac'
+}
+
+const FALLBACK_FRAME_CACHE_BUDGET_BYTES = 320 * 1024 * 1024
+
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
+
+async function sleepUntil(targetMs: number): Promise<void> {
+  let now = performance.now()
+  while (now < targetMs) {
+    await sleepMs(Math.min(8, targetMs - now))
+    now = performance.now()
   }
+}
+
+function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality?: number): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob)
+      else reject(new Error('Failed to encode canvas frame.'))
+    }, type, quality)
+  })
+}
+
+async function isVideoEncoderConfigSupported(config: VideoEncoderConfig): Promise<boolean> {
+  const host = getWebCodecsHost()
+  if (typeof host.VideoEncoder?.isConfigSupported !== 'function') return false
+  try {
+    const result = await host.VideoEncoder.isConfigSupported(config)
+    return result.supported === true
+  } catch {
+    return false
+  }
+}
+
+async function pickFrameEncoderFormat(
+  preferred: VideoExportFormatId | undefined,
+  width: number,
+  height: number,
+  fps: number,
+): Promise<FrameEncoderFormat | null> {
+  const candidates: Array<{ ids?: VideoExportFormatId[]; format: FrameEncoderFormat }> = [
+    {
+      ids: ['mp4', 'mov', 'mkv', 'avi', 'mpeg'],
+      format: { container: 'mp4', encoderCodec: 'avc1.42E01E', muxVideoCodec: 'avc', mimeType: 'video/mp4' },
+    },
+    {
+      ids: ['webm', 'ogv'],
+      format: { container: 'webm', encoderCodec: 'vp09.00.10.08', muxVideoCodec: 'V_VP9', mimeType: 'video/webm' },
+    },
+    {
+      format: { container: 'webm', encoderCodec: 'vp8', muxVideoCodec: 'V_VP8', mimeType: 'video/webm' },
+    },
+  ]
+
+  const ordered = preferred
+    ? [
+        ...candidates.filter((item) => item.ids?.includes(preferred)),
+        ...candidates.filter((item) => !item.ids?.includes(preferred)),
+      ]
+    : candidates
+
+  for (const { format } of ordered) {
+    const supported = await isVideoEncoderConfigSupported({
+      codec: format.encoderCodec,
+      width,
+      height,
+      bitrate: VIDEO_BITRATE,
+      framerate: fps,
+    })
+    if (supported) {
+      if (preferred === 'mov') return { ...format, mimeType: 'video/quicktime' }
+      if (preferred === 'ogv') return { ...format, mimeType: 'video/ogg' }
+      return format
+    }
+  }
+  return null
+}
+
+function createFrameMuxer(format: FrameEncoderFormat, width: number, height: number, fps: number): FrameMuxerSink {
+  if (format.container === 'mp4') {
+    const target = new Mp4ArrayBufferTarget()
+    const muxer = new Mp4Muxer({
+      target,
+      video: { codec: 'avc', width, height },
+      audio: { codec: 'aac', numberOfChannels: 2, sampleRate: 48_000 },
+      fastStart: 'in-memory',
+      // Encoded chunks from WebCodecs often use document-relative timestamps, not 0-based media time.
+      firstTimestampBehavior: 'cross-track-offset',
+    })
+    return {
+      addVideoChunk: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
+      addAudioChunk: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
+      finalize: () => muxer.finalize(),
+      getBuffer: () => target.buffer,
+      audioCodec: 'aac',
+    }
+  }
+
+  const target = new WebmArrayBufferTarget()
+  const muxer = new WebmMuxer({
+    target,
+    video: { codec: format.muxVideoCodec, width, height, frameRate: fps },
+    audio: { codec: 'A_OPUS', numberOfChannels: 2, sampleRate: 48_000 },
+    firstTimestampBehavior: 'offset',
+  })
   return {
-    VideoFrame: win.VideoFrame,
-    MediaStreamTrackProcessor: win.MediaStreamTrackProcessor,
-    MediaStreamTrackGenerator: win.MediaStreamTrackGenerator,
+    addVideoChunk: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
+    addAudioChunk: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
+    finalize: () => muxer.finalize(),
+    getBuffer: () => target.buffer,
+    audioCodec: 'opus',
   }
+}
+
+async function encodeAudioTrackFromSource(
+  sourceUrl: string,
+  sink: FrameMuxerSink,
+  abortSignal?: AbortSignal,
+): Promise<void> {
+  const host = getWebCodecsHost()
+  if (typeof host.AudioEncoder !== 'function' || typeof host.MediaStreamTrackProcessor !== 'function') return
+
+  const audioVideo = document.createElement('video') as CaptureVideoElement
+  audioVideo.preload = 'auto'
+  audioVideo.src = sourceUrl
+  audioVideo.playsInline = true
+  audioVideo.muted = false
+  audioVideo.volume = 0
+  audioVideo.crossOrigin = 'anonymous'
+  audioVideo.style.position = 'fixed'
+  audioVideo.style.left = '-99999px'
+  audioVideo.style.top = '0'
+  audioVideo.style.width = '1px'
+  audioVideo.style.height = '1px'
+  document.body.appendChild(audioVideo)
+
+  try {
+    await waitForVideoEvent(audioVideo, 'loadeddata')
+    const stream = getCaptureStream(audioVideo)
+    const audioTrack = stream?.getAudioTracks()[0]
+    if (!audioTrack) return
+
+    const encoderConfig = sink.audioCodec === 'aac'
+      ? { codec: 'mp4a.40.2', sampleRate: 48_000, numberOfChannels: 2, bitrate: AUDIO_BITRATE }
+      : { codec: 'opus', sampleRate: 48_000, numberOfChannels: 2, bitrate: AUDIO_BITRATE }
+
+    const support = await host.AudioEncoder!.isConfigSupported(encoderConfig)
+    if (!support.supported) return
+
+    let encoderError: DOMException | null = null
+    const audioEncoder = new host.AudioEncoder!({
+      output: (chunk, meta) => sink.addAudioChunk(chunk, meta),
+      error: (error) => { encoderError = error },
+    })
+    audioEncoder.configure(encoderConfig)
+
+    const processor = new host.MediaStreamTrackProcessor!({ track: audioTrack })
+    const reader = processor.readable.getReader()
+    await waitForSeek(audioVideo, 0)
+    const playPromise = audioVideo.play().catch(() => undefined)
+
+    const playbackDeadlineMs = performance.now() + Math.max(5_000, audioVideo.duration * 1000 + 3_000)
+
+    try {
+      while (!audioVideo.ended && performance.now() < playbackDeadlineMs) {
+        if (abortSignal?.aborted) throw new DOMException('Aborted', 'AbortError')
+        if (encoderError) throw encoderError
+        const { done, value } = await reader.read()
+        if (done) break
+        if (value) {
+          audioEncoder.encode(value as AudioData)
+          ;(value as AudioData).close()
+        }
+      }
+      let drainingAudio = true
+      while (drainingAudio) {
+        if (abortSignal?.aborted) throw new DOMException('Aborted', 'AbortError')
+        if (encoderError) throw encoderError
+        const { done, value } = await reader.read()
+        if (done) {
+          drainingAudio = false
+          break
+        }
+        if (value) {
+          audioEncoder.encode(value as AudioData)
+          ;(value as AudioData).close()
+        }
+      }
+      await audioEncoder.flush()
+    } finally {
+      audioEncoder.close()
+      reader.releaseLock()
+      audioTrack.stop()
+      audioVideo.pause()
+    }
+
+    await playPromise
+    if (!audioVideo.ended && Number.isFinite(audioVideo.duration)) {
+      await waitForVideoEndedOrAbort(audioVideo, abortSignal).catch(() => undefined)
+    }
+  } finally {
+    if (audioVideo.parentNode) audioVideo.parentNode.removeChild(audioVideo)
+  }
+}
+
+interface RenderFrameContext {
+  video: HTMLVideoElement
+  canvas: HTMLCanvasElement
+  ctx: CanvasRenderingContext2D
+  fps: number
+  duration: number
+  totalFrames: number
+  frameDurationUs: number
+  sampleTimesLength: number
+  totalWork: number
+  renderProcessedFrame: (mediaTime: number, sourceFrame?: CanvasImageSource) => Promise<void>
+  options: VideoProcessingOptions
+}
+
+async function encodeVideoTrackFrameByFrame(
+  format: FrameEncoderFormat,
+  renderCtx: RenderFrameContext,
+  sourceUrl: string,
+): Promise<Blob> {
+  const host = getWebCodecsHost()
+  if (typeof host.VideoEncoder !== 'function' || typeof host.VideoFrame !== 'function') {
+    throw new Error('WebCodecs VideoEncoder is unavailable in this browser.')
+  }
+
+  const { canvas, fps, duration, totalFrames, frameDurationUs, sampleTimesLength, totalWork, renderProcessedFrame, options } = renderCtx
+  const w = canvas.width
+  const h = canvas.height
+  const sink = createFrameMuxer(format, w, h, fps)
+  const keyFrameInterval = Math.max(1, Math.round(fps * 2))
+
+  let encoderError: DOMException | null = null
+  const videoEncoder = new host.VideoEncoder!({
+    output: (chunk, meta) => sink.addVideoChunk(chunk, meta),
+    error: (error) => { encoderError = error },
+  })
+  videoEncoder.configure({
+    codec: format.encoderCodec,
+    width: w,
+    height: h,
+    bitrate: VIDEO_BITRATE,
+    framerate: fps,
+  })
+
+  const audioPromise = encodeAudioTrackFromSource(sourceUrl, sink, options.abortSignal)
+
+  let prevTimestampUs = -1
+  try {
+    await forEachPresentedVideoFrame(
+      renderCtx.video,
+      duration,
+      fps,
+      totalFrames,
+      async ({ frameIndex, mediaTime }) => {
+        if (encoderError) throw encoderError
+
+        await renderProcessedFrame(mediaTime, renderCtx.video)
+
+        const currentFrame = frameIndex + 1
+        options.onRenderFrame?.({ frameIndex: currentFrame, totalFrames, canvas, mediaTime })
+
+        const timestampUs = Math.round(mediaTime * 1_000_000)
+        const durationUs = prevTimestampUs < 0
+          ? frameDurationUs
+          : Math.max(1, timestampUs - prevTimestampUs)
+        prevTimestampUs = timestampUs
+
+        const videoFrame = new host.VideoFrame!(canvas, { timestamp: timestampUs, duration: durationUs })
+        videoEncoder.encode(videoFrame, { keyFrame: frameIndex % keyFrameInterval === 0 })
+        videoFrame.close()
+
+        options.onProgress?.(sampleTimesLength + currentFrame, totalWork)
+        if (frameIndex % 24 === 0) await sleepMs(0)
+      },
+      options.abortSignal,
+    )
+
+    if (encoderError) throw encoderError
+    options.onPhase?.('finishing')
+    options.onProgress?.(totalWork - 1, totalWork)
+    await videoEncoder.flush()
+  } finally {
+    videoEncoder.close()
+    await audioPromise.catch(() => undefined)
+  }
+
+  sink.finalize()
+  const blob = new Blob([sink.getBuffer()], { type: format.mimeType })
+  return normalizeRecordedVideoBlob(blob, format.mimeType)
+}
+
+async function encodeViaRecorderReplay(
+  recorderFormat: VideoExportOption,
+  renderCtx: RenderFrameContext,
+  sourceUrl: string,
+): Promise<Blob> {
+  const {
+    video, canvas, ctx, fps, duration, totalFrames, sampleTimesLength, totalWork,
+    renderProcessedFrame, options,
+  } = renderCtx
+
+  if (!recorderFormat.mimeType) throw new Error('No supported browser video encoder found for the selected format.')
+
+  const w = canvas.width
+  const h = canvas.height
+  const estimatedFrameBytes = Math.max(32_000, Math.round(w * h * 0.12))
+  if (totalFrames * estimatedFrameBytes > FALLBACK_FRAME_CACHE_BUDGET_BYTES) {
+    throw new Error(
+      'Video is too long for fallback encoding in this browser. Use Chrome/Edge for frame-accurate export, or shorten the clip.',
+    )
+  }
+
+  options.onPhase?.('preparing')
+  const frameBlobs: Blob[] = []
+  await forEachPresentedVideoFrame(
+    video,
+    duration,
+    fps,
+    totalFrames,
+    async ({ mediaTime }) => {
+      await renderProcessedFrame(mediaTime, video)
+      frameBlobs.push(await canvasToBlob(canvas, 'image/jpeg', 0.92))
+      options.onProgress?.(
+        sampleTimesLength + Math.floor((frameBlobs.length) * 0.45),
+        totalWork,
+      )
+      if (frameBlobs.length % 12 === 0) await sleepMs(0)
+    },
+    options.abortSignal,
+  )
+
+  options.onPhase?.('rendering')
+
+  const audioVideo = document.createElement('video') as CaptureVideoElement
+  audioVideo.preload = 'auto'
+  audioVideo.src = sourceUrl
+  audioVideo.playsInline = true
+  audioVideo.muted = false
+  audioVideo.volume = 0
+  audioVideo.crossOrigin = 'anonymous'
+  audioVideo.style.position = 'fixed'
+  audioVideo.style.left = '-99999px'
+  audioVideo.style.top = '0'
+  audioVideo.style.width = '1px'
+  audioVideo.style.height = '1px'
+  document.body.appendChild(audioVideo)
+  await waitForVideoEvent(audioVideo, 'loadeddata')
+
+  const capture = createCanvasStream(canvas, fps)
+  const composedStream = new MediaStream()
+  composedStream.addTrack(capture.videoTrack)
+  getCaptureStream(audioVideo)?.getAudioTracks().forEach((track) => composedStream.addTrack(track))
+
+  const recorder = new MediaRecorder(composedStream, {
+    mimeType: recorderFormat.mimeType,
+    videoBitsPerSecond: VIDEO_BITRATE,
+    audioBitsPerSecond: AUDIO_BITRATE,
+  })
+
+  const chunks: Blob[] = []
+  recorder.ondataavailable = (event) => {
+    if (event.data.size > 0) chunks.push(event.data)
+  }
+  const recorderStopped = new Promise<void>((resolve) => { recorder.onstop = () => resolve() })
+
+  const recorderTimesliceMs = Math.max(1, Math.round(1000 / fps))
+  recorder.start(recorderTimesliceMs)
+  const replayStart = performance.now()
+  const audioPlayPromise = audioVideo.play().catch(() => undefined)
+
+  try {
+    for (let frameIndex = 0; frameIndex < totalFrames; frameIndex++) {
+      if (options.abortSignal?.aborted) throw new DOMException('Aborted', 'AbortError')
+      const bitmap = await createImageBitmap(frameBlobs[frameIndex])
+      ctx.clearRect(0, 0, w, h)
+      ctx.drawImage(bitmap, 0, 0, w, h)
+      bitmap.close()
+      capture.requestFrame?.()
+      await sleepUntil(replayStart + (frameIndex + 1) * (1000 / fps))
+      options.onProgress?.(
+        sampleTimesLength + Math.floor(totalFrames * 0.45) + frameIndex + 1,
+        totalWork,
+      )
+    }
+  } finally {
+    capture.stream.getTracks().forEach((track) => track.stop())
+  }
+
+  await audioPlayPromise
+  if (!audioVideo.ended && Number.isFinite(audioVideo.duration)) {
+    await waitForVideoEndedOrAbort(audioVideo, options.abortSignal).catch(() => undefined)
+  }
+  if (recorder.state !== 'inactive') recorder.stop()
+  await recorderStopped
+
+  if (audioVideo.parentNode) audioVideo.parentNode.removeChild(audioVideo)
+  options.onPhase?.('finishing')
+  options.onProgress?.(totalWork - 1, totalWork)
+  options.onProgress?.(totalWork, totalWork)
+  return normalizeRecordedVideoBlob(new Blob(chunks, { type: recorderFormat.mimeType }), recorderFormat.mimeType)
 }
 
 function resolveRecorderFormat(preferred?: VideoExportFormatId): VideoExportOption | null {
@@ -259,6 +667,32 @@ function videoZoneStrength(zone: Zone, strength: number): number {
   return Math.min(1, base)
 }
 
+function pickCustomImageAssetId(assets: CustomImageAsset[] | undefined, seed: string | number): string | undefined {
+  const ready = assets?.filter((asset) => asset.imageBitmap) ?? []
+  if (ready.length === 0) return undefined
+  let hash = 2166136261
+  const str = String(seed)
+  for (let i = 0; i < str.length; i += 1) {
+    hash ^= str.charCodeAt(i)
+    hash = Math.imul(hash, 16777619)
+  }
+  return ready[(hash >>> 0) % ready.length]?.id
+}
+
+function applyVideoEffectSettings(zone: Zone, options: VideoProcessingOptions, timedZoneIds: Set<string>): Zone {
+  const isTimedMask = [...timedZoneIds].some((prefix) => zone.id.startsWith(`${prefix}-`))
+  if (isTimedMask) return zone
+  const effect = options.effect
+  return {
+    ...zone,
+    effect,
+    emoji: options.fixedEmoji ?? zone.emoji,
+    customImageAssetId: effect === 'custom-image'
+      ? (options.fixedCustomImageId ?? zone.customImageAssetId ?? pickCustomImageAssetId(options.customImages, zone.id))
+      : zone.customImageAssetId,
+  }
+}
+
 function drawZones(
   ctx: CanvasRenderingContext2D,
   zones: Zone[],
@@ -281,6 +715,7 @@ function drawZones(
         ...effectOptions,
         zoneId: zone.id,
         customImageAssetId: zone.customImageAssetId,
+        seed: zone.id,
       },
     )
   }
@@ -337,10 +772,30 @@ function isLikelyVideoFace(face: { width: number; height: number; score?: number
   const relativeArea = (face.width * face.height) / Math.max(1, w * h)
   return (
     score >= VIDEO_MIN_FACE_SCORE &&
-    aspect >= 0.45 &&
-    aspect <= 1.75 &&
-    relativeArea >= 0.00002
+    aspect >= 0.55 &&
+    aspect <= 1.55 &&
+    relativeArea >= 0.00008 &&
+    relativeArea <= VIDEO_MAX_FACE_REL_AREA
   )
+}
+
+function filterVideoDetections(
+  detections: Zone[],
+  tracks: VideoTrackState[],
+): Zone[] {
+  const confirmedAreas = tracks
+    .filter((track) => track.confirmed && track.missed === 0)
+    .map((track) => track.zone.width * track.zone.height)
+    .sort((a, b) => a - b)
+  const medianArea = confirmedAreas.length > 0
+    ? confirmedAreas[Math.floor(confirmedAreas.length / 2)]
+    : null
+
+  return detections.filter((det) => {
+    const area = det.width * det.height
+    if (medianArea != null && area > medianArea * 2.8) return false
+    return true
+  })
 }
 
 function stabilizeTracks(
@@ -369,10 +824,12 @@ function stabilizeTracks(
       }
     })
 
-    if (bestTrackIndex >= 0 && bestScore > 0.12) {
+    if (bestTrackIndex >= 0 && bestScore > 0.18) {
       const track = nextTracks[bestTrackIndex]
       const prevCenter = zoneCenter(track.zone)
       const dt = Math.max(1 / FALLBACK_FPS, mediaTime - track.lastSeenTime)
+      const hitStreak = track.hitStreak + 1
+      const confirmed = track.confirmed || hitStreak >= VIDEO_TRACK_CONFIRM_HITS
       const smoothed: Zone = {
         ...track.zone,
         x: track.zone.x + (det.x - track.zone.x) * TRACK_SMOOTHING,
@@ -390,6 +847,8 @@ function stabilizeTracks(
         lastSeenTime: mediaTime,
         lastPredictTime: mediaTime,
         missed: 0,
+        hitStreak,
+        confirmed,
       }
       unmatchedTracks.delete(bestTrackIndex)
     } else {
@@ -402,6 +861,8 @@ function stabilizeTracks(
         lastSeenTime: mediaTime,
         lastPredictTime: mediaTime,
         missed: 0,
+        hitStreak: 1,
+        confirmed: false,
       })
     }
   })
@@ -410,7 +871,12 @@ function stabilizeTracks(
     nextTracks[trackIndex] = { ...nextTracks[trackIndex], missed: nextTracks[trackIndex].missed + 1 }
   })
 
-  return nextTracks.filter((track) => mediaTime - track.lastSeenTime <= TRACK_KEEPALIVE_SEC && track.missed < 4)
+  return nextTracks.filter((track) => {
+    if (mediaTime - track.lastSeenTime > TRACK_KEEPALIVE_SEC) return false
+    if (track.missed >= 4) return false
+    if (!track.confirmed && track.missed > 0) return false
+    return true
+  })
 }
 
 function predictTrackZones(tracks: VideoTrackState[], mediaTime: number): Zone[] {
@@ -532,102 +998,29 @@ function zonesBetweenKeyframes(prev: VideoTrackKeyframe, next: VideoTrackKeyfram
   return zones
 }
 
-async function buildFrameZonesFallback(
+function getFrameZonesAtTime(
   timeline: VideoTrackKeyframe[],
-  totalFrames: number,
-  fps: number,
-  abortSignal?: AbortSignal,
-  onProgress?: (done: number) => void,
-): Promise<Zone[][]> {
-  const frameZones: Zone[][] = new Array(totalFrames)
-  let keyframeIndex = 0
-  for (let frame = 0; frame < totalFrames; frame++) {
-    if (abortSignal?.aborted) throw new DOMException('Aborted', 'AbortError')
-    const mediaTime = frame / fps
-    while (keyframeIndex < timeline.length - 2 && timeline[keyframeIndex + 1].timeSec < mediaTime) {
-      keyframeIndex += 1
-    }
-    if (timeline.length <= 1 || mediaTime <= timeline[0]?.timeSec || mediaTime >= timeline[timeline.length - 1]?.timeSec) {
-      frameZones[frame] = zonesAtTime(timeline, mediaTime)
+  timedZones: VideoTimedZone[],
+  mediaTime: number,
+): Zone[] {
+  let zones: Zone[] = []
+  if (timeline.length > 0) {
+    if (timeline.length <= 1 || mediaTime <= timeline[0].timeSec || mediaTime >= timeline[timeline.length - 1].timeSec) {
+      zones = zonesAtTime(timeline, mediaTime)
     } else {
-      frameZones[frame] = zonesBetweenKeyframes(timeline[keyframeIndex], timeline[keyframeIndex + 1], mediaTime)
-    }
-    const done = frame + 1
-    if (done % 120 === 0 || done === totalFrames) {
-      onProgress?.(done)
-      await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
+      let keyframeIndex = 0
+      while (keyframeIndex < timeline.length - 2 && timeline[keyframeIndex + 1].timeSec < mediaTime) {
+        keyframeIndex += 1
+      }
+      zones = zonesBetweenKeyframes(timeline[keyframeIndex], timeline[keyframeIndex + 1], mediaTime)
     }
   }
-  return frameZones
-}
-
-async function buildFrameZones(
-  timeline: VideoTrackKeyframe[],
-  totalFrames: number,
-  fps: number,
-  abortSignal?: AbortSignal,
-  onProgress?: (done: number) => void,
-): Promise<Zone[][]> {
-  if (typeof Worker === 'undefined') {
-    return buildFrameZonesFallback(timeline, totalFrames, fps, abortSignal, onProgress)
-  }
-
-  try {
-    return await new Promise<Zone[][]>((resolve, reject) => {
-      if (abortSignal?.aborted) {
-        reject(new DOMException('Aborted', 'AbortError'))
-        return
-      }
-
-      const id = ++timelineWorkerRequestId
-      const worker = new Worker(new URL('./video-timeline.worker.ts', import.meta.url), { type: 'module' })
-      const cleanup = () => {
-        worker.removeEventListener('message', onMessage)
-        worker.removeEventListener('error', onError)
-        abortSignal?.removeEventListener('abort', onAbort)
-        worker.terminate()
-      }
-      const onAbort = () => {
-        cleanup()
-        reject(new DOMException('Aborted', 'AbortError'))
-      }
-      const onError = (event: ErrorEvent) => {
-        cleanup()
-        reject(event.error instanceof Error ? event.error : new Error(event.message || 'Timeline worker failed'))
-      }
-      const onMessage = (event: MessageEvent<TimelineWorkerMessage>) => {
-        if (event.data.id !== id) return
-        if (event.data.type === 'progress') {
-          onProgress?.(event.data.done)
-          return
-        }
-        cleanup()
-        resolve(event.data.frameZones)
-      }
-
-      worker.addEventListener('message', onMessage)
-      worker.addEventListener('error', onError)
-      abortSignal?.addEventListener('abort', onAbort, { once: true })
-      worker.postMessage({ id, timeline, totalFrames, fps })
-    })
-  } catch (err) {
-    if (err instanceof DOMException && err.name === 'AbortError') throw err
-    console.warn('Timeline worker unavailable, falling back to main-thread frame map.', err)
-    return buildFrameZonesFallback(timeline, totalFrames, fps, abortSignal, onProgress)
-  }
-}
-
-function addTimedZonesToFrameMap(frameZones: Zone[][], timedZones: VideoTimedZone[], fps: number): void {
-  timedZones.forEach((timedZone) => {
-    const startFrame = clamp(Math.floor(timedZone.startSec * fps), 0, frameZones.length - 1)
-    const endFrame = clamp(Math.ceil(timedZone.endSec * fps), startFrame, frameZones.length - 1)
-    for (let frame = startFrame; frame <= endFrame; frame++) {
-      frameZones[frame] = [
-        ...(frameZones[frame] ?? []),
-        { ...timedZone.zone, id: `${timedZone.id}-f${frame}` },
-      ]
+  for (const timedZone of timedZones) {
+    if (mediaTime >= timedZone.startSec && mediaTime <= timedZone.endSec) {
+      zones.push({ ...timedZone.zone, id: `${timedZone.id}-t${Math.round(mediaTime * 1000)}` })
     }
-  })
+  }
+  return zones
 }
 
 function waitForSeek(video: HTMLVideoElement, timeSec: number): Promise<void> {
@@ -650,6 +1043,127 @@ function waitForSeek(video: HTMLVideoElement, timeSec: number): Promise<void> {
     video.addEventListener('error', onError, { once: true })
     video.currentTime = targetTime
   })
+}
+
+interface PresentedVideoFrame {
+  frameIndex: number
+  mediaTime: number
+}
+
+/**
+ * Decode frames by playing the video and reading each presented frame.
+ * Seeking lands on keyframes (~every 15–30 frames) and duplicates frames — never use seek per output frame.
+ */
+async function forEachPresentedVideoFrame(
+  video: HTMLVideoElement,
+  duration: number,
+  fps: number,
+  maxFrames: number,
+  handler: (frame: PresentedVideoFrame) => Promise<void>,
+  abortSignal?: AbortSignal,
+): Promise<number> {
+  if (typeof video.requestVideoFrameCallback !== 'function') {
+    for (let frameIndex = 0; frameIndex < maxFrames; frameIndex++) {
+      if (abortSignal?.aborted) throw new DOMException('Aborted', 'AbortError')
+      const mediaTime = Math.min(duration, frameIndex / fps)
+      await waitForSeek(video, mediaTime)
+      await handler({ frameIndex, mediaTime })
+    }
+    return maxFrames
+  }
+
+  await waitForSeek(video, 0)
+  video.playbackRate = 1
+  const playPromise = video.play().catch(() => undefined)
+
+  let frameIndex = 0
+  let lastMediaTime = -Infinity
+  let callbackId = 0
+
+  const capturedCount = await new Promise<number>((resolve, reject) => {
+    let settled = false
+    const finish = (count: number) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      resolve(count)
+    }
+    const fail = (err: unknown) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      reject(err)
+    }
+
+    const cleanup = () => {
+      video.removeEventListener('ended', onEnded)
+      window.clearTimeout(timeoutId)
+      video.pause()
+      if (callbackId && typeof video.cancelVideoFrameCallback === 'function') {
+        video.cancelVideoFrameCallback(callbackId)
+      }
+    }
+
+    const onEnded = () => finish(frameIndex)
+
+    const timeoutMs = Math.max(120_000, Math.ceil(duration * 1000) * 40)
+    const timeoutId = window.setTimeout(() => finish(frameIndex), timeoutMs)
+    video.addEventListener('ended', onEnded, { once: true })
+
+    const schedule = () => {
+      if (abortSignal?.aborted) {
+        fail(new DOMException('Aborted', 'AbortError'))
+        return
+      }
+      if (video.ended) {
+        finish(frameIndex)
+        return
+      }
+      callbackId = video.requestVideoFrameCallback(onVideoFrame)
+    }
+
+    const onVideoFrame = (_now: DOMHighResTimeStamp, metadata: VideoFrameCallbackMetadata) => {
+      // Pause so async rendering cannot fall behind real-time playback and miss the tail frames.
+      video.pause()
+      void (async () => {
+        try {
+          if (abortSignal?.aborted) throw new DOMException('Aborted', 'AbortError')
+
+          const mediaTime = metadata.mediaTime
+          const nearEnd = mediaTime >= duration - 0.001 || video.ended
+
+          if (mediaTime <= lastMediaTime + 0.00001) {
+            if (!nearEnd && frameIndex < maxFrames) {
+              await video.play().catch(() => undefined)
+              schedule()
+            } else {
+              finish(frameIndex)
+            }
+            return
+          }
+          lastMediaTime = mediaTime
+
+          await handler({ frameIndex, mediaTime })
+          frameIndex++
+
+          if (nearEnd || frameIndex >= maxFrames) {
+            finish(frameIndex)
+            return
+          }
+
+          await video.play().catch(() => undefined)
+          schedule()
+        } catch (err) {
+          fail(err)
+        }
+      })()
+    }
+
+    schedule()
+  })
+
+  await playPromise
+  return capturedCount
 }
 
 function waitForVideoEvent(video: HTMLVideoElement, eventName: 'loadeddata' | 'loadedmetadata' | 'ended'): Promise<void> {
@@ -870,14 +1384,9 @@ export async function processVideo(
   options: VideoProcessingOptions,
 ): Promise<Blob> {
   const recorderFormat = resolveRecorderFormat(options.outputFormat)
-  if (!recorderFormat?.mimeType) {
-    throw new Error('No supported browser video encoder found for the selected format.')
-  }
+  let frameEncoderFormat: FrameEncoderFormat | null = null
 
   const url = URL.createObjectURL(videoBlob)
-  let sourceStream: MediaStream | null = null
-  let canvasStream: MediaStream | null = null
-  let recorder: MediaRecorder | null = null
   let hiddenVideo: CaptureVideoElement | null = null
   let aborted = false
   let overrideBitmaps: Array<VideoFrameOverride & { bitmap: ImageBitmap }> = []
@@ -888,7 +1397,7 @@ export async function processVideo(
     video.preload = 'auto'
     video.src = url
     video.playsInline = true
-    video.muted = false
+    video.muted = true
     video.volume = 0
     video.crossOrigin = 'anonymous'
     video.style.position = 'fixed'
@@ -903,7 +1412,17 @@ export async function processVideo(
     const w = video.videoWidth
     const h = video.videoHeight
     const duration = video.duration
+    if (!Number.isFinite(duration) || duration <= 0) {
+      throw new Error('Could not read video duration.')
+    }
+    if (duration > VIDEO_RUNTIME_LIMITS.maxDurationSec) {
+      throw new Error(`Video is too long (${Math.ceil(duration)}s). Maximum is ${VIDEO_RUNTIME_LIMITS.maxDurationSec / 60} minutes.`)
+    }
     const fps = await estimateVideoFps(video, options.abortSignal)
+    frameEncoderFormat = await pickFrameEncoderFormat(options.outputFormat, w, h, fps)
+    if (!frameEncoderFormat && !recorderFormat?.mimeType) {
+      throw new Error('No supported browser video encoder found for the selected format.')
+    }
     const totalFrames = Math.max(1, Math.ceil(duration * fps))
     const overrideWindowSec = Math.max(1 / fps, 0.04)
 
@@ -943,7 +1462,8 @@ export async function processVideo(
 
     const sampleTimes = buildFrameSampleTimes(duration, fps)
     const timeline: VideoTrackKeyframe[] = []
-    const totalWork = sampleTimes.length + totalFrames * 2
+    const timedZones = options.timedZones ?? []
+    const totalWork = sampleTimes.length + totalFrames
 
     options.onPhase?.('analyzing')
     for (let i = 0; i < sampleTimes.length; i++) {
@@ -953,7 +1473,7 @@ export async function processVideo(
       detectCtx.clearRect(0, 0, detectW, detectH)
       detectCtx.drawImage(video, 0, 0, detectW, detectH)
       const faces = await detectFaces(detectCanvas, true)
-      const detections = faces.filter((face) => isLikelyVideoFace(face, detectW, detectH)).map((face) => faceToZone(
+      const rawDetections = faces.filter((face) => isLikelyVideoFace(face, detectW, detectH)).map((face) => faceToZone(
         {
           x: face.x / detectScale,
           y: face.y / detectScale,
@@ -965,8 +1485,12 @@ export async function processVideo(
         options.effect,
         options.emoji,
       ))
+      const detections = filterVideoDetections(rawDetections, tracks)
       tracks = stabilizeTracks(tracks, detections, sampleTime, nextTrackId, nextTrackEmoji)
-      const zones = predictTrackZones(tracks, sampleTime).map(cloneZone)
+      const zones = predictTrackZones(
+        tracks.filter((track) => track.confirmed && track.missed === 0),
+        sampleTime,
+      ).map(cloneZone)
       const lastTime = timeline[timeline.length - 1]?.timeSec ?? -1
       const preRollTime = Math.max(0, sampleTime - VIDEO_DETECTION_PREROLL_SEC)
       if (zones.length > 0 && preRollTime > lastTime + 0.001 && preRollTime < sampleTime - 0.001) {
@@ -976,16 +1500,6 @@ export async function processVideo(
       options.onProgress?.(i + 1, totalWork)
       await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
     }
-
-    options.onPhase?.('preparing')
-    const frameZones = await buildFrameZones(
-      timeline,
-      totalFrames,
-      fps,
-      options.abortSignal,
-      (done) => options.onProgress?.(sampleTimes.length + done, totalWork),
-    )
-    addTimedZonesToFrameMap(frameZones, options.timedZones ?? [], fps)
 
     await waitForSeek(video, 0)
     options.onPhase?.('rendering')
@@ -997,6 +1511,9 @@ export async function processVideo(
 
     const distortEnabled = (options.distort?.enabled.length ?? 0) > 0
     const colorAdjEnabled = options.colorAdj != null && !isColorAdjNoop(options.colorAdj)
+    const frameDurationUs = Math.round(1_000_000 / fps)
+
+    const timedZoneIds = new Set(timedZones.map((item) => item.id))
 
     const renderProcessedFrame = async (mediaTime: number, sourceFrame?: CanvasImageSource) => {
       const override = overrideBitmaps.find((item) => Math.abs(item.timeSec - mediaTime) <= overrideWindowSec)
@@ -1006,8 +1523,9 @@ export async function processVideo(
         return
       }
       ctx.drawImage(sourceFrame ?? video, 0, 0, w, h)
-      const frameIndex = clamp(Math.round(mediaTime * fps), 0, frameZones.length - 1)
-      drawZones(ctx, frameZones[frameIndex] ?? [], w, h, options.strength, effectOptions)
+      const zones = getFrameZonesAtTime(timeline, timedZones, mediaTime)
+        .map((zone) => applyVideoEffectSettings(zone, options, timedZoneIds))
+      drawZones(ctx, zones, w, h, options.strength, effectOptions)
       if (colorAdjEnabled && options.colorAdj) {
         applyColorAdjustments(ctx, options.colorAdj, canvas)
       }
@@ -1026,193 +1544,58 @@ export async function processVideo(
       }
     }
 
-    sourceStream = getCaptureStream(video)
-    const audioSourceStream = sourceStream
-    const webCodecsPipeline = getWebCodecsVideoPipeline()
-    const sourceVideoTrack = sourceStream?.getVideoTracks()[0] ?? null
-    const useWebCodecsRenderer = Boolean(webCodecsPipeline && sourceVideoTrack)
-    const composedStream = new MediaStream()
-    let capture: ReturnType<typeof createCanvasStream> | null = null
-    let webCodecsGenerator: MediaStreamTrackGenerator | null = null
-    let webCodecsPump: Promise<void> | null = null
-    let cancelWebCodecsPump: (() => void) | null = null
-    let finished = false
-
-    if (useWebCodecsRenderer && webCodecsPipeline && sourceVideoTrack) {
-      const processor = new webCodecsPipeline.MediaStreamTrackProcessor({ track: sourceVideoTrack })
-      webCodecsGenerator = new webCodecsPipeline.MediaStreamTrackGenerator({ kind: 'video' })
-      composedStream.addTrack(webCodecsGenerator)
-
-      webCodecsPump = (async () => {
-        const reader = processor.readable.getReader()
-        const writer = webCodecsGenerator!.writable.getWriter()
-        cancelWebCodecsPump = () => { void reader.cancel() }
-        let processedFrames = 0
-        try {
-          while (!finished) {
-            if (options.abortSignal?.aborted) throw new DOMException('Aborted', 'AbortError')
-            const { value: frame, done } = await reader.read()
-            if (done || !frame) break
-            const frameTimestamp = 'timestamp' in frame && typeof frame.timestamp === 'number'
-              ? frame.timestamp / 1_000_000
-              : null
-            const mediaTime = frameTimestamp != null
-              ? Math.min(duration, frameTimestamp)
-              : Math.min(duration, processedFrames / fps)
-            const timestamp = frameTimestamp != null
-              ? Math.round(frameTimestamp * 1_000_000)
-              : Math.round(mediaTime * 1_000_000)
-            await renderProcessedFrame(mediaTime, frame as unknown as CanvasImageSource)
-            const currentFrame = Math.min(totalFrames, Math.max(1, Math.round(mediaTime * fps) + 1))
-            options.onRenderFrame?.({ frameIndex: currentFrame, totalFrames, canvas, mediaTime })
-            const outputFrame = new webCodecsPipeline.VideoFrame(canvas, {
-              timestamp,
-              duration: Number.isFinite(frame.duration) ? frame.duration : Math.round(1_000_000 / fps),
-            })
-            frame.close()
-            await writer.write(outputFrame)
-            outputFrame.close()
-
-            processedFrames += 1
-            options.onProgress?.(sampleTimes.length + totalFrames + currentFrame, totalWork)
-          }
-        } finally {
-          cancelWebCodecsPump = null
-          reader.releaseLock()
-          await writer.close().catch(() => undefined)
-          webCodecsGenerator?.stop()
-        }
-      })()
-    } else {
-      capture = createCanvasStream(canvas, fps)
-      canvasStream = capture.stream
-      composedStream.addTrack(capture.videoTrack)
-    }
-    sourceStream?.getAudioTracks().forEach((track) => composedStream.addTrack(track))
-    if (!sourceStream?.getAudioTracks().length && audioSourceStream) {
-      audioSourceStream.getAudioTracks().forEach((track) => composedStream.addTrack(track))
-    }
-
-    recorder = new MediaRecorder(composedStream, {
-      mimeType: recorderFormat.mimeType,
-      videoBitsPerSecond: VIDEO_BITRATE,
-      audioBitsPerSecond: AUDIO_BITRATE,
-    })
-
-    const chunks: Blob[] = []
-    recorder.ondataavailable = (event) => {
-      if (event.data.size > 0) chunks.push(event.data)
-    }
-
-    const recorderStopped = new Promise<void>((resolve) => {
-      recorder!.onstop = () => resolve()
-    })
-
-    let frameProcessing: Promise<void> = Promise.resolve()
-
-    const scheduleProcessedFrame = (mediaTime: number, sourceFrame?: CanvasImageSource, presentedFrames?: number) => {
-      frameProcessing = frameProcessing.then(async () => {
-        if (finished) return
-        if (options.abortSignal?.aborted) {
-          aborted = true
-          return
-        }
-        await renderProcessedFrame(mediaTime, sourceFrame)
-        const currentFrame = Math.min(totalFrames, Math.max(1, Math.round(mediaTime * fps) + 1))
-        options.onRenderFrame?.({ frameIndex: currentFrame, totalFrames, canvas, mediaTime })
-        capture?.requestFrame?.()
-        const safePresentedFrames = presentedFrames != null && Number.isFinite(presentedFrames) && presentedFrames > 0
-          ? Math.round(presentedFrames)
-          : currentFrame
-        options.onProgress?.(
-          sampleTimes.length + totalFrames + Math.min(totalFrames, Math.max(currentFrame, safePresentedFrames)),
-          totalWork,
-        )
-      })
-    }
-
-    await renderProcessedFrame(0)
-    options.onRenderFrame?.({ frameIndex: 1, totalFrames, canvas, mediaTime: 0 })
-    capture?.requestFrame?.()
-    options.onProgress?.(sampleTimes.length + totalFrames, totalWork)
-
-    const stopProcessing = async () => {
-      if (finished) return
-      finished = true
-      video.pause()
-      cancelWebCodecsPump?.()
-      if (recorder && recorder.state !== 'inactive') recorder.stop()
-      await recorderStopped
+    const renderCtx: RenderFrameContext = {
+      video,
+      canvas,
+      ctx,
+      fps,
+      duration,
+      totalFrames,
+      frameDurationUs,
+      sampleTimesLength: sampleTimes.length,
+      totalWork,
+      renderProcessedFrame,
+      options,
     }
 
     options.abortSignal?.addEventListener('abort', () => {
       aborted = true
-      void stopProcessing()
     }, { once: true })
 
-    const onFrame = (mediaTime: number, presentedFrames: number) => {
-      if (finished) return
-      if (options.abortSignal?.aborted) {
-        aborted = true
-        void stopProcessing()
-        return
-      }
-
-      scheduleProcessedFrame(mediaTime, undefined, presentedFrames)
-
-      if (!video.ended && !useWebCodecsRenderer) {
-        if (typeof video.requestVideoFrameCallback === 'function') {
-          video.requestVideoFrameCallback((_, metadata) => onFrame(metadata.mediaTime, metadata.presentedFrames))
-        }
-      }
+    if (frameEncoderFormat) {
+      const result = await encodeVideoTrackFrameByFrame(frameEncoderFormat, renderCtx, url)
+      if (aborted) throw new DOMException('Aborted', 'AbortError')
+      options.onProgress?.(totalWork, totalWork)
+      return result
     }
 
-    recorder.start(1000)
-
-    if (!useWebCodecsRenderer && typeof video.requestVideoFrameCallback === 'function') {
-      video.requestVideoFrameCallback((_, metadata) => onFrame(metadata.mediaTime, metadata.presentedFrames))
-    } else if (!useWebCodecsRenderer) {
-      const iv = window.setInterval(() => {
-        if (finished || video.ended) {
-          window.clearInterval(iv)
-          return
-        }
-        onFrame(video.currentTime, Math.round(video.currentTime * fps))
-      }, Math.round(1000 / fps))
-    }
-
-    await video.play()
-    await waitForVideoEndedOrAbort(video, options.abortSignal)
-    await webCodecsPump?.catch((err) => {
-      if (!(err instanceof DOMException && err.name === 'AbortError')) throw err
-    })
-    await frameProcessing
-    await renderProcessedFrame(duration)
-    capture?.requestFrame?.()
-    options.onProgress?.(totalWork, totalWork)
-    await stopProcessing()
+    const result = await encodeViaRecorderReplay(recorderFormat!, renderCtx, url)
     if (aborted) throw new DOMException('Aborted', 'AbortError')
-
-    return normalizeRecordedVideoBlob(new Blob(chunks, { type: recorderFormat.mimeType }), recorderFormat.mimeType)
+    return result
   } finally {
     URL.revokeObjectURL(url)
-    recorder?.stream.getTracks().forEach((track) => track.stop())
-    sourceStream?.getTracks().forEach((track) => track.stop())
-    canvasStream?.getTracks().forEach((track) => track.stop())
     overrideBitmaps.forEach((item) => item.bitmap.close())
     if (hiddenVideo?.parentNode) hiddenVideo.parentNode.removeChild(hiddenVideo)
   }
 }
 
 export function getSupportedVideoExportOptions(): VideoExportOption[] {
+  const hasFrameEncoder = typeof getWebCodecsHost().VideoEncoder !== 'undefined'
   return VIDEO_EXPORT_CONFIGS.map((config) => {
     const mimeType = config.mimeCandidates.find((candidate) => MediaRecorder.isTypeSupported(candidate)) ?? null
+    const framePipelineSupported = hasFrameEncoder && (
+      config.id === 'webm' || config.id === 'mp4' || config.id === 'mov' || config.id === 'ogv'
+    )
+    const resolvedMime = mimeType
+      ?? (framePipelineSupported
+        ? (config.id === 'webm' || config.id === 'ogv' ? 'video/webm' : 'video/mp4')
+        : null)
     return {
       id: config.id,
       label: config.label,
       ext: config.ext,
-      mimeType,
-      supported: mimeType != null,
+      mimeType: resolvedMime,
+      supported: resolvedMime != null,
     }
   })
 }
@@ -1222,8 +1605,8 @@ export function getVideoPipelineCapabilities(): VideoPipelineCapabilities {
   const captureTrack = canvas?.captureStream?.(0).getVideoTracks()[0] as ManualCanvasCaptureTrack | undefined
   const manualCanvasFrameCapture = Boolean(captureTrack && typeof captureTrack.requestFrame === 'function')
   captureTrack?.stop()
-  const win = window as WindowWithWebCodecs
-  const webCodecsRenderer = Boolean(getWebCodecsVideoPipeline())
+  const host = getWebCodecsHost()
+  const webCodecsRenderer = Boolean(host.VideoEncoder && host.VideoFrame)
 
   return {
     mediaRecorder: typeof MediaRecorder !== 'undefined',
@@ -1231,7 +1614,7 @@ export function getVideoPipelineCapabilities(): VideoPipelineCapabilities {
     requestVideoFrameCallback: 'requestVideoFrameCallback' in HTMLVideoElement.prototype,
     timelineWorker: typeof Worker !== 'undefined',
     offscreenCanvas: typeof OffscreenCanvas !== 'undefined',
-    webCodecs: typeof win.VideoEncoder !== 'undefined' && typeof win.VideoFrame !== 'undefined',
+    webCodecs: Boolean(host.VideoEncoder && host.VideoFrame),
     webCodecsRenderer,
   }
 }
@@ -1267,4 +1650,46 @@ export function isVideoFile(file: File): boolean {
   if (file.type.startsWith('video/')) return true
   const ext = '.' + (file.name.split('.').pop()?.toLowerCase() ?? '')
   return (VIDEO_EXTENSIONS as readonly string[]).includes(ext)
+}
+
+/** Stabilizes video editor preview detections (same filters as export pipeline). */
+export class VideoFaceTrackStabilizer {
+  private tracks: VideoTrackState[] = []
+  private trackSeq = 0
+
+  reset(): void {
+    this.tracks = []
+    this.trackSeq = 0
+  }
+
+  update(
+    faces: Array<{ x: number; y: number; width: number; height: number; score?: number }>,
+    frameW: number,
+    frameH: number,
+    timeSec: number,
+    effect: AnonymizeEffectId,
+    emojiForTrack: () => string,
+  ): Zone[] {
+    const rawDetections = faces
+      .filter((face) => isLikelyVideoFace(face, frameW, frameH))
+      .map((face) => faceToZone(
+        { x: face.x, y: face.y, width: face.width, height: face.height },
+        frameW,
+        frameH,
+        effect,
+        emojiForTrack(),
+      ))
+    const detections = filterVideoDetections(rawDetections, this.tracks)
+    this.tracks = stabilizeTracks(
+      this.tracks,
+      detections,
+      timeSec,
+      () => `vpt-${++this.trackSeq}`,
+      emojiForTrack,
+    )
+    return predictTrackZones(
+      this.tracks.filter((track) => track.confirmed && track.missed === 0),
+      timeSec,
+    ).map(cloneZone)
+  }
 }

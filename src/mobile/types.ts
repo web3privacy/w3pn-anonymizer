@@ -14,6 +14,9 @@ export type MobilePanel =
 
 export type MobileMode = 'home' | 'editor' | 'live' | 'video'
 
+/** Where the photo editor should navigate back to (e.g. after live capture). */
+export type MobileEditorReturnTo = 'live' | null
+
 export type MobileToolCategory =
   | 'face'
   | 'gallery'

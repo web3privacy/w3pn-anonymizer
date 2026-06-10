@@ -30,11 +30,11 @@ export const CATEGORY_ICONS: Record<MobileToolCategory, string> = {
 export const CATEGORY_LABELS: Record<MobileToolCategory, string> = {
   face: 'FACE',
   gallery: 'LIBRARY',
-  zone: 'ZONE',
+  zone: 'TOOLS',
   crop: 'CROP',
   adjust: 'ADJUST',
-  distort: 'DIST',
-  effects: 'FX',
+  distort: 'DISTORT',
+  effects: 'EFFECTS',
   more: 'MORE',
 }
 

@@ -9,8 +9,12 @@
 .logo-motion-idle {
   cursor: pointer;
   touch-action: none;
-  will-change: transform;
+  will-change: transform, opacity;
   transform-origin: center center;
+}
+
+.logo-motion-active-wrap {
+  will-change: opacity;
 }
 
 .logo-motion-idle--hidden {
@@ -58,6 +62,20 @@
 .logo-motion-copy--visible {
   opacity: 1;
   pointer-events: auto;
+}
+
+.logo-motion-copy--wind-down {
+  opacity: 0.28;
+  transition: opacity 2.2s ease;
+  pointer-events: none;
+}
+
+.logo-motion-copy--wind-down .logo-motion-copy-title {
+  color: rgba(0, 255, 120, 0.55);
+}
+
+.logo-motion-copy--wind-down .logo-motion-copy-hint {
+  opacity: 0.35;
 }
 
 .logo-motion-copy-title {

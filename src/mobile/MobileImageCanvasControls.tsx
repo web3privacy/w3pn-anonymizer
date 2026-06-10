@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import { Icon } from '../components/Icon'
 import type { AppMobileBindings } from './bindings'
 import { useHoldRepeat } from '../lib/useHoldRepeat'
@@ -12,7 +12,7 @@ function isEditFrameMode(b: AppMobileBindings): boolean {
   return Boolean(p && !p.isVideo && p.derivedFromVideoId && p.derivedFromVideoTime != null)
 }
 
-export function MobileImageCanvasControls({ b }: MobileImageCanvasControlsProps) {
+export const MobileImageCanvasControls = memo(function MobileImageCanvasControls({ b }: MobileImageCanvasControlsProps) {
   const photo = b.activePhoto
   const editFrame = photo ? isEditFrameMode(b) : false
   const hasZones = b.activeZones.length > 0
@@ -44,9 +44,11 @@ export function MobileImageCanvasControls({ b }: MobileImageCanvasControlsProps)
 
   const zoomStep = (dir: 1 | -1) => b.stepMobileViewZoom(dir)
 
+  const canReturnToLive = b.mobileEditorReturnTo === 'live'
+
   return (
     <div className="mobile-canvas-controls">
-      {!editFrame && libraryPhotos.length > 1 && (
+      {!editFrame && !canReturnToLive && libraryPhotos.length > 1 && (
         <>
           <button
             type="button"
@@ -69,6 +71,18 @@ export function MobileImageCanvasControls({ b }: MobileImageCanvasControlsProps)
         </>
       )}
       <div className="mobile-canvas-top-actions">
+        {canReturnToLive && (
+          <button
+            type="button"
+            className="mobile-canvas-top-btn mobile-canvas-top-btn--back"
+            onClick={b.returnToLiveFromEditor}
+            disabled={busy}
+            aria-label="Back to live camera"
+          >
+            <Icon name="arrow_back" size={16} />
+            <span>BACK</span>
+          </button>
+        )}
         {canUndo && (
           <button
             type="button"
@@ -184,4 +198,4 @@ export function MobileImageCanvasControls({ b }: MobileImageCanvasControlsProps)
       )}
     </div>
   )
-}
+})

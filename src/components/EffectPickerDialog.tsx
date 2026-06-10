@@ -1,15 +1,12 @@
 import { createPortal } from 'react-dom'
 import { Icon } from './Icon'
 import { EMOJI_POOL } from '../lib/effects'
+import { customImagePresetOptions } from '../lib/custom-image-presets'
 import type { CustomImageAsset, CustomImageSource } from '../types'
 
 const CUSTOM_IMAGE_SOURCES: { id: CustomImageSource; label: string }[] = [
   { id: 'custom', label: 'Custom' },
-  { id: 'ui-faces-human', label: 'UI Faces' },
-  { id: 'ui-faces-abstract', label: 'Abstract' },
-  { id: 'cryptopunks', label: 'CryptoPunks' },
-  { id: 'aavegotchi', label: 'Aavegotchi' },
-  { id: 'celebrities', label: 'Celebrities' },
+  ...customImagePresetOptions(),
 ]
 
 export interface EffectPickerDialogProps {

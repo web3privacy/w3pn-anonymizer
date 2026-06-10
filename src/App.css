@@ -2306,6 +2306,67 @@ input[type="number"].tb-quality-num {
 
 .about-modal-close:hover { background: rgba(255, 255, 255, 0.1); color: #fff; }
 
+/* ── Folder/files picker dialog ─────────────────────────────────── */
+.picker-choice-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 280;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(0, 0, 0, 0.58);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+.picker-choice-dialog {
+  position: relative;
+  width: min(420px, 100%);
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 1.35rem 1.25rem 1.15rem;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.48);
+}
+
+.picker-choice-title {
+  margin: 0 2rem 0.4rem 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.picker-choice-desc {
+  margin: 0 0 1rem;
+  max-width: 34rem;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.picker-choice-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.55rem;
+}
+
+.picker-choice-actions .btn {
+  justify-content: center;
+  min-height: 38px;
+}
+
+.picker-choice-primary,
+.picker-choice-secondary {
+  gap: 0.35rem;
+}
+
+@media (max-width: 520px) {
+  .picker-choice-actions {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* ── Feedback dialog (sits above the About overlay) ─────────────────── */
 /* ── Model load progress (toast + home overlay) ─────────────── */
 .model-load-toast,
@@ -2378,7 +2439,7 @@ input[type="number"].tb-quality-num {
 
 @keyframes model-load-spin { to { transform: rotate(360deg); } }
 
-.model-load-toast-body { display: flex; flex-direction: column; gap: 2px; min-width: 150px; flex: 1; }
+.model-load-toast-body { display: flex; flex-direction: column; gap: 2px; min-width: 150px; min-height: 2.6em; flex: 1; }
 .model-load-toast-label { font-size: calc(0.74rem - 4px); letter-spacing: 0.03em; }
 .model-load-toast-bytes {
   font-size: calc(0.68rem - 4px);
@@ -2409,7 +2470,6 @@ input[type="number"].tb-quality-num {
   display: block;
   height: 100%;
   background: var(--accent, #00ff78);
-  transition: width 0.15s ease;
 }
 
 /* ── Detection settings drawer ─────────────────────────────── */
@@ -2742,7 +2802,9 @@ input[type="number"].tb-quality-num {
   height: 14px;
   margin-top: -5px;
   border-radius: 8px;
-  background: var(--accent);
+  background: #fff;
+  border: 1px solid var(--border);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
   cursor: pointer;
 }
 
@@ -2751,9 +2813,10 @@ input[type="number"].tb-quality-num {
 .tb-quality-slider::-moz-range-thumb {
   width: 22px;
   height: 14px;
-  border: none;
+  border: 1px solid var(--border);
   border-radius: 8px;
-  background: var(--accent);
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
   cursor: pointer;
 }
 
@@ -3389,9 +3452,9 @@ input[type="number"].tb-quality-num {
     width: 13px;
     height: 13px;
     border-radius: 50%;
-    background: var(--accent);
-    border: 2px solid #ffffff;
-    box-shadow: 0 0 0 1px rgba(0,180,60,0.4);
+    background: #fff;
+    border: 2px solid var(--border-strong);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
     cursor: pointer;
     margin-top: -5px;
   }
@@ -3399,9 +3462,9 @@ input[type="number"].tb-quality-num {
     width: 13px;
     height: 13px;
     border-radius: 50%;
-    background: var(--accent);
-    border: 2px solid #ffffff;
-    box-shadow: 0 0 0 1px rgba(0,180,60,0.4);
+    background: #fff;
+    border: 2px solid var(--border-strong);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
     cursor: pointer;
   }
   input[type="range"]::-webkit-slider-runnable-track {
@@ -3491,19 +3554,21 @@ input[type="number"].tb-quality-num {
   }
   .ts-slider::-webkit-slider-thumb {
     -webkit-appearance: none;
-    background: var(--accent);
+    background: #fff;
     border: 1px solid var(--border-strong);
     border-radius: 50%;
     width: 14px;
     height: 14px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
     cursor: pointer;
   }
   .ts-slider::-moz-range-thumb {
-    background: var(--accent);
+    background: #fff;
     border: 1px solid var(--border-strong);
     border-radius: 50%;
     width: 14px;
     height: 14px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
     cursor: pointer;
   }
 

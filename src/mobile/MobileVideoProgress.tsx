@@ -14,6 +14,7 @@ function phaseLabel(phase: VideoProcessingPhase): string {
   switch (phase) {
     case 'analyzing': return 'Analyzing faces'
     case 'preparing': return 'Preparing frames'
+    case 'finishing': return 'Finalizing export'
     default: return 'Rendering'
   }
 }

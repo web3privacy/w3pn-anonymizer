@@ -18,6 +18,7 @@ interface PinchZoomOptions {
   onRotationChange?: (rotation: number) => void
   isPanGestureAllowed?: () => boolean
   onPinchStart?: () => void
+  onPinchEnd?: () => void
   onViewTransformChange?: () => void
   minZoom?: number
   maxZoom?: number
@@ -47,6 +48,7 @@ export function usePinchZoom(
     onRotationChange,
     isPanGestureAllowed,
     onPinchStart,
+    onPinchEnd,
     onViewTransformChange,
     minZoom = 0.5,
     maxZoom = 4,
@@ -61,6 +63,8 @@ export function usePinchZoom(
 
   const onPinchStartRef = useRef(onPinchStart)
   onPinchStartRef.current = onPinchStart
+  const onPinchEndRef = useRef(onPinchEnd)
+  onPinchEndRef.current = onPinchEnd
 
   const onViewTransformChangeRef = useRef(onViewTransformChange)
   onViewTransformChangeRef.current = onViewTransformChange
@@ -79,23 +83,37 @@ export function usePinchZoom(
     let panStart: ViewPan = { x: 0, y: 0 }
     let panTouchStart: { x: number; y: number } | null = null
     let panPointerId: number | null = null
+    let pinching = false
 
     const notifyTransform = () => onViewTransformChangeRef.current?.()
 
+    const beginPinch = (e: TouchEvent) => {
+      onPinchStartRef.current?.()
+      pinchStartDist = touchDist(e.touches[0], e.touches[1])
+      pinchStartZoom = zoomRef.current ?? 1
+      pinchStartAngle = touchAngle(e.touches[0], e.touches[1])
+      pinchStartRotation = rotationRef?.current ?? 0
+      pinchStartCenter = touchCenter(e.touches[0], e.touches[1])
+      pinchStartPan = { ...(panRef.current ?? { x: 0, y: 0 }) }
+      panTouchStart = null
+      panPointerId = null
+      pinching = true
+    }
+
+    const resetGesture = () => {
+      const wasPinching = pinching
+      pinchStartDist = 0
+      panTouchStart = null
+      panPointerId = null
+      pinching = false
+      if (wasPinching) onPinchEndRef.current?.()
+    }
+
     const onTouchStart = (e: TouchEvent) => {
       if (e.touches.length === 2) {
-        // Always allow pinch — onPinchStart resets any active draw session.
         e.preventDefault()
-        onPinchStartRef.current?.()
-        pinchStartDist = touchDist(e.touches[0], e.touches[1])
-        pinchStartZoom = zoomRef.current ?? 1
-        pinchStartAngle = touchAngle(e.touches[0], e.touches[1])
-        pinchStartRotation = rotationRef?.current ?? 0
-        pinchStartCenter = touchCenter(e.touches[0], e.touches[1])
-        pinchStartPan = { ...(panRef.current ?? { x: 0, y: 0 }) }
-        panTouchStart = null
-        panPointerId = null
-      } else if (e.touches.length === 1) {
+        beginPinch(e)
+      } else if (e.touches.length === 1 && !pinching) {
         if (isPanGestureAllowed && !isPanGestureAllowed()) return
         panTouchStart = { x: e.touches[0].clientX, y: e.touches[0].clientY }
         panStart = { ...(panRef.current ?? { x: 0, y: 0 }) }
@@ -105,6 +123,7 @@ export function usePinchZoom(
     const onTouchMove = (e: TouchEvent) => {
       if (e.touches.length === 2) {
         e.preventDefault()
+        if (pinchStartDist <= 0) beginPinch(e)
         if (pinchStartDist <= 0) return
         const ratio = touchDist(e.touches[0], e.touches[1]) / pinchStartDist
         const next = Math.min(maxZoom, Math.max(minZoom, pinchStartZoom * ratio))
@@ -132,8 +151,15 @@ export function usePinchZoom(
     }
 
     const onTouchEnd = (e: TouchEvent) => {
-      if (e.touches.length < 2) pinchStartDist = 0
-      if (e.touches.length === 0) panTouchStart = null
+      if (e.touches.length < 2) {
+        pinchStartDist = 0
+        pinching = false
+      }
+      if (e.touches.length === 1 && !pinching) {
+        panTouchStart = { x: e.touches[0].clientX, y: e.touches[0].clientY }
+        panStart = { ...(panRef.current ?? { x: 0, y: 0 }) }
+      }
+      if (e.touches.length === 0) resetGesture()
     }
 
     const onPointerDown = (e: PointerEvent) => {

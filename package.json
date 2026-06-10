@@ -25,8 +25,9 @@
     "icons:normalize": "node scripts/download-preset-icons.mjs --normalize-existing",
     "icons:generate": "node scripts/generate-test-icons.mjs",
     "icons:favicons": "node scripts/generate-favicons.mjs",
+    "release:audit": "node scripts/release-audit.mjs",
     "smoke": "node scripts/release-smoke.mjs",
-    "release:check": "npm run lint && npm run build && npm run smoke"
+    "release:check": "npm run lint && npm run build && npm run smoke && npm run release:audit"
   },
   "build": {
     "appId": "info.web3privacy.anonymizer",
@@ -86,12 +87,17 @@
     "file-saver": "^2.0.5",
     "imagetracerjs": "^1.2.6",
     "jszip": "^3.10.1",
+    "mp4-muxer": "^5.2.2",
     "onnxruntime-web": "^1.25.1",
     "pica": "^9.0.1",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "smartcrop": "^2.0.5",
-    "webm-duration-fix": "^1.0.4"
+    "webm-duration-fix": "^1.0.4",
+    "webm-muxer": "^5.1.4"
+  },
+  "overrides": {
+    "protobufjs": "^7.6.2"
   },
   "devDependencies": {
     "@resvg/resvg-js": "^2.6.2",
@@ -99,8 +105,8 @@
     "@types/pica": "^9.0.5",
     "@types/react": "^18.2.55",
     "@types/react-dom": "^18.2.19",
-    "@typescript-eslint/eslint-plugin": "^6.21.0",
-    "@typescript-eslint/parser": "^6.21.0",
+    "@typescript-eslint/eslint-plugin": "^8.61.0",
+    "@typescript-eslint/parser": "^8.61.0",
     "@vitejs/plugin-react": "^6.0.2",
     "electron": "^41.5.0",
     "electron-builder": "^26.8.1",
@@ -108,9 +114,7 @@
     "eslint-plugin-react-hooks": "^4.6.0",
     "eslint-plugin-react-refresh": "^0.4.5",
     "playwright": "^1.60.0",
-    "potrace": "^2.1.8",
     "sharp": "^0.34.5",
-    "to-ico": "^1.1.5",
     "typescript": "^5.2.2",
     "vite": "^8.0.16"
   }

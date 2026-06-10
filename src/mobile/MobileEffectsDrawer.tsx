@@ -114,14 +114,15 @@ export function MobileEffectsDrawer({ b, liveMode = false }: MobileEffectsDrawer
     if (liveMode || videoEditor) {
       b.setSelectedEffect(efId)
     } else {
+      b.setEffectToolCustomized(true)
       b.updateSelectedZoneEffect(efId)
-      if (efId !== 'custom-image' && efId !== 'emoji') close()
     }
     if (efId === 'emoji') {
       openSubView('emoji')
     } else if (efId === 'custom-image') {
       openSubView('custom-image')
     }
+    // Keep drawer open so the user sees the effect on the image behind the sheet.
   }
 
   const inSub = subView !== null

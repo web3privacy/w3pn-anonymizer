@@ -17,8 +17,8 @@ interface MobileHomeDefaultProps {
 }
 
 export function MobileHomeDefault({ b }: MobileHomeDefaultProps) {
-  const { mode, activate, cancel, isActive } = useOpticalCalibration()
-  const homeBusy = b.isBusy || b.detectorLoading || isActive
+  const { mode, activate, cancel, isCalibratingLayout, isSessionActive, isSettling } = useOpticalCalibration()
+  const homeBusy = b.isBusy || b.detectorLoading || isSessionActive
 
   const enterLive = () => {
     if (b.detectorLoading) return
@@ -27,7 +27,7 @@ export function MobileHomeDefault({ b }: MobileHomeDefaultProps) {
   }
 
   return (
-    <div className={`mobile-home-v2${b.isDragOver ? ' drag-active' : ''}${isActive ? ' home-v2--calibrating' : ''}`}>
+    <div className={`mobile-home-v2${b.isDragOver ? ' drag-active' : ''}${isCalibratingLayout ? ' home-v2--calibrating' : ''}${isSettling ? ' home-v2--settling' : ''}`}>
       <header className="mobile-home-v2-header">
         <a
           href="https://www.web3privacy.info"
@@ -56,7 +56,7 @@ export function MobileHomeDefault({ b }: MobileHomeDefaultProps) {
               onCancel={cancel}
             />
           </div>
-          {!isActive && (
+          {!isSessionActive && (
             <button
               type="button"
               className="mobile-home-v2-wordmark-btn"
@@ -71,38 +71,58 @@ export function MobileHomeDefault({ b }: MobileHomeDefaultProps) {
               />
             </button>
           )}
+          {isSessionActive && (
+            <div className="mobile-home-v2-wordmark-btn mobile-home-v2-cal-placeholder" aria-hidden="true">
+              <img
+                src="/brand/anonymizer-wordmark.png"
+                alt=""
+                className="mobile-home-v2-wordmark"
+                draggable={false}
+              />
+            </div>
+          )}
         </div>
 
-        {!isActive && (
-          <div className="mobile-home-v2-cta">
-            <div className="mobile-home-v2-cta-row">
+        <div className={`mobile-home-v2-cta${isSessionActive ? ' mobile-home-v2-cal-placeholder' : ''}`} aria-hidden={isSessionActive}>
+          {!isSessionActive ? (
+            <>
+              <div className="mobile-home-v2-cta-row">
+                <button
+                  type="button"
+                  className="mobile-cta-primary"
+                  onClick={enterLive}
+                  disabled={homeBusy}
+                >
+                  TURN ON CAMERA
+                </button>
+                <button
+                  type="button"
+                  className="mobile-cta-secondary"
+                  onClick={b.openUnifiedPicker}
+                  disabled={homeBusy}
+                >
+                  SELECT MEDIA
+                </button>
+              </div>
               <button
                 type="button"
-                className="mobile-cta-primary"
-                onClick={enterLive}
+                className="mobile-cta-muted"
+                onClick={b.loadDemoPhotos}
                 disabled={homeBusy}
               >
-                TURN ON CAMERA
+                LOAD DEMO
               </button>
-              <button
-                type="button"
-                className="mobile-cta-secondary"
-                onClick={b.openUnifiedPicker}
-                disabled={homeBusy}
-              >
-                SELECT MEDIA
-              </button>
-            </div>
-            <button
-              type="button"
-              className="mobile-cta-muted"
-              onClick={b.loadDemoPhotos}
-              disabled={homeBusy}
-            >
-              LOAD DEMO
-            </button>
-          </div>
-        )}
+            </>
+          ) : (
+            <>
+              <div className="mobile-home-v2-cta-row">
+                <span className="mobile-cta-primary mobile-home-v2-cal-spacer" />
+                <span className="mobile-cta-secondary mobile-home-v2-cal-spacer" />
+              </div>
+              <span className="mobile-cta-muted mobile-home-v2-cal-spacer" />
+            </>
+          )}
+        </div>
       </div>
     </div>
   )

@@ -34,6 +34,7 @@ export function MobileShell({
 }: MobileShellProps) {
   const showHome = b.photos.length === 0 && b.mobileMode !== 'live'
   const showLive = b.mobileMode === 'live'
+  const selectedProcessableCount = b.photos.filter((p) => b.selectedForBatch.has(p.id) && !p.isVideo).length
 
   // Auto-sync mobileMode with library state. Intentionally overrides stale modes
   // (e.g. home after addRecords, editor/video after activePhoto type change).
@@ -90,6 +91,7 @@ export function MobileShell({
         b.setGalleryBatchSelect(true)
       }}
       onOpenBatch={() => {
+        b.setMobilePanelReturnTo('gallery')
         b.setMobilePanel('batch')
       }}
       onDownloadAllZip={b.exportAllLibraryZip}
@@ -102,8 +104,15 @@ export function MobileShell({
   const batchDrawer = (
     <MobileBatchDrawer
       open={b.mobilePanel === 'batch'}
-      onClose={() => b.setMobilePanel(null)}
-      processCount={b.galleryBatchSelect ? b.selectedForBatch.size : batchProcessCount}
+      onClose={() => {
+        b.setMobilePanel(null)
+        b.setMobilePanelReturnTo(null)
+      }}
+      onBack={b.mobilePanelReturnTo === 'gallery' ? () => {
+        b.setMobilePanel('gallery')
+        b.setMobilePanelReturnTo(null)
+      } : undefined}
+      processCount={b.galleryBatchSelect ? selectedProcessableCount : batchProcessCount}
       onProcess={b.runNormalizeBatch}
       isNormalizing={b.batch.isNormalizing}
       batch={b.batch}

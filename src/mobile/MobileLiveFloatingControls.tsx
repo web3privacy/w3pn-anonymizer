@@ -16,12 +16,7 @@ interface MobileLiveFloatingControlsProps {
   flashActive?: boolean
   flashAvailable?: boolean
   disabled?: boolean
-}
-
-function formatDuration(sec: number): string {
-  const m = Math.floor(sec / 60)
-  const s = sec % 60
-  return `${m}:${s.toString().padStart(2, '0')}`
+  onRecordingChange?: (state: { recording: boolean; elapsedSec: number }) => void
 }
 
 export const MobileLiveFloatingControls = memo(function MobileLiveFloatingControls({
@@ -33,6 +28,7 @@ export const MobileLiveFloatingControls = memo(function MobileLiveFloatingContro
   flashActive,
   flashAvailable,
   disabled,
+  onRecordingChange,
 }: MobileLiveFloatingControlsProps) {
   const recorderRef = useRef(new LiveRecorder())
   const holdStartRef = useRef<number | null>(null)
@@ -66,6 +62,10 @@ export const MobileLiveFloatingControls = memo(function MobileLiveFloatingContro
       onVideoSaved?.(blob, 'video')
     }
   }, [onVideoSaved])
+
+  useEffect(() => {
+    onRecordingChange?.({ recording, elapsedSec })
+  }, [recording, elapsedSec, onRecordingChange])
 
   useEffect(() => {
     if (!recording) return
@@ -189,11 +189,6 @@ export const MobileLiveFloatingControls = memo(function MobileLiveFloatingContro
             </svg>
             <Icon name={recording ? 'stop' : 'photo_camera'} size={28} filled />
           </button>
-          {recording && (
-            <span className="mobile-live-capture-timer" aria-live="polite">
-              {formatDuration(elapsedSec)}
-            </span>
-          )}
         </div>
 
         <div className="mobile-live-capture-side mobile-live-capture-side-right">

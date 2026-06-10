@@ -22,6 +22,7 @@ import { useIsMobile } from './mobile/useIsMobile'
 import { usePinchZoom } from './mobile/usePinchZoom'
 import { usePhotoSwipeNav } from './mobile/usePhotoSwipeNav'
 import { useLockMobileViewport } from './mobile/useLockMobileViewport'
+import { useDialogFocusTrap } from './mobile/useDialogFocusTrap'
 import { MobileAbout } from './mobile/MobileAbout'
 import { MobileLiveMode } from './mobile/MobileLiveMode'
 import { MobileShell } from './mobile/MobileShell'
@@ -31,6 +32,11 @@ import { MobileDrawMaskPanel } from './mobile/MobileDrawMaskPanel'
 import { MobileVideoProgress } from './mobile/MobileVideoProgress'
 import type { AppMobileBindings } from './mobile/bindings'
 import { bakePhotoToCanvas } from './lib/bake-photo-export'
+import {
+  DEFAULT_CUSTOM_IMAGE_PRESET_ID,
+  customImageFolderForSource,
+  customImagePresetOptions,
+} from './lib/custom-image-presets'
 import { exportCanvasToBlob as exportCanvasToBlobLib } from './lib/export-canvas'
 import type { MobileMode, MobilePanel, MobileToolCategory } from './mobile/types'
 import { CROP_TOOLS, EFFECT_TOOL_ORDER, FACE_TOOLS, panelForCategory, ZONE_TOOLS } from './mobile/toolRotation'
@@ -44,11 +50,11 @@ import {
   distortPipelineKey,
   type DistortEffectId,
 } from './lib/distort-effects'
-import { EFFECTS, applyColorAdjustments, applyEffectBrush, applyEffectRect, applyGlitchEffect, colorAdjExportKey, isColorAdjNoop, pickRandomEmoji, pickUniqueEmojis, previewEffectBrush } from './lib/effects'
+import { EFFECTS, applyColorAdjustments, applyEffectBrush, applyEffectRect, applyGlitchEffect, colorAdjExportKey, isColorAdjNoop, pickEmojiFromSeed, pickRandomEmoji, pickUniqueEmojis, previewEffectBrush } from './lib/effects'
 import type { PixelShiftType } from './lib/effects'
 import { canvasToBmpBlob, canvasToGifBlob, canvasToTiffBlob, FORMAT_EXT, isLosslessFormat } from './lib/image-encoders'
 import { canvasToSvg, canvasToSvgBlob, VECTORIZE_PRESETS, DEFAULT_VECTORIZE_PARAMS, type VectorizeParams, type VectorizePreset } from './lib/vectorize'
-import { extractPosterFrame, getSupportedVideoExportOptions, getVideoMetadata, getVideoPipelineCapabilities, mimeTypeToVideoExtension, processVideo, type VideoDistortOptions, type VideoExportFormatId, type VideoFrameOverride, type VideoProcessingPhase, type VideoTimedZone } from './lib/video'
+import { extractPosterFrame, getSupportedVideoExportOptions, getVideoMetadata, getVideoPipelineCapabilities, mimeTypeToVideoExtension, processVideo, VideoFaceTrackStabilizer, type VideoDistortOptions, type VideoExportFormatId, type VideoFrameOverride, type VideoProcessingPhase, type VideoTimedZone } from './lib/video'
 import {
   detectFrameCropFromBlob,
   getCropRectNormalized,
@@ -161,8 +167,18 @@ const hashString = (value: string | number | undefined) => {
 }
 
 const pickCustomImageAssetId = (assets: CustomImageAsset[], seed: string | number) => {
-  if (assets.length === 0) return undefined
-  return assets[Math.abs(hashString(seed)) % assets.length]?.id
+  const ready = assets.filter((asset) => asset.imageBitmap)
+  if (ready.length === 0) return undefined
+  return ready[Math.abs(hashString(seed)) % ready.length]?.id
+}
+
+const brushStampSeed = (photoId: string, imageX: number, imageY: number) =>
+  `${photoId}:${Math.round(imageX)}:${Math.round(imageY)}`
+
+interface BrushStamp {
+  seed: string
+  emoji: string
+  customImageAssetId?: string
 }
 
 import { MOBILE_BREAKPOINT_PX } from './mobile/types'
@@ -689,6 +705,8 @@ function App() {
   const [isExporting, setIsExporting] = useState(false)
   const [localProcessingMs, setLocalProcessingMs] = useState<number | null>(null)
   const [lastDetectFailed, setLastDetectFailed] = useState(false)
+  const [zoneToolCustomized, setZoneToolCustomized] = useState(false)
+  const [effectToolCustomized, setEffectToolCustomized] = useState(false)
   const [isNormalizing, setIsNormalizing] = useState(false)
   const [notice, setNotice] = useState('Load photos to get started.')
   void notice // kept for setNotice side-effects (error messages, etc.) — not displayed in toolbar
@@ -715,10 +733,13 @@ function App() {
   const [batchPanelOpen, setBatchPanelOpen] = useState(false)   // replaces normPanelOpen
   const [aboutOpen, setAboutOpen] = useState(false)
   const [feedbackOpen, setFeedbackOpen] = useState(false)
+  const [pickerChoiceOpen, setPickerChoiceOpen] = useState(false)
   const [mobileMode, setMobileMode] = useState<MobileMode>('home')
   const [mobileEditorSlideIn, setMobileEditorSlideIn] = useState(false)
   const [desktopLiveOpen, setDesktopLiveOpen] = useState(false)
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>(null)
+  const [mobilePanelReturnTo, setMobilePanelReturnTo] = useState<MobilePanel>(null)
+  const [mobileEditorReturnTo, setMobileEditorReturnTo] = useState<import('./mobile/types').MobileEditorReturnTo>(null)
   const [galleryBatchSelect, setGalleryBatchSelect] = useState(false)
   const [liveDetectEnabled, setLiveDetectEnabled] = useState(true)
   const [mobileViewZoom, setMobileViewZoom] = useState(1)
@@ -882,6 +903,8 @@ function App() {
 
   const uploadInputRef = useRef<HTMLInputElement>(null)
   const folderInputRef = useRef<HTMLInputElement>(null)
+  const pickerChoiceDialogRef = useRef<HTMLDivElement>(null)
+  const pickerChoiceFolderBtnRef = useRef<HTMLButtonElement>(null)
   const viewportRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null)
@@ -899,6 +922,7 @@ function App() {
   const brushActiveRef = useRef(false)
   const brushLastApplyRef = useRef(0)
   const brushEmojiRef = useRef('')
+  const brushStampLockRef = useRef<BrushStamp | null>(null)
   const photosRef = useRef<PhotoItem[]>([])
   const lastAddedPhotoIdRef = useRef<string | null>(null)
   const normalizeCancelRef = useRef(false)
@@ -922,7 +946,10 @@ function App() {
   const videoFaceDetectDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const videoFaceDetectGenRef = useRef(0)
   const videoFaceDetectCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  const videoPreviewStabilizerRef = useRef(new VideoFaceTrackStabilizer())
   const videoMediaRef = useRef<HTMLDivElement | null>(null)
+  const mobilePreviewTransformRef = useRef<HTMLDivElement | null>(null)
+  const mobilePinchActiveRef = useRef(false)
   const activeVideoTimeRef = useRef(0)
   const pendingVideoSeekRef = useRef<number | null>(null)
   const [videoPreviewFaceZones, setVideoPreviewFaceZones] = useState<Zone[]>([])
@@ -1100,13 +1127,29 @@ function App() {
     if (isDirty && qualityPreviewCanvasRef.current) { qualityPreviewCanvasRef.current.width = 0 }
   }, [activePhotoId])
 
-  const customEffectOptions = useCallback((zone?: Zone | null, seed?: string | number): EffectRenderOptions => ({
+  const customEffectOptions = useCallback((
+    zone?: Zone | null,
+    seed?: string | number,
+    customImageAssetId?: string,
+  ): EffectRenderOptions => ({
     customImages: customImageAssets,
     customImageSource,
-    customImageAssetId: zone?.customImageAssetId,
+    customImageAssetId: customImageAssetId ?? zone?.customImageAssetId,
     zoneId: zone?.id,
     seed: seed ?? zone?.id ?? activePhotoId ?? 'custom-image',
   }), [activePhotoId, customImageAssets, customImageSource])
+
+  const resolveBrushStamp = useCallback((pointer: PointerMap): BrushStamp => {
+    const photoId = activePhotoIdRef.current ?? 'photo'
+    const seed = brushStampSeed(photoId, pointer.imageX, pointer.imageY)
+    const emoji = !emojiRandomRef.current && selectedEmojiRef.current
+      ? selectedEmojiRef.current
+      : pickEmojiFromSeed(seed)
+    const customImageAssetId = selectedEffectRef.current === 'custom-image'
+      ? resolveCustomImageAssetId(seed)
+      : undefined
+    return { seed, emoji, customImageAssetId }
+  }, [resolveCustomImageAssetId])
 
   const createCustomImageAssets = useCallback(async (files: File[] | Blob[], names?: string[]) => {
     const accepted = files.filter((file) => file.type.startsWith('image/'))
@@ -1165,14 +1208,7 @@ function App() {
       })
       return
     }
-    const folderBySource: Partial<Record<CustomImageSource, string>> = {
-      'ui-faces-human': 'human',
-      'ui-faces-abstract': 'abstract',
-      cryptopunks: 'punks',
-      aavegotchi: 'aavegotchi',
-      celebrities: 'celebrities',
-    }
-    const folder = folderBySource[source]
+    const folder = customImageFolderForSource(source)
     if (!folder) return
     const base = `/custom-images/${folder}`
     setCustomImagePresetLoading(true)
@@ -1294,9 +1330,30 @@ function App() {
     const canvas = canvasRef.current
     const t = transformRef.current
     if (!canvas || t.drawWidth <= 0 || t.drawHeight <= 0) return null
-    const bounds = canvas.getBoundingClientRect()
-    const canvasX = clientX - bounds.left
-    const canvasY = clientY - bounds.top
+    const useMobileCssView = isMobile && activePhotoRef.current && !activePhotoRef.current.isVideo
+    const bounds = (useMobileCssView ? viewportRef.current : canvas)?.getBoundingClientRect()
+    if (!bounds || bounds.width <= 0 || bounds.height <= 0) return null
+    let canvasX = clientX - bounds.left
+    let canvasY = clientY - bounds.top
+    if (useMobileCssView) {
+      const cx = t.centerX ?? bounds.width / 2
+      const cy = t.centerY ?? bounds.height / 2
+      const zoom = mobileViewZoomRef.current
+      const pan = mobileViewPanRef.current
+      const rot = mobileViewRotationRef.current
+      canvasX -= pan.x
+      canvasY -= pan.y
+      let lx = canvasX - cx
+      let ly = canvasY - cy
+      const cos = Math.cos(-rot)
+      const sin = Math.sin(-rot)
+      const rx = lx * cos - ly * sin
+      const ry = lx * sin + ly * cos
+      lx = rx / zoom
+      ly = ry / zoom
+      canvasX = lx + cx
+      canvasY = ly + cy
+    }
     let normalizedX: number
     let normalizedY: number
     if (t.rotation != null && t.centerX != null && t.centerY != null) {
@@ -1317,6 +1374,16 @@ function App() {
     normalizedX = clamp(normalizedX, 0, 1)
     normalizedY = clamp(normalizedY, 0, 1)
     return { canvasX, canvasY, imageX: normalizedX * t.imageWidth, imageY: normalizedY * t.imageHeight, normalizedX, normalizedY }
+  }, [isMobile])
+
+  const applyMobilePreviewTransform = useCallback(() => {
+    const el = mobilePreviewTransformRef.current
+    if (!el) return
+    const t = transformRef.current
+    const cx = t.centerX ?? 0
+    const cy = t.centerY ?? 0
+    el.style.transformOrigin = `${cx}px ${cy}px`
+    el.style.transform = `translate(${mobileViewPanRef.current.x}px, ${mobileViewPanRef.current.y}px) rotate(${mobileViewRotationRef.current}rad) scale(${mobileViewZoomRef.current})`
   }, [])
 
   const syncOverlayLayout = useCallback(() => {
@@ -1422,12 +1489,13 @@ function App() {
     }
 
     const baseScale = Math.min(cssWidth / source.width, cssHeight / source.height)
-    const viewZoom = mobileViewZoomRef.current
+    const useMobileCssView = isMobile && activePhoto && !activePhoto.isVideo
+    const viewZoom = useMobileCssView ? 1 : mobileViewZoomRef.current
     const scale = baseScale * viewZoom
     const drawWidth = source.width * scale
     const drawHeight = source.height * scale
-    const pan = mobileViewPanRef.current
-    const viewRot = mobileViewRotationRef.current
+    const pan = useMobileCssView ? { x: 0, y: 0 } : mobileViewPanRef.current
+    const viewRot = useMobileCssView ? 0 : mobileViewRotationRef.current
     const centerX = cssWidth / 2 + pan.x
     const centerY = cssHeight / 2 + pan.y
     const absCos = Math.abs(Math.cos(viewRot))
@@ -1467,12 +1535,14 @@ function App() {
 
     ctx.restore()
     syncOverlayLayout()
+    if (useMobileCssView) applyMobilePreviewTransform()
 
   }, [
     activePhoto, activeNormalizeCrop, effectiveZones, adjFlyoutOpen, adjTransform, batchPanelOpen,
     colorAdj, colorPanelOpen, draftZone, enabledDistorts, exportFormat, isMobile, isNormalizeCropPicking, transformPanelOpen,
     normalizeCropDraft, normalizeSettings.cropMode, selectedZoneId, showBoxes, effectiveTheme, mobileViewZoom, mobileViewPan, mobileViewRotation, transformPanelOpen, mobileExportDraft,
     syncOverlayLayout,
+    applyMobilePreviewTransform,
   ])
 
   const renderCanvasRef = useRef(renderCanvas)
@@ -1574,6 +1644,7 @@ function App() {
       applyOriginalEraserAtPointer(pointer)
       return
     }
+    const stamp = brushStampLockRef.current ?? resolveBrushStamp(pointer)
     applyEffectBrush(
       ctx,
       selectedEffect,
@@ -1581,12 +1652,12 @@ function App() {
       pointer.imageY,
       radius,
       brushStrength,
-      brushEmojiRef.current,
-      customEffectOptions(null, `${activePhoto.id}:${Math.round(pointer.imageX)}:${Math.round(pointer.imageY)}`),
+      stamp.emoji,
+      customEffectOptions(null, stamp.seed, stamp.customImageAssetId),
     )
     setActiveDirty(true)
     renderCanvasRef.current()
-  }, [activePhoto, applyOriginalEraserAtPointer, brushStrength, customEffectOptions, getWorkCtx, selectedEffect, setActiveDirty])
+  }, [activePhoto, applyOriginalEraserAtPointer, brushStrength, customEffectOptions, getWorkCtx, resolveBrushStamp, selectedEffect, setActiveDirty])
 
   const drawBrushPreview = useCallback((pointer: PointerMap | null) => {
     const overlay = overlayCanvasRef.current
@@ -1606,15 +1677,18 @@ function App() {
     const sz = brushSizeRef.current
 
     if (!eraserActiveRef.current) {
+      const stamp = pointerSessionRef.current.mode === 'brush' && brushStampLockRef.current
+        ? brushStampLockRef.current
+        : resolveBrushStamp(pointer)
       previewEffectBrush(
         octx, workCanvas,
         selectedEffect,
         pointer.canvasX, pointer.canvasY,
         sz,
         brushStrength,
-        brushEmojiRef.current,
+        stamp.emoji,
         t,
-        customEffectOptions(null, activePhoto.id),
+        customEffectOptions(null, stamp.seed, stamp.customImageAssetId),
       )
     }
 
@@ -1632,7 +1706,7 @@ function App() {
     octx.arc(pointer.canvasX, pointer.canvasY, sz, 0, Math.PI * 2)
     octx.stroke()
     octx.restore()
-  }, [activePhoto, brushStrength, customEffectOptions, selectedEffect, toolMode])
+  }, [activePhoto, brushStrength, customEffectOptions, resolveBrushStamp, selectedEffect, toolMode])
 
   const pushUndo = useCallback(() => {
     const wc = workCanvasRef.current
@@ -1884,6 +1958,8 @@ function App() {
     setEffectFlyoutOpen(false)
     setLocalProcessingMs(null)
     setLastDetectFailed(false)
+    setZoneToolCustomized(false)
+    setEffectToolCustomized(false)
     setAdjFlyoutOpen(false)
     setTransformFlyoutOpen(false)
     if (isMobile) {
@@ -1910,47 +1986,38 @@ function App() {
     }
   }, [activePhotoId, applyVideoDistortSettings, colorAdjByPhoto, commitWorkCanvasToBlob, dirtyByPhoto, distortSettingsByVideoId, isMobile, photos, setActiveDirty, snapshotVideoDistortSettings])
 
-  // ── Unified picker: opens files OR folder depending on browser support ──
-  const openUnifiedPicker = useCallback(async () => {
-    const hasFSA = typeof (window as Window & { showOpenFilePicker?: unknown }).showOpenFilePicker === 'function'
-    const hasDirPicker = typeof (window as Window & { showDirectoryPicker?: unknown }).showDirectoryPicker === 'function'
-
-    if (hasDirPicker) {
-      // Show a quick choice
-      const choice = window.confirm('Open a folder? (OK = folder, Cancel = individual files)')
-      if (choice) {
-        // Open folder with write access
-        setIsBusy(true)
-        try {
-          const picker = (window as Window & { showDirectoryPicker?: () => Promise<FileSystemDirectoryHandle> }).showDirectoryPicker!
-          const root = await picker()
-          const records: InputRecord[] = []
-          const walk = async (dir: FileSystemDirectoryHandle, prefix = '') => {
-            const iterable = dir as unknown as {
-              entries?: () => AsyncIterable<[string, FileSystemFileHandle | FileSystemDirectoryHandle]>
-              values?: () => AsyncIterable<FileSystemFileHandle | FileSystemDirectoryHandle>
-            }
-            const handle = async (entry: FileSystemFileHandle | FileSystemDirectoryHandle) => {
-              if (entry.kind === 'file') {
-                const f = await entry.getFile()
-                if (!isMediaFile(f)) return
-                records.push({ file: f, name: `${prefix}${entry.name}`, source: 'local-folder', handle: entry })
-              } else if (entry.kind === 'directory') {
-                await walk(entry, `${prefix}${entry.name}/`)
-              }
-            }
-            if (iterable.entries) { for await (const [, e] of iterable.entries()) await handle(e); return }
-            if (iterable.values) { for await (const e of iterable.values()) await handle(e) }
+  const openFolderPicker = useCallback(async () => {
+    setIsBusy(true)
+    try {
+      const picker = (window as Window & { showDirectoryPicker?: () => Promise<FileSystemDirectoryHandle> }).showDirectoryPicker!
+      const root = await picker()
+      const records: InputRecord[] = []
+      const walk = async (dir: FileSystemDirectoryHandle, prefix = '') => {
+        const iterable = dir as unknown as {
+          entries?: () => AsyncIterable<[string, FileSystemFileHandle | FileSystemDirectoryHandle]>
+          values?: () => AsyncIterable<FileSystemFileHandle | FileSystemDirectoryHandle>
+        }
+        const handle = async (entry: FileSystemFileHandle | FileSystemDirectoryHandle) => {
+          if (entry.kind === 'file') {
+            const f = await entry.getFile()
+            if (!isMediaFile(f)) return
+            records.push({ file: f, name: `${prefix}${entry.name}`, source: 'local-folder', handle: entry })
+          } else if (entry.kind === 'directory') {
+            await walk(entry, `${prefix}${entry.name}/`)
           }
-          await walk(root)
-          addRecords(records)
-          setNotice(records.length > 0 ? `Folder loaded (${records.length} photos, disk write enabled).` : 'No photos found.')
-        } catch { setNotice('Folder loading cancelled.') }
-        finally { setIsBusy(false) }
-        return
+        }
+        if (iterable.entries) { for await (const [, e] of iterable.entries()) await handle(e); return }
+        if (iterable.values) { for await (const e of iterable.values()) await handle(e) }
       }
-    }
+      await walk(root)
+      addRecords(records)
+      setNotice(records.length > 0 ? `Folder loaded (${records.length} photos, disk write enabled).` : 'No photos found.')
+    } catch { setNotice('Folder loading cancelled.') }
+    finally { setIsBusy(false) }
+  }, [addRecords])
 
+  const openFilePicker = useCallback(async () => {
+    const hasFSA = typeof (window as Window & { showOpenFilePicker?: unknown }).showOpenFilePicker === 'function'
     if (hasFSA) {
       // Use modern file picker
       try {
@@ -1969,6 +2036,21 @@ function App() {
     // Fallback: plain input
     uploadInputRef.current?.click()
   }, [addRecords])
+
+  // ── Unified picker: opens files OR folder depending on browser support ──
+  const openUnifiedPicker = useCallback(async () => {
+    const hasDirPicker = typeof (window as Window & { showDirectoryPicker?: unknown }).showDirectoryPicker === 'function'
+    if (hasDirPicker && !isMobile) {
+      setPickerChoiceOpen(true)
+      return
+    }
+    await openFilePicker()
+  }, [isMobile, openFilePicker])
+
+  useDialogFocusTrap(pickerChoiceOpen, pickerChoiceDialogRef, {
+    initialFocusRef: pickerChoiceFolderBtnRef,
+    onClose: () => setPickerChoiceOpen(false),
+  })
 
   const handleUploadInput = useCallback((e: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? [])
@@ -2011,7 +2093,9 @@ function App() {
       const elapsed = Math.round(performance.now() - t0)
       setLocalProcessingMs(elapsed)
       if (boxes.length === 0) {
-        setLastDetectFailed(true)
+        setLastDetectFailed(false)
+        setZonesByPhoto((cur) => ({ ...cur, [photoId]: [] }))
+        setSelectedZoneId(null)
         setNotice(`No faces detected. (${elapsed} ms locally)`)
         return
       }
@@ -2437,6 +2521,12 @@ function App() {
   const processActiveVideo = useCallback(async () => {
     if (!activePhoto?.isVideo) return
     if (videoAbortRef.current) return
+    const exportEffect = selectedEffectRef.current
+    const exportAssets = customImageAssetsRef.current
+    if (exportEffect === 'custom-image' && exportAssets.filter((a) => a.imageBitmap).length === 0) {
+      setNotice('Load a custom image library before anonymizing video.')
+      return
+    }
     const selectedContainer = videoExportOptions.find((opt) => opt.id === videoExportFormat)
     if (!selectedContainer?.supported) {
       setNotice(`Video format ${videoExportFormat.toUpperCase()} is not supported in this browser.`)
@@ -2452,24 +2542,35 @@ function App() {
       requestAnimationFrame(() => { requestAnimationFrame(() => resolve()) })
     })
     try {
+      // Snapshot editor settings after UI settles — same sources as live video preview.
+      const effect = selectedEffectRef.current
+      const strength = brushStrengthRef.current
+      const activeDistorts = getActiveDistorts()
+      const exportColorAdj = colorAdj
+      const exportDistortStrengths = { ...distortStrengthByEffect }
+      const exportDistortParams = { ...adjTransformParams }
+      const exportPixelShiftType = adjPixelShiftType
       const sourceVideoBlob = originalBlobByPhoto[activePhoto.id] ?? activePhoto.blob
       const manualOverrides = videoFrameOverridesByPhoto[activePhoto.id] ?? []
       const timedZones = videoTimedZonesByPhoto[activePhoto.id] ?? []
-      const videoDistort: VideoDistortOptions | undefined = enabledDistorts.length > 0
+      const videoDistort: VideoDistortOptions | undefined = activeDistorts.length > 0
         ? {
-            enabled: enabledDistorts,
-            strengths: distortStrengthByEffect,
-            params: adjTransformParams,
-            pixelShiftType: adjPixelShiftType,
+            enabled: activeDistorts,
+            strengths: exportDistortStrengths,
+            params: exportDistortParams,
+            pixelShiftType: exportPixelShiftType,
           }
         : undefined
-      const videoColorAdj = !isColorAdjNoop(colorAdj) ? colorAdj : undefined
+      const videoColorAdj = !isColorAdjNoop(exportColorAdj) ? exportColorAdj : undefined
       const resultBlob = await processVideo(sourceVideoBlob, {
-        effect: selectedEffect,
-        strength: brushStrength,
-        emoji: (!emojiRandom && selectedEmoji) ? selectedEmoji : pickRandomEmoji(),
-        fixedEmoji: (!emojiRandom && selectedEmoji) ? selectedEmoji : undefined,
-        customImages: customImageAssets,
+        effect,
+        strength,
+        emoji: (!emojiRandomRef.current && selectedEmojiRef.current) ? selectedEmojiRef.current : pickRandomEmoji(),
+        fixedEmoji: (!emojiRandomRef.current && selectedEmojiRef.current) ? selectedEmojiRef.current : undefined,
+        fixedCustomImageId: (!customImageRandomRef.current && selectedCustomImageIdRef.current)
+          ? selectedCustomImageIdRef.current
+          : undefined,
+        customImages: customImageAssetsRef.current,
         customImageSource,
         outputFormat: videoExportFormat,
         frameOverrides: manualOverrides,
@@ -2480,8 +2581,15 @@ function App() {
           current: prev?.current ?? 0,
           total: prev?.total ?? 1,
           phase,
-          renderFrame: prev?.renderFrame,
+          renderFrame: phase === 'finishing' ? prev?.renderFrame : prev?.renderFrame,
           renderTotal: prev?.renderTotal,
+        })),
+        onRenderFrame: ({ frameIndex, totalFrames }) => setVideoProgress((prev) => ({
+          current: prev?.current ?? 0,
+          total: prev?.total ?? totalFrames,
+          phase: 'rendering',
+          renderFrame: frameIndex,
+          renderTotal: totalFrames,
         })),
         onProgress: (current, total) => setVideoProgress((prev) => ({
           current,
@@ -2521,18 +2629,20 @@ function App() {
       setVideoExportedDistortKeyByPhoto((cur) => ({
         ...cur,
         [activePhoto.id]: distortPipelineKey(
-          enabledDistorts,
-          distortStrengthByEffect,
-          adjTransformParams,
-          adjPixelShiftType,
+          activeDistorts,
+          exportDistortStrengths,
+          exportDistortParams,
+          exportPixelShiftType,
         ),
       }))
       setVideoExportedColorAdjKeyByPhoto((cur) => ({
         ...cur,
-        [activePhoto.id]: colorAdjExportKey(colorAdj),
+        [activePhoto.id]: colorAdjExportKey(exportColorAdj),
       }))
       setActiveVideoTime(0)
       setVideoPreviewFaceZones([])
+      setAutoDetect(false)
+      setShowBoxes(false)
       setProcessedVideoEpoch((epoch) => epoch + 1)
       setVideoReadyTick((tick) => tick + 1)
       setNotice(`Video processed successfully as ${selectedContainer.label}. ${manualSummary ? `${manualSummary} baked in.` : 'Preview updated.'}`)
@@ -2550,7 +2660,7 @@ function App() {
       if (videoDistortPreviewCanvasRef.current) videoDistortPreviewCanvasRef.current.width = 0
       setVideoDistortPreviewVisible(false)
     }
-  }, [activePhoto, adjPixelShiftType, adjTransformParams, brushStrength, colorAdj, customImageAssets, customImageSource, distortStrengthByEffect, enabledDistorts, emojiRandom, isMobile, originalBlobByPhoto, selectedEffect, selectedEmoji, videoExportFormat, videoExportOptions, videoFrameOverridesByPhoto, videoTimedZonesByPhoto])
+  }, [activePhoto, adjPixelShiftType, adjTransformParams, colorAdj, customImageSource, distortStrengthByEffect, getActiveDistorts, isMobile, originalBlobByPhoto, videoExportFormat, videoExportOptions, videoFrameOverridesByPhoto, videoTimedZonesByPhoto])
 
   const cancelVideoProcessing = useCallback(() => {
     videoAbortRef.current?.abort()
@@ -2859,22 +2969,28 @@ function App() {
 
   const exportZip = useCallback(async () => {
     if (photos.length === 0) return
+    const images = photos.filter((p) => !p.isVideo)
+    const skippedVideos = photos.length - images.length
+    if (images.length === 0) {
+      setNotice('No photos to export. Use video export for videos.')
+      return
+    }
     setIsExporting(true)
     try {
       const zip = new JSZip()
       const usage = new Map<string, number>()
-      // Strip metadata from images; videos stay as-is (re-encoded exports are already metadata-free)
-      await Promise.all(photos.map(async (p) => {
-        if (p.isVideo) {
-          zip.file(makeZipSafeName(p.name, usage), p.blob)
-          return
-        }
+      // Strip metadata from images. Videos use the dedicated video export path.
+      await Promise.all(images.map(async (p) => {
         const clean = await stripMetadata(p.blob)
         zip.file(makeZipSafeName(p.name, usage), clean)
       }))
       const blob = await zip.generateAsync({ type: 'blob' })
       saveAs(blob, `anonymized-${new Date().toISOString().slice(0, 10)}.zip`)
-      setNotice(`ZIP: ${photos.length} file${photos.length === 1 ? '' : 's'}.`)
+      setNotice(
+        skippedVideos > 0
+          ? `ZIP: ${images.length} photo${images.length === 1 ? '' : 's'} · ${skippedVideos} video${skippedVideos === 1 ? '' : 's'} skipped.`
+          : `ZIP: ${images.length} photo${images.length === 1 ? '' : 's'}.`,
+      )
     } catch { setNotice('ZIP export failed.') }
     finally { setIsExporting(false) }
   }, [photos])
@@ -2890,7 +3006,7 @@ function App() {
   }, [])
 
   const selectAllForBatch = useCallback(() => {
-    setSelectedForBatch(new Set(photos.map((p) => p.id)))
+    setSelectedForBatch(new Set(photos.filter((p) => !p.isVideo).map((p) => p.id)))
   }, [photos])
 
   const deselectAllForBatch = useCallback(() => {
@@ -2902,8 +3018,8 @@ function App() {
     const s = normalizeSettings
     if (s.cropMode === 'template' && !s.templateCropNormalized) { setNotice('Set a crop template first.'); return }
     const batch = selectedForBatch.size > 0
-      ? photos.filter((p) => selectedForBatch.has(p.id))
-      : photos
+      ? photos.filter((p) => selectedForBatch.has(p.id) && !p.isVideo)
+      : photos.filter((p) => !p.isVideo)
     if (batch.length === 0) { setNotice('No photos selected for batch.'); return }
     const concurrency = Math.max(1, Math.min(8, Math.floor(Number.isFinite(s.batchConcurrency) ? s.batchConcurrency : 1)))
     normalizeCancelRef.current = false
@@ -3284,6 +3400,10 @@ function App() {
       setVideoDistortPreviewVisible(false)
     }
     const photo = activePhotoRef.current
+    if (photo?.isVideo && photo.edited) {
+      clearPreview()
+      return
+    }
     const faceZones = videoPreviewFaceZonesRef.current
     const hasFaceZones = faceZones.length > 0
     const activeDistorts = getActiveDistorts()
@@ -3409,9 +3529,47 @@ function App() {
     autoDetect,
   ])
 
+  // During playback, timeupdate fires ~4×/s — use rVFC so the effect overlay updates every frame.
+  useEffect(() => {
+    const video = activeVideoRef.current
+    const photo = activePhoto
+    if (!video || !photo?.isVideo || photo.edited || videoProcessing || !videoPlaying) return
+
+    let cancelled = false
+    let callbackId = 0
+
+    const onFrame = (_now: number, metadata: VideoFrameCallbackMetadata) => {
+      if (cancelled || video.paused || video.ended) return
+      activeVideoTimeRef.current = metadata.mediaTime
+      void refreshVideoFramePreview()
+      if (typeof video.requestVideoFrameCallback === 'function') {
+        callbackId = video.requestVideoFrameCallback(onFrame)
+      }
+    }
+
+    if (typeof video.requestVideoFrameCallback === 'function') {
+      callbackId = video.requestVideoFrameCallback(onFrame)
+    }
+
+    return () => {
+      cancelled = true
+      if (callbackId && typeof video.cancelVideoFrameCallback === 'function') {
+        video.cancelVideoFrameCallback(callbackId)
+      }
+    }
+  }, [
+    videoPlaying,
+    activePhoto?.id,
+    activePhoto?.isVideo,
+    activePhoto?.edited,
+    videoProcessing,
+    refreshVideoFramePreview,
+  ])
+
   const setSelectedEffect = useCallback((effect: AnonymizeEffectId) => {
     selectedEffectRef.current = effect
     setSelectedEffectState(effect)
+    if (effect === 'custom-image') setBrushStrength(1)
   }, [])
 
   // Transform live preview: recompute from workCanvas whenever transform params change in adj flyout
@@ -3443,7 +3601,7 @@ function App() {
         tc.getContext('2d')!.drawImage(result, 0, 0)
         renderCanvasRef.current()
       } catch { /* ignore */ }
-    }, 40)
+    }, isMobile && mobilePanel === 'tool-distort' ? 0 : 40)
     return () => { if (transformPreviewDebounceRef.current) clearTimeout(transformPreviewDebounceRef.current) }
    
   }, [adjFlyoutOpen, transformPanelOpen, mobilePanel, adjTransform, enabledDistorts, distortStrengthByEffect, adjTransformParams, adjPixelShiftType, activePhoto?.id, isMobile])
@@ -3470,29 +3628,36 @@ function App() {
       if (Math.abs(video.currentTime - targetTime) > 0.12) return
       const W = capture.width
       const H = capture.height
-      const offsetPct = detectSettingsRef.current.faceOffset
-      if (boxes.length === 0) {
-        if (passIndex === 0) setVideoPreviewFaceZones([])
-        return
-      }
-      const emojis = pickUniqueEmojis(boxes.length)
+      const emojis = pickUniqueEmojis(Math.max(boxes.length, 1))
+      let emojiIdx = 0
+      const nextEmoji = () => (
+        emojiRandomRef.current
+          ? emojis[Math.min(emojiIdx++, emojis.length - 1)]
+          : (selectedEmojiRef.current ?? emojis[0])
+      )
+      const stabilized = videoPreviewStabilizerRef.current.update(
+        boxes,
+        W,
+        H,
+        targetTime,
+        selectedEffect,
+        nextEmoji,
+      )
       const frameKey = Math.round(targetTime * 1000)
       const dismissed = videoDismissedFacesByPhotoRef.current[activePhotoId ?? '']?.[frameKey] ?? []
-      const zones: Zone[] = boxes.map((b, i) => {
-        const detectX = b.x / W
-        const detectY = b.y / H
-        const detectWidth = b.width / W
-        const detectHeight = b.height / H
-        const expanded = expandPixelBox(b.x, b.y, b.width, b.height, W, H, offsetPct)
+      const VIDEO_FACE_PAD = 0.46
+      const zones: Zone[] = stabilized.map((base, i) => {
+        const innerW = base.width / (1 + 2 * VIDEO_FACE_PAD)
+        const innerH = base.height / (1 + 2 * VIDEO_FACE_PAD)
+        const padXn = (base.width - innerW) / 2
+        const padYn = (base.height - innerH) / 2
         return {
+          ...base,
           id: createId(),
-          ...expanded,
-          detectX,
-          detectY,
-          detectWidth,
-          detectHeight,
-          effect: selectedEffect,
-          emoji: emojiRandomRef.current ? emojis[i] : (selectedEmojiRef.current ?? emojis[i]),
+          detectX: base.x + padXn,
+          detectY: base.y + padYn,
+          detectWidth: innerW,
+          detectHeight: innerH,
           customImageAssetId: selectedEffect === 'custom-image'
             ? resolveCustomImageAssetId(`${activePhotoId ?? 'video'}-${i}`)
             : undefined,
@@ -3511,7 +3676,8 @@ function App() {
     videoFaceScanTimersRef.current = []
     if (videoFaceDetectDebounceRef.current) clearTimeout(videoFaceDetectDebounceRef.current)
 
-    if (!activePhoto?.isVideo || !autoDetect || detector.mode === 'unavailable') {
+    if (!activePhoto?.isVideo || !autoDetect || activePhoto.edited || detector.mode === 'unavailable') {
+      videoPreviewStabilizerRef.current.reset()
       setVideoPreviewFaceZones([])
       return
     }
@@ -3540,6 +3706,7 @@ function App() {
       videoFaceScanTimersRef.current = []
     }
   }, [
+    activePhoto?.edited,
     activePhoto?.id,
     activePhoto?.isVideo,
     activeVideoTime,
@@ -3552,6 +3719,10 @@ function App() {
     selectedEffect,
     videoReadyTick,
   ])
+
+  useEffect(() => {
+    videoPreviewStabilizerRef.current.reset()
+  }, [activePhotoId])
 
   const seekActiveVideo = useCallback((timeSec: number) => {
     const video = activeVideoRef.current
@@ -3788,7 +3959,9 @@ function App() {
     }
     if (toolMode === 'brush') {
       pushUndo()
-      brushEmojiRef.current = resolveEmoji()
+      const stamp = resolveBrushStamp(mapped)
+      brushStampLockRef.current = stamp
+      brushEmojiRef.current = stamp.emoji
       pointerSessionRef.current = { mode: 'brush', lastPointer: mapped }
       setCursorPoint({ x: mapped.canvasX, y: mapped.canvasY })
       brushLastApplyRef.current = 0
@@ -3824,7 +3997,7 @@ function App() {
         : undefined,
     })
     setSelectedZoneId(null)
-  }, [activePhoto, effectiveZones, applyBrushAtPointer, activeCategory, batchPanelOpen, customImageAssets, isMobile, isNormalizeCropPicking, mapPointerToImage, normalizeSettings.cropMode, pushUndo, selectedEffect, startBrushLoop, toolMode])
+  }, [activePhoto, effectiveZones, applyBrushAtPointer, activeCategory, batchPanelOpen, customImageAssets, isMobile, isNormalizeCropPicking, mapPointerToImage, normalizeSettings.cropMode, pushUndo, resolveBrushStamp, selectedEffect, startBrushLoop, toolMode])
 
   const handleCanvasPointerMove = useCallback((event: ReactPointerEvent<HTMLCanvasElement>) => {
     const session = pointerSessionRef.current
@@ -3914,6 +4087,7 @@ function App() {
     const s = pointerSessionRef.current
     if (s.mode === 'brush') {
       stopBrushLoop()
+      brushStampLockRef.current = null
       const overlay = overlayCanvasRef.current
       if (overlay) {
         const octx = overlay.getContext('2d')
@@ -4032,6 +4206,7 @@ function App() {
   const updateSelectedZoneEffect = useCallback((effect: AnonymizeEffectId) => {
     selectedEffectRef.current = effect
     setSelectedEffectState(effect)
+    if (effect === 'custom-image') setBrushStrength(1)
     setEraserActive(false)
     setEffectFlyoutOpen(false)
     setToolMode(lastZoneTool === 'rectangle' ? 'zone' : 'brush')
@@ -4082,10 +4257,10 @@ function App() {
       void reapplyZoneEffectsPreview().then((baked) => {
         if (baked) setActiveDirty(true)
       })
-    }, 90)
+    }, isMobile && mobilePanel === 'tool-effects' ? 0 : isMobile ? 120 : 90)
     return () => { if (zonePreviewDebounceRef.current) clearTimeout(zonePreviewDebounceRef.current) }
    
-  }, [brushStrength, detectFaceOffset, zoneBakeSignature, activePhoto?.id, zonesAnonymized])
+  }, [brushStrength, detectFaceOffset, zoneBakeSignature, activePhoto?.id, zonesAnonymized, isMobile, mobilePanel])
 
   // Sync brushSizeRef when slider changes
   useEffect(() => { brushSizeRef.current = brushSize }, [brushSize])
@@ -4209,12 +4384,12 @@ function App() {
       ])
       setDetector(status)
       setModelLoadProgress({ loaded: 1, total: 1, phase: 'ready' })
-      await new Promise((resolve) => setTimeout(resolve, 900))
+      await new Promise((resolve) => setTimeout(resolve, 400))
       return status
     } catch {
       const failed: DetectorStatus = { mode: 'unavailable', message: 'Initialization failed.' }
       setDetector(failed)
-      await new Promise((resolve) => setTimeout(resolve, 1200))
+      await new Promise((resolve) => setTimeout(resolve, 600))
       return failed
     } finally {
       setDetectorLoading(false)
@@ -4317,6 +4492,7 @@ function App() {
   // Auto-detect: fires when detector becomes ready, photo changes, or autoDetect toggles ON
   useEffect(() => {
     if (!autoDetect || !activePhoto) return
+    if (activePhoto.edited || activePhoto.isVideo) return
     if (detector.mode === 'unavailable') return
     let cancelled = false
 
@@ -4396,6 +4572,12 @@ function App() {
   }
 
   const deletePhoto = useCallback((photoId: string) => {
+    const deletingActive = activePhotoId === photoId
+    const deletedIndex = photos.findIndex((p) => p.id === photoId)
+    const nextActivePhoto = deletingActive && deletedIndex >= 0
+      ? photos[deletedIndex + 1] ?? photos[deletedIndex - 1] ?? null
+      : null
+
     setPhotos((cur) => {
       const p = cur.find((x) => x.id === photoId)
       if (p) URL.revokeObjectURL(p.previewUrl)
@@ -4412,15 +4594,52 @@ function App() {
       delete next[photoId]
       return next
     })
-    if (activePhotoId === photoId) {
-      setActivePhotoId(null)
+    if (deletingActive) {
+      setActivePhotoId(nextActivePhoto?.id ?? null)
+      setSelectedZoneId(null)
+      setDraftZone(null)
+      setNormalizeCropDraft(null)
+      setIsNormalizeCropPicking(false)
+      pointerSessionRef.current = { mode: 'idle' }
+      undoStackRef.current = []
+      setUndoCount(0)
+      setZonesAnonymized(false)
+      previewBakedRef.current = false
+      setEffectFlyoutOpen(false)
+      setAdjFlyoutOpen(false)
+      setTransformFlyoutOpen(false)
       detectingRef.current = false
       setIsDetecting(false)
+      setDetectionStep('')
       setLocalProcessingMs(null)
+      setLastDetectFailed(false)
+      setActiveDirty(false)
       if (videoAbortRef.current) { videoAbortRef.current.abort(); videoAbortRef.current = null }
       setVideoProcessing(false)
+      if (isMobile) {
+        setMobileViewZoom(1)
+        setMobileViewPan({ x: 0, y: 0 })
+        setMobileViewRotation(0)
+        mobileViewZoomRef.current = 1
+        mobileViewPanRef.current = { x: 0, y: 0 }
+        mobileViewRotationRef.current = 0
+        setMobileViewTransformDirty(false)
+        mobileCanvasEditRef.current = false
+      }
+      if (nextActivePhoto) {
+        const saved = colorAdjByPhoto[nextActivePhoto.id]
+        setColorAdj(saved ? { ...saved } : DEFAULT_COLOR_ADJUSTMENTS)
+        const fmt = nextActivePhoto.mimeType as NormalizeFormat
+        if (!nextActivePhoto.isVideo && ['image/jpeg', 'image/png', 'image/webp', 'image/bmp', 'image/gif', 'image/tiff'].includes(fmt)) {
+          setExportFormat(fmt)
+        }
+        if (nextActivePhoto.isVideo) {
+          applyVideoDistortSettings(distortSettingsByVideoId[nextActivePhoto.id] ?? EMPTY_VIDEO_DISTORT_SETTINGS)
+          setDetectSensitivity((s) => (s <= 1 ? 10 : s))
+        }
+      }
     }
-  }, [activePhotoId])
+  }, [activePhotoId, applyVideoDistortSettings, colorAdjByPhoto, distortSettingsByVideoId, isMobile, photos, setActiveDirty])
 
   const rotatePhoto = useCallback(async (photoId: string, direction: 1 | -1 = 1) => {
     const photo = photos.find((p) => p.id === photoId)
@@ -4528,6 +4747,7 @@ function App() {
   }, [clearZones, detectFacesOnActiveImage, removeSelectedZone, setCategoryIndex])
 
   const applyZoneTool = useCallback((id: ZoneToolId) => {
+    setZoneToolCustomized(true)
     setActiveCategory('zone')
     mobileCanvasEditRef.current = true
     const idx = ZONE_TOOLS.indexOf(id)
@@ -4575,6 +4795,7 @@ function App() {
   }, [])
 
   const applyEffectTool = useCallback((id: EffectToolId) => {
+    setEffectToolCustomized(true)
     setActiveCategory('effects')
     const idx = EFFECT_TOOL_ORDER.indexOf(id)
     if (idx >= 0) setCategoryIndex('effects', idx)
@@ -4608,14 +4829,20 @@ function App() {
     const file = new File([blob], name, { type: blob.type || (isVideo ? 'video/webm' : 'image/jpeg') })
     addRecords([{ file, name, source: 'upload' }])
     const id = lastAddedPhotoIdRef.current
+    if (id && !isVideo) {
+      setPhotos((cur) => cur.map((p) => (p.id === id ? { ...p, edited: true } : p)))
+      setAppliedByPhoto((cur) => ({ ...cur, [id]: true }))
+      previewBakedRef.current = true
+    }
     if (!opts?.stayInLive) {
       setMobileMode('editor')
     }
     return id
   }, [addRecords])
 
-  const openPhotoInEditor = useCallback((photoId: string, opts?: { slide?: boolean }) => {
+  const openPhotoInEditor = useCallback((photoId: string, opts?: { slide?: boolean; returnTo?: 'live' }) => {
     setMobilePanel(null)
+    setMobileEditorReturnTo(opts?.returnTo ?? null)
     if (opts?.slide) {
       setMobileEditorSlideIn(true)
       window.setTimeout(() => setMobileEditorSlideIn(false), 360)
@@ -4623,6 +4850,7 @@ function App() {
     setMobileMode('editor')
     if (photoId === activePhotoIdRef.current) {
       // Live capture auto-selects the new photo while workspace is hidden — redraw once visible.
+      setLastDetectFailed(false)
       setMobileViewZoom(1)
       setMobileViewPan({ x: 0, y: 0 })
       setMobileViewRotation(0)
@@ -4630,12 +4858,28 @@ function App() {
       mobileViewPanRef.current = { x: 0, y: 0 }
       mobileViewRotationRef.current = 0
       requestAnimationFrame(() => {
-        requestAnimationFrame(() => renderCanvasRef.current?.())
+        requestAnimationFrame(() => {
+          renderCanvasRef.current?.()
+          if (autoDetect) {
+            const runDetect = () => { void detectFacesOnActiveImage(true) }
+            if (typeof window.requestIdleCallback === 'function') {
+              window.requestIdleCallback(runDetect, { timeout: 600 })
+            } else {
+              window.setTimeout(runDetect, 350)
+            }
+          }
+        })
       })
       return
     }
     void selectPhoto(photoId)
-  }, [selectPhoto])
+  }, [autoDetect, detectFacesOnActiveImage, selectPhoto])
+
+  const returnToLiveFromEditor = useCallback(() => {
+    setMobileEditorReturnTo(null)
+    setMobilePanel(null)
+    setMobileMode('live')
+  }, [])
 
   const stepAdjacentLibraryPhoto = useCallback((dir: -1 | 1) => {
     const library = photos.filter((p) => !p.isVideo)
@@ -4773,7 +5017,8 @@ function App() {
     customImageAssets, customImageSource, originalBlobByPhoto, photos, showMobileToast, zonesByPhoto,
   ])
 
-  const batchProcessCount = selectedForBatch.size > 0 ? selectedForBatch.size : photos.filter((p) => !p.isVideo).length
+  const selectedBatchImageCount = photos.filter((p) => selectedForBatch.has(p.id) && !p.isVideo).length
+  const batchProcessCount = selectedForBatch.size > 0 ? selectedBatchImageCount : photos.filter((p) => !p.isVideo).length
 
   const updateMobileViewTransformDirty = useCallback(() => {
     const dirty =
@@ -4815,6 +5060,10 @@ function App() {
     setMobileMode,
     mobilePanel,
     setMobilePanel,
+    mobilePanelReturnTo,
+    setMobilePanelReturnTo,
+    mobileEditorReturnTo,
+    returnToLiveFromEditor,
     galleryBatchSelect,
     setGalleryBatchSelect,
     openUnifiedPicker,
@@ -4930,6 +5179,9 @@ function App() {
     clearZones,
     selectedZoneId,
     categoryIndices,
+    zoneToolCustomized,
+    effectToolCustomized,
+    setEffectToolCustomized,
     setCategoryIndex,
     activeCategory,
     setActiveCategory,
@@ -4983,6 +5235,7 @@ function App() {
     mobileViewZoom,
     setMobileViewZoom,
     lastDetectFailed,
+    isDetecting,
     detector,
     detectorLoading,
     addLiveMediaToLibrary,
@@ -5029,34 +5282,53 @@ function App() {
     mobileViewZoomRef.current = mobileViewZoom
     mobileViewPanRef.current = mobileViewPan
     mobileViewRotationRef.current = mobileViewRotation
-    renderCanvasRef.current()
-  }, [mobileViewZoom, mobileViewPan, mobileViewRotation])
+    if (isMobile && activePhoto && !activePhoto.isVideo) {
+      applyMobilePreviewTransform()
+    } else {
+      renderCanvasRef.current()
+    }
+  }, [mobileViewZoom, mobileViewPan, mobileViewRotation, isMobile, activePhoto, applyMobilePreviewTransform])
 
   const handleMobileZoomChange = useCallback((z: number) => {
     mobileViewZoomRef.current = z
     setMobileViewZoom(z)
     updateMobileViewTransformDirty()
+    if (isMobile && activePhoto && !activePhoto.isVideo) {
+      applyMobilePreviewTransform()
+      return
+    }
     renderCanvasRef.current()
-  }, [updateMobileViewTransformDirty])
+  }, [activePhoto, applyMobilePreviewTransform, isMobile, updateMobileViewTransformDirty])
 
   const handleMobilePanChange = useCallback((pan: { x: number; y: number }) => {
     mobileViewPanRef.current = pan
     setMobileViewPan(pan)
     updateMobileViewTransformDirty()
+    if (isMobile && activePhoto && !activePhoto.isVideo) {
+      applyMobilePreviewTransform()
+      return
+    }
     renderCanvasRef.current()
-  }, [updateMobileViewTransformDirty])
+  }, [activePhoto, applyMobilePreviewTransform, isMobile, updateMobileViewTransformDirty])
 
   const handleMobileRotationChange = useCallback((rot: number) => {
     mobileViewRotationRef.current = rot
     setMobileViewRotation(rot)
     updateMobileViewTransformDirty()
+    if (isMobile && activePhoto && !activePhoto.isVideo) {
+      applyMobilePreviewTransform()
+      return
+    }
     renderCanvasRef.current()
-  }, [updateMobileViewTransformDirty])
+  }, [activePhoto, applyMobilePreviewTransform, isMobile, updateMobileViewTransformDirty])
 
   usePhotoSwipeNav(viewportRef, {
     enabled: showMobileEmbed && Boolean(activePhoto && !activePhoto.isVideo),
     onSwipeLeft: () => stepAdjacentLibraryPhoto(1),
-    onSwipeRight: () => stepAdjacentLibraryPhoto(-1),
+    onSwipeRight: () => {
+      if (mobileEditorReturnTo === 'live') returnToLiveFromEditor()
+      else stepAdjacentLibraryPhoto(-1)
+    },
     isAllowed: () => (
       pointerSessionRef.current.mode === 'idle'
       && !mobileCanvasEditRef.current
@@ -5069,7 +5341,7 @@ function App() {
     && !hideWorkspace
     && Boolean(activePhoto && !activePhoto.isVideo)
 
-  usePinchZoom(canvasRef, {
+  usePinchZoom(viewportRef, {
     enabled: mobilePinchEnabled,
     zoom: mobileViewZoom,
     zoomRef: mobileViewZoomRef,
@@ -5081,16 +5353,27 @@ function App() {
     onPanChange: handleMobilePanChange,
     onRotationChange: handleMobileRotationChange,
     onViewTransformChange: updateMobileViewTransformDirty,
-    isPanGestureAllowed: () => !mobileCanvasEditRef.current && pointerSessionRef.current.mode === 'idle',
+    isPanGestureAllowed: () => (
+      !mobilePinchActiveRef.current
+      && pointerSessionRef.current.mode === 'idle'
+    ),
     onPinchStart: () => {
+      mobilePinchActiveRef.current = true
       pointerSessionRef.current = { mode: 'idle' }
       stopBrushLoop()
       setCursorPoint(null)
+      const canvas = canvasRef.current
+      if (canvas) canvas.style.pointerEvents = 'none'
       const overlay = overlayCanvasRef.current
       if (overlay) {
         const oc = overlay.getContext('2d')
         if (oc) oc.clearRect(0, 0, overlay.width, overlay.height)
       }
+    },
+    onPinchEnd: () => {
+      mobilePinchActiveRef.current = false
+      const canvas = canvasRef.current
+      if (canvas) canvas.style.pointerEvents = ''
     },
     minZoom: 0.5,
     maxZoom: 3,
@@ -5099,6 +5382,7 @@ function App() {
   return (
     <div
       className={`app-shell${isMobile ? ' app-shell-mobile' : ' app-shell-desktop-v2'}${isMobile && mobileMode === 'live' ? ' app-shell-mobile--live' : ''}${isMobile && mobileMode === 'video' ? ' app-shell-mobile--video' : ''}${isMobile && mobileMode === 'editor' ? ' app-shell-mobile--image' : ''}`}
+      translate="no"
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
       onDragOver={handleDragOver}
@@ -5171,6 +5455,54 @@ function App() {
       <input ref={folderInputRef} type="file" multiple onChange={handleFolderInput} hidden
         // @ts-expect-error webkitdirectory is not in React's type defs
         webkitdirectory="" directory="" />
+
+      {pickerChoiceOpen && (
+        <div className="picker-choice-backdrop" onClick={() => setPickerChoiceOpen(false)}>
+          <div
+            ref={pickerChoiceDialogRef}
+            className="picker-choice-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="picker-choice-title"
+            data-dialog-focus-trap="true"
+            tabIndex={-1}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button className="about-modal-close" type="button" onClick={() => setPickerChoiceOpen(false)} aria-label="Close">
+              <Icon name="close" size={18} />
+            </button>
+            <h2 id="picker-choice-title" className="picker-choice-title">Add media</h2>
+            <p className="picker-choice-desc">
+              Choose individual files or open a folder with disk write access for overwrite/export workflows.
+            </p>
+            <div className="picker-choice-actions">
+              <button
+                ref={pickerChoiceFolderBtnRef}
+                className="btn btn-primary picker-choice-primary"
+                type="button"
+                disabled={isBusy}
+                onClick={() => {
+                  setPickerChoiceOpen(false)
+                  void openFolderPicker()
+                }}
+              >
+                <Icon name="folder_open" size={15} /> Open folder
+              </button>
+              <button
+                className="btn picker-choice-secondary"
+                type="button"
+                disabled={isBusy}
+                onClick={() => {
+                  setPickerChoiceOpen(false)
+                  void openFilePicker()
+                }}
+              >
+                <Icon name="upload_file" size={15} /> Select files
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {isMobile && (
         <MobileShell
@@ -5418,12 +5750,12 @@ function App() {
                     className="sidebar-process-btn"
                     type="button"
                     onClick={runNormalizeBatch}
-                    disabled={photos.length === 0 || isNormalizing || isBusy || selectedForBatch.size === 0}
-                    title={selectedForBatch.size === 0 ? 'Select photos first' : `Process ${selectedForBatch.size} selected photos`}
+                    disabled={photos.length === 0 || isNormalizing || isBusy || selectedBatchImageCount === 0}
+                    title={selectedBatchImageCount === 0 ? 'Select photos first' : `Process ${selectedBatchImageCount} selected photos`}
                   >
                     {isNormalizing
                       ? `Processing ${normalizeProgressPercent}%`
-                      : `Process ${selectedForBatch.size} photo${selectedForBatch.size !== 1 ? 's' : ''}`}
+                      : `Process ${selectedBatchImageCount} photo${selectedBatchImageCount !== 1 ? 's' : ''}`}
                   </button>
                   {isNormalizing && (
                     <button
@@ -5459,9 +5791,7 @@ function App() {
             {(() => {
               const detMode = detector.mode
               const detectorOff = detMode !== 'yunet-wasm'
-              const btnClass = lastDetectFailed && autoDetect
-                ? ' ts-btn-fail'
-                : detectorOff ? ' ts-btn-setup' : ''
+              const btnClass = detectorOff ? ' ts-btn-setup' : ''
               return (<>
                 <button
                   className={`ts-btn ts-btn-autodetect${autoDetect ? ' active' : ''}${btnClass}`}
@@ -5471,16 +5801,14 @@ function App() {
                   title="Detection settings (double-click to refresh detector)"
                 >
                   <Icon name="face_retouching_natural" filled={autoDetect} size={18} />
-                  {autoDetect && activeZones.length > 0 && (
+                  {autoDetect && !detectorOff && (
                     <span className="ts-face-count-inline">{activeZones.length}</span>
                   )}
                 </button>
                 <span className="ts-tooltip">
-                  {lastDetectFailed && autoDetect
-                    ? 'No faces found — double-click for settings'
-                    : autoDetect
-                      ? `Detection: ON${activeZones.length > 0 ? ` · ${activeZones.length} face${activeZones.length !== 1 ? 's' : ''}` : ''}${detectorOff ? ' · detector unavailable' : ''}`
-                      : 'Detection: OFF'}
+                  {autoDetect
+                    ? `Detection: ON · ${activeZones.length} face${activeZones.length !== 1 ? 's' : ''}${detectorOff ? ' · detector unavailable' : ''}`
+                    : 'Detection: OFF'}
                 </span>
               </>)
             })()}
@@ -5756,7 +6084,7 @@ function App() {
                       if (ef.id === 'emoji' || ef.id === 'custom-image') {
                         setEffectPickerOpen(ef.id)
                         if (ef.id === 'custom-image' && customImageAssets.length === 0) {
-                          void loadCustomImagePreset(customImageSource === 'custom' ? 'ui-faces-human' : customImageSource)
+                          void loadCustomImagePreset(customImageSource === 'custom' ? DEFAULT_CUSTOM_IMAGE_PRESET_ID : customImageSource)
                         }
                       }
                     }}
@@ -5777,11 +6105,9 @@ function App() {
                     onChange={(e) => { void loadCustomImagePreset(e.target.value as CustomImageSource) }}
                   >
                     <option value="custom">Custom</option>
-                    <option value="ui-faces-human">UI Faces</option>
-                    <option value="ui-faces-abstract">Abstract</option>
-                    <option value="cryptopunks">CryptoPunks</option>
-                    <option value="aavegotchi">Aavegotchi</option>
-                    <option value="celebrities">Celebrities</option>
+                    {customImagePresetOptions().map((source) => (
+                      <option key={source.id} value={source.id}>{source.label}</option>
+                    ))}
                   </select>
                   <button type="button" className="btn btn-sm ts-custom-image-upload" onClick={openCustomImagePicker}>
                     <Icon name="upload" size={14} /> Upload images
@@ -6488,9 +6814,11 @@ function App() {
                     ? 'Analyzing face tracks'
                     : videoProgress.phase === 'preparing'
                       ? 'Preparing frame map'
-                      : videoProgress.renderFrame != null && videoProgress.renderTotal
-                        ? `Rendering frame ${videoProgress.renderFrame}/${videoProgress.renderTotal}`
-                        : 'Rendering video'}… {videoProgress.current}/{videoProgress.total}
+                      : videoProgress.phase === 'finishing'
+                        ? 'Finalizing export'
+                        : videoProgress.renderFrame != null && videoProgress.renderTotal
+                          ? `Rendering frame ${videoProgress.renderFrame}/${videoProgress.renderTotal}`
+                          : 'Rendering video'}… {videoProgress.current}/{videoProgress.total}
                 </span>
                 <div style={{ width: '60%', maxWidth: 300, height: 6, background: 'rgba(255,255,255,0.15)', borderRadius: 3, overflow: 'hidden' }}>
                   <div style={{ width: `${(videoProgress.current / videoProgress.total) * 100}%`, height: '100%', background: 'var(--accent)', borderRadius: 3, transition: 'width 0.1s' }} />
@@ -6538,7 +6866,7 @@ function App() {
                       onPointerUp={handleVideoMaskPointerUp}
                       onPointerCancel={handleVideoMaskPointerUp}
                     >
-                      {showBoxes && videoPreviewFaceZones.map((zone) => (
+                      {showBoxes && !activePhoto.edited && videoPreviewFaceZones.map((zone) => (
                         <div
                           key={zone.id}
                           className="video-face-rect"
@@ -6578,72 +6906,76 @@ function App() {
                     </div>
                   </div>
                   {isMobile && (
-                    <>
-                      {!videoProcessing && (
-                      <div className="video-action-row mobile-canvas-bottom-bar mobile-canvas-bottom-bar--video mobile-canvas-bottom-bar--inline">
-                        <button
-                          type="button"
-                          className="mobile-zoom-side-btn"
-                          {...framePrevHold}
-                          disabled={isBusy}
-                          aria-label="Previous frame"
-                        >
-                          <Icon name="skip_previous" size={16} />
-                        </button>
-                        <div className="mobile-canvas-action-cluster">
-                          {activeVideoFrameLabel && (
-                            <div className="mobile-video-frame-indicator" aria-live="polite">
-                              {activeVideoFrameLabel}
+                    <div className="mobile-video-bottom-controls">
+                      <div className="mobile-video-bottom-controls__action">
+                        {!videoProcessing && (
+                          <div className="video-action-row mobile-canvas-bottom-bar mobile-canvas-bottom-bar--video mobile-canvas-bottom-bar--inline">
+                            <button
+                              type="button"
+                              className="mobile-zoom-side-btn"
+                              {...framePrevHold}
+                              disabled={isBusy}
+                              aria-label="Previous frame"
+                            >
+                              <Icon name="skip_previous" size={16} />
+                            </button>
+                            <div className="mobile-canvas-action-cluster">
+                              {activeVideoFrameLabel && (
+                                <div className="mobile-video-frame-indicator" aria-live="polite">
+                                  {activeVideoFrameLabel}
+                                </div>
+                              )}
+                              <button
+                                type="button"
+                                className={`mobile-canvas-secondary-btn${videoMaskDrawActive ? ' active' : ''}`}
+                                onClick={() => setVideoMaskDrawActive((cur) => !cur)}
+                                disabled={isBusy}
+                              >
+                                DRAW MASK
+                              </button>
+                              <button
+                                type="button"
+                                className="mobile-anonymize-btn"
+                                onClick={processActiveVideo}
+                                disabled={isBusy}
+                              >
+                                {autoDetect ? 'ANONYMIZE' : 'PROCESS'}
+                              </button>
+                              <button
+                                type="button"
+                                className="mobile-canvas-secondary-btn"
+                                onClick={openCurrentVideoFrameAsSnapshot}
+                                disabled={isBusy}
+                              >
+                                EDIT FRAME
+                              </button>
                             </div>
-                          )}
-                          <button
-                            type="button"
-                            className={`mobile-canvas-secondary-btn${videoMaskDrawActive ? ' active' : ''}`}
-                            onClick={() => setVideoMaskDrawActive((cur) => !cur)}
-                            disabled={isBusy}
-                          >
-                            DRAW MASK
-                          </button>
-                          <button
-                            type="button"
-                            className="mobile-anonymize-btn"
-                            onClick={processActiveVideo}
-                            disabled={isBusy}
-                          >
-                            {autoDetect ? 'ANONYMIZE' : 'PROCESS'}
-                          </button>
-                          <button
-                            type="button"
-                            className="mobile-canvas-secondary-btn"
-                            onClick={openCurrentVideoFrameAsSnapshot}
-                            disabled={isBusy}
-                          >
-                            EDIT FRAME
-                          </button>
-                        </div>
-                        <button
-                          type="button"
-                          className="mobile-zoom-side-btn"
-                          {...frameNextHold}
-                          disabled={isBusy}
-                          aria-label="Next frame"
-                        >
-                          <Icon name="skip_next" size={16} />
-                        </button>
+                            <button
+                              type="button"
+                              className="mobile-zoom-side-btn"
+                              {...frameNextHold}
+                              disabled={isBusy}
+                              aria-label="Next frame"
+                            >
+                              <Icon name="skip_next" size={16} />
+                            </button>
+                          </div>
+                        )}
+                        {videoProcessing && videoProgress && (
+                          <MobileVideoProgress
+                            phase={videoProgress.phase}
+                            current={videoProgress.current}
+                            total={videoProgress.total}
+                            renderFrame={videoProgress.renderFrame}
+                            renderTotal={videoProgress.renderTotal}
+                            onCancel={cancelVideoProcessing}
+                          />
+                        )}
                       </div>
-                      )}
-                      {videoProcessing && videoProgress && (
-                        <MobileVideoProgress
-                          phase={videoProgress.phase}
-                          current={videoProgress.current}
-                          total={videoProgress.total}
-                          renderFrame={videoProgress.renderFrame}
-                          renderTotal={videoProgress.renderTotal}
-                          onCancel={cancelVideoProcessing}
-                        />
-                      )}
-                      {!videoProcessing && videoMaskDrawActive && <MobileDrawMaskPanel b={mobileBindings} />}
-                    </>
+                      <div className={`mobile-video-bottom-controls__mask${videoMaskDrawActive && !videoProcessing ? '' : ' mobile-video-bottom-controls__mask--reserved'}`}>
+                        {!videoProcessing && videoMaskDrawActive && <MobileDrawMaskPanel b={mobileBindings} />}
+                      </div>
+                    </div>
                   )}
                   {!videoProcessing && (
                   <>
@@ -6784,81 +7116,86 @@ function App() {
               </div>
             )}
 
-            <canvas
-              ref={canvasRef}
-              className={batchPanelOpen && !isNormalizeCropPicking ? 'readonly-canvas' : ''}
-              style={activePhoto?.isVideo ? { display: 'none' } : (toolMode === 'crop' ? { cursor: 'crosshair' } : undefined)}
-              onPointerDown={handleCanvasPointerDown}
-              onPointerMove={handleCanvasPointerMove}
-              onPointerUp={handleCanvasPointerUp}
-              onPointerCancel={handleCanvasPointerUp}
-              onWheel={handleCanvasWheel}
-              onPointerLeave={() => {
-                handleCanvasPointerUp()
-                setCursorPoint(null)
-                const overlay = overlayCanvasRef.current
-                if (overlay) { const oc = overlay.getContext('2d'); if (oc) oc.clearRect(0, 0, overlay.width, overlay.height) }
-              }}
-            />
-            {/* Brush preview overlay */}
-            <canvas ref={overlayCanvasRef} className="brush-preview-overlay" />
+            <div
+              ref={mobilePreviewTransformRef}
+              className={isMobile && activePhoto && !activePhoto.isVideo ? 'mobile-preview-transform' : undefined}
+            >
+              <canvas
+                ref={canvasRef}
+                className={batchPanelOpen && !isNormalizeCropPicking ? 'readonly-canvas' : ''}
+                style={activePhoto?.isVideo ? { display: 'none' } : (toolMode === 'crop' ? { cursor: 'crosshair' } : undefined)}
+                onPointerDown={handleCanvasPointerDown}
+                onPointerMove={handleCanvasPointerMove}
+                onPointerUp={handleCanvasPointerUp}
+                onPointerCancel={handleCanvasPointerUp}
+                onWheel={handleCanvasWheel}
+                onPointerLeave={() => {
+                  handleCanvasPointerUp()
+                  setCursorPoint(null)
+                  const overlay = overlayCanvasRef.current
+                  if (overlay) { const oc = overlay.getContext('2d'); if (oc) oc.clearRect(0, 0, overlay.width, overlay.height) }
+                }}
+              />
+              {/* Brush preview overlay */}
+              <canvas ref={overlayCanvasRef} className="brush-preview-overlay" />
 
-            {/* Zone × delete buttons overlay */}
-            {showBoxes && !activePhoto?.isVideo && activeZones.length > 0 && (
-              <div className="zone-delete-layer" style={{ pointerEvents: toolMode === 'brush' ? 'none' : undefined }}>
-                {zoneDeletePositions.map(({ id, top, left }) => (
-                  <button
-                    key={id}
-                    className="zone-delete-btn"
-                    type="button"
-                    style={{ top, left }}
-                    onClick={(e) => { e.stopPropagation(); removeZoneById(id) }}
-                    title="Remove this face box"
-                    aria-label="Remove this face box"
-                  >
-                    <Icon name="close" size={12} />
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {/* Crop draft overlay */}
-            {toolMode === 'crop' && cropDraft && cropDraft.w > 0.002 && (() => {
-              const t = transformRef.current
-              const rect = zoneToCanvasRect({
-                id: 'crop',
-                x: cropDraft.x,
-                y: cropDraft.y,
-                width: cropDraft.w,
-                height: cropDraft.h,
-                effect: 'blur',
-                emoji: '',
-              }, t)
-              return (
-                <div
-                  style={{
-                    position: 'absolute', left: rect.x, top: rect.y, width: rect.width, height: rect.height,
-                    border: '2px dashed var(--accent)',
-                    background: 'rgba(112,255,136,0.08)',
-                    pointerEvents: 'none', boxSizing: 'border-box',
-                  }}
-                />
-              )
-            })()}
-
-            {/* SVG vectorize preview overlay */}
-            {vectorizePanelOpen && svgPreviewUrl && (() => {
-              const t = transformRef.current
-              const hasFrame = t.drawWidth > 0 && t.drawHeight > 0
-              return (
-                <div
-                  className="svg-preview-overlay"
-                  style={hasFrame ? { left: t.drawX, top: t.drawY, width: t.drawWidth, height: t.drawHeight } : undefined}
-                >
-                  <img src={svgPreviewUrl} alt="SVG vectorized preview" />
+              {/* Zone × delete buttons overlay */}
+              {showBoxes && !activePhoto?.isVideo && activeZones.length > 0 && (
+                <div className="zone-delete-layer" style={{ pointerEvents: toolMode === 'brush' ? 'none' : undefined }}>
+                  {zoneDeletePositions.map(({ id, top, left }) => (
+                    <button
+                      key={id}
+                      className="zone-delete-btn"
+                      type="button"
+                      style={{ top, left }}
+                      onClick={(e) => { e.stopPropagation(); removeZoneById(id) }}
+                      title="Remove this face box"
+                      aria-label="Remove this face box"
+                    >
+                      <Icon name="close" size={12} />
+                    </button>
+                  ))}
                 </div>
-              )
-            })()}
+              )}
+
+              {/* Crop draft overlay */}
+              {toolMode === 'crop' && cropDraft && cropDraft.w > 0.002 && (() => {
+                const t = transformRef.current
+                const rect = zoneToCanvasRect({
+                  id: 'crop',
+                  x: cropDraft.x,
+                  y: cropDraft.y,
+                  width: cropDraft.w,
+                  height: cropDraft.h,
+                  effect: 'blur',
+                  emoji: '',
+                }, t)
+                return (
+                  <div
+                    style={{
+                      position: 'absolute', left: rect.x, top: rect.y, width: rect.width, height: rect.height,
+                      border: '2px dashed var(--accent)',
+                      background: 'rgba(112,255,136,0.08)',
+                      pointerEvents: 'none', boxSizing: 'border-box',
+                    }}
+                  />
+                )
+              })()}
+
+              {/* SVG vectorize preview overlay */}
+              {vectorizePanelOpen && svgPreviewUrl && (() => {
+                const t = transformRef.current
+                const hasFrame = t.drawWidth > 0 && t.drawHeight > 0
+                return (
+                  <div
+                    className="svg-preview-overlay"
+                    style={hasFrame ? { left: t.drawX, top: t.drawY, width: t.drawWidth, height: t.drawHeight } : undefined}
+                  >
+                    <img src={svgPreviewUrl} alt="SVG vectorized preview" />
+                  </div>
+                )
+              })()}
+            </div>
 
             {/* Vectorize panel — flyout from toolbar */}
             {vectorizePanelOpen && activePhoto && !activePhoto.isVideo && !isMobile && (

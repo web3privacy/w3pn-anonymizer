@@ -100,11 +100,13 @@ export async function initYuNet(): Promise<boolean> {
     let modelTotal = 0
     let wasmLoaded = 0
     let wasmTotal = 0
+    let lastReportedLoaded = 0
 
     const reportDownload = () => {
       const total = modelTotal + wasmTotal
       const loaded = modelLoaded + wasmLoaded
-      reportLoad({ loaded, total: total > 0 ? total : 0, phase: 'download' })
+      lastReportedLoaded = Math.max(lastReportedLoaded, loaded)
+      reportLoad({ loaded: lastReportedLoaded, total: total > 0 ? total : 0, phase: 'download' })
     }
 
     try {
@@ -129,9 +131,10 @@ export async function initYuNet(): Promise<boolean> {
 
     const combinedTotal = modelTotal + wasmTotal
     const combinedLoaded = modelLoaded + wasmLoaded
+    lastReportedLoaded = Math.max(lastReportedLoaded, combinedLoaded)
     reportLoad({
-      loaded: combinedTotal > 0 ? combinedLoaded : 0,
-      total: combinedTotal,
+      loaded: combinedTotal > 0 ? lastReportedLoaded : lastReportedLoaded,
+      total: combinedTotal > 0 ? combinedTotal : 1,
       phase: 'init',
     })
 
@@ -152,12 +155,20 @@ export async function initYuNet(): Promise<boolean> {
       if (import.meta.env.DEV) {
         console.log('[yunet-wasm] Session ready, inputs:', session.inputNames)
       }
-      reportLoad({ loaded: 0, total: 0, phase: 'ready' })
+      reportLoad({
+        loaded: combinedTotal > 0 ? combinedTotal : 1,
+        total: combinedTotal > 0 ? combinedTotal : 1,
+        phase: 'ready',
+      })
       return true
     } catch (err) {
       console.error('[yunet-wasm] Failed to create ONNX session:', err)
       session = null
-      reportLoad({ loaded: 0, total: 0, phase: 'ready' })
+      reportLoad({
+        loaded: combinedTotal > 0 ? combinedTotal : 1,
+        total: combinedTotal > 0 ? combinedTotal : 1,
+        phase: 'ready',
+      })
       return false
     } finally {
       initPromise = null

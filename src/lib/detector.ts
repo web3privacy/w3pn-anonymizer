@@ -9,8 +9,8 @@ import { initYuNet, isYuNetReady, detectYuNet, disposeYuNet, setYuNetLoadProgres
 
 export type { DetectorLoadProgress }
 
-// Capture init download progress as early as module load (before React mounts)
-// so the UI can render an accurate "X / Y MB" even when preload started first.
+// Capture detector download progress at module level so the UI can render an
+// accurate "X / Y MB" while initialization is in flight.
 let latestLoadProgress: DetectorLoadProgress | null = null
 let appLoadProgressCb: ((p: DetectorLoadProgress) => void) | null = null
 setYuNetLoadProgressCallback((p) => {

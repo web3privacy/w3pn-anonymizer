@@ -5,7 +5,6 @@
  * Run:  npm run icons:favicons
  */
 import sharp from 'sharp'
-import toIco from 'to-ico'
 import { writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -50,6 +49,32 @@ async function writeFaviconSvg() {
   writeFileSync(join(PUBLIC, 'favicon.svg'), svg)
 }
 
+function pngBuffersToIco(entries) {
+  const headerSize = 6
+  const entrySize = 16
+  const directorySize = headerSize + entries.length * entrySize
+  const header = Buffer.alloc(directorySize)
+  header.writeUInt16LE(0, 0)
+  header.writeUInt16LE(1, 2)
+  header.writeUInt16LE(entries.length, 4)
+
+  let offset = directorySize
+  entries.forEach(({ size, buffer }, index) => {
+    const entryOffset = headerSize + index * entrySize
+    header.writeUInt8(size >= 256 ? 0 : size, entryOffset)
+    header.writeUInt8(size >= 256 ? 0 : size, entryOffset + 1)
+    header.writeUInt8(0, entryOffset + 2)
+    header.writeUInt8(0, entryOffset + 3)
+    header.writeUInt16LE(1, entryOffset + 4)
+    header.writeUInt16LE(32, entryOffset + 6)
+    header.writeUInt32LE(buffer.length, entryOffset + 8)
+    header.writeUInt32LE(offset, entryOffset + 12)
+    offset += buffer.length
+  })
+
+  return Buffer.concat([header, ...entries.map(({ buffer }) => buffer)])
+}
+
 const PNG_OUTPUTS = [
   ['favicon-16.png', 16],
   ['favicon-32.png', 32],
@@ -70,10 +95,10 @@ for (const [file, size] of PNG_OUTPUTS) {
   const buf = await renderPng(size)
   writeFileSync(join(PUBLIC, file), buf)
   console.log(`  ✓ ${file} (${size}×${size})`)
-  if (icoSizes.includes(size)) icoBuffers.push(buf)
+  if (icoSizes.includes(size)) icoBuffers.push({ size, buffer: buf })
 }
 
-writeFileSync(join(PUBLIC, 'favicon.ico'), await toIco(icoBuffers))
+writeFileSync(join(PUBLIC, 'favicon.ico'), pngBuffersToIco(icoBuffers))
 console.log('  ✓ favicon.ico (16, 32, 48)')
 
 await writeFaviconSvg()

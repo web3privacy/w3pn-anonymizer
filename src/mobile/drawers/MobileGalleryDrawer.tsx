@@ -66,12 +66,14 @@ export function MobileGalleryDrawer({
   }
 
   const imageCount = photos.filter((p) => !p.isVideo).length
-  const selectedIds = batchSelectMode ? Array.from(selectedForBatch) : []
   const selectedCount = batchSelectMode ? selectedForBatch.size : 0
+  const selectedImageIds = batchSelectMode
+    ? photos.filter((p) => selectedForBatch.has(p.id) && !p.isVideo).map((p) => p.id)
+    : []
   const selectedImageCount = batchSelectMode
-    ? photos.filter((p) => selectedForBatch.has(p.id) && !p.isVideo).length
+    ? selectedImageIds.length
     : 0
-  const downloadCount = selectedCount > 0 ? selectedCount : imageCount
+  const downloadCount = selectedCount > 0 ? selectedImageCount : imageCount
   const canDownloadAll = Boolean(onDownloadAllZip || onDownloadAllIndividual)
   const downloadBusy = Boolean(exportProgress)
 
@@ -85,7 +87,7 @@ export function MobileGalleryDrawer({
       <Icon name="download" size={16} />
       {downloadBusy
         ? `EXPORTING ${exportProgress!.done}/${exportProgress!.total}…`
-        : selectedCount > 0 ? `DOWNLOAD ${selectedCount}` : 'DOWNLOAD ALL'}
+        : selectedCount > 0 ? `DOWNLOAD ${selectedImageCount}` : 'DOWNLOAD ALL'}
     </button>
   ) : undefined
 
@@ -108,7 +110,7 @@ export function MobileGalleryDrawer({
               type="button"
               onClick={onOpenBatch}
             >
-              BATCH{selectedCount > 0 ? ` (${selectedCount})` : ''}
+              BATCH{selectedCount > 0 ? ` (${selectedImageCount})` : ''}
             </button>
           </div>
 
@@ -242,10 +244,10 @@ export function MobileGalleryDrawer({
             <button
               type="button"
               className="mobile-gallery-download-option"
-              disabled={downloadAllDisabled || downloadBusy}
+              disabled={downloadAllDisabled || downloadBusy || (selectedCount > 0 && selectedImageCount === 0)}
               onClick={() => {
                 setDownloadSheetOpen(false)
-                onDownloadAllZip(selectedCount > 0 ? selectedIds : undefined)
+                onDownloadAllZip(selectedCount > 0 ? selectedImageIds : undefined)
               }}
             >
               <Icon name="folder_zip" size={20} />
@@ -259,10 +261,10 @@ export function MobileGalleryDrawer({
             <button
               type="button"
               className="mobile-gallery-download-option"
-              disabled={downloadAllDisabled || downloadBusy}
+              disabled={downloadAllDisabled || downloadBusy || (selectedCount > 0 && selectedImageCount === 0)}
               onClick={() => {
                 setDownloadSheetOpen(false)
-                onDownloadAllIndividual(selectedCount > 0 ? selectedIds : undefined)
+                onDownloadAllIndividual(selectedCount > 0 ? selectedImageIds : undefined)
               }}
             >
               <Icon name="photo_library" size={20} />

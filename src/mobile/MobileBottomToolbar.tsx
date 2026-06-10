@@ -1,6 +1,6 @@
 import { Icon } from '../components/Icon'
-import type { CSSProperties } from 'react'
-import { EFFECTS } from '../lib/effects'
+import { memo, type CSSProperties } from 'react'
+import { EFFECTS, getMobileStrengthLabel } from '../lib/effects'
 import type { AppMobileBindings } from './bindings'
 import { isCategoryEffectActive } from './categoryActivity'
 import { getCategoryToolDisplay } from './categoryToolDisplay'
@@ -18,7 +18,7 @@ interface MobileBottomToolbarProps {
   liveFaceCount?: number
 }
 
-export function MobileBottomToolbar({ b, liveMode = false, liveFaceCount = 0 }: MobileBottomToolbarProps) {
+export const MobileBottomToolbar = memo(function MobileBottomToolbar({ b, liveMode = false, liveFaceCount = 0 }: MobileBottomToolbarProps) {
   const strVal = Math.min(99, Math.max(0, Math.round(b.brushStrength * 100)))
   const sizeVal = Math.min(99, Math.max(0, Math.round(b.brushSize)))
   // Slider max is 99, so the thumb sits at value/99 of the track. Mirror that
@@ -36,9 +36,7 @@ export function MobileBottomToolbar({ b, liveMode = false, liveFaceCount = 0 }: 
     : isVideoEditor
       ? b.videoPreviewFaceCount
       : b.activeZones.length
-  const faceBtnClass = !liveMode && b.lastDetectFailed && b.autoDetect && faceCount === 0
-    ? ' ts-btn-fail'
-    : !liveMode && detectorOff ? ' ts-btn-setup' : ''
+  const faceBtnClass = !liveMode && detectorOff ? ' ts-btn-setup' : ''
 
   const categories = liveMode
     ? LIVE_CATEGORIES
@@ -63,8 +61,8 @@ export function MobileBottomToolbar({ b, liveMode = false, liveFaceCount = 0 }: 
 
   // Derive a short label for the strength slider based on the active effect.
   const activeEffectMeta = EFFECTS.find((e) => e.id === b.selectedEffect)
-  const strLabel = activeEffectMeta?.strengthLabel
-    ? activeEffectMeta.strengthLabel.slice(0, 5).toUpperCase()
+  const strLabel = activeEffectMeta
+    ? getMobileStrengthLabel(activeEffectMeta.id)
     : 'STR'
 
   return (
@@ -87,7 +85,7 @@ export function MobileBottomToolbar({ b, liveMode = false, liveFaceCount = 0 }: 
         </div>
         {!liveMode && !isVideoEditor && (
           <div className="mobile-slider-group">
-            <span className="mobile-slider-label">SIZE</span>
+            <span className="mobile-slider-label">BRUSH</span>
             <div className="mobile-range-with-thumb" style={{ '--mobile-range-pct': sizePct } as CSSProperties}>
               <input
                 type="range"
@@ -116,7 +114,7 @@ export function MobileBottomToolbar({ b, liveMode = false, liveFaceCount = 0 }: 
           ) : (
             <span className="mobile-tool-btn-icon-wrap">
               <Icon name="face_retouching_natural" filled={faceActive} size={22} />
-              {faceActive && faceCount > 0 && !detectorBusy && (
+              {faceActive && !detectorBusy && (
                 <span className="mobile-face-count-badge" aria-label={`${faceCount} faces`}>{faceCount}</span>
               )}
             </span>
@@ -124,14 +122,14 @@ export function MobileBottomToolbar({ b, liveMode = false, liveFaceCount = 0 }: 
           <span className="mobile-tool-btn-label">FACE</span>
         </button>
         {extraCategories.map((cat) => {
-          const { icon, label } = getCategoryToolDisplay(cat, b)
+          const { icon, label, ariaLabel } = getCategoryToolDisplay(cat, b, liveMode)
           return (
             <button
               key={cat}
               type="button"
               className={`mobile-tool-btn${isDrawerOpen(cat) ? ' active' : ''}${isCategorySelected(cat) ? ' selected' : ''}`}
               onClick={() => b.selectToolCategory(cat)}
-              aria-label={label}
+              aria-label={ariaLabel}
             >
               <Icon name={icon} size={22} filled={isCategorySelected(cat)} />
               <span className="mobile-tool-btn-label">{label}</span>
@@ -141,4 +139,4 @@ export function MobileBottomToolbar({ b, liveMode = false, liveFaceCount = 0 }: 
       </div>
     </div>
   )
-}
+})

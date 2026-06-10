@@ -1,4 +1,6 @@
+import { useRef } from 'react'
 import { Icon } from '../components/Icon'
+import { useDialogFocusTrap } from './useDialogFocusTrap'
 
 interface MobileAboutProps {
   open: boolean
@@ -25,15 +27,29 @@ const LOCAL_ITEMS = [
 ]
 
 export function MobileAbout({ open, onClose, onFeedback }: MobileAboutProps) {
+  const dialogRef = useRef<HTMLDivElement | null>(null)
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null)
+
+  useDialogFocusTrap(open, dialogRef, { initialFocusRef: closeButtonRef, onClose })
+
   if (!open) return null
 
   return (
     <div className="mobile-about-backdrop" onClick={onClose}>
-      <div className="mobile-about" onClick={(e) => e.stopPropagation()}>
+      <div
+        ref={dialogRef}
+        className="mobile-about"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="What is this app"
+        data-mobile-dialog="true"
+        tabIndex={-1}
+      >
         <header className="mobile-about-header mobile-about-header--logoless">
           <span className="mobile-about-header-spacer" aria-hidden="true" />
           <span aria-hidden="true" />
-          <button type="button" className="mobile-about-close" onClick={onClose} aria-label="Close">
+          <button ref={closeButtonRef} type="button" className="mobile-about-close" onClick={onClose} aria-label="Close">
             <Icon name="close" size={22} />
           </button>
         </header>

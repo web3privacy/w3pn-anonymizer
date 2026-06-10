@@ -15,6 +15,7 @@ const SCROLL_GESTURE_SELECTOR = [
   '.mobile-home-v2',
   '.mobile-home-v2-hero',
   '.mobile-live-settings',
+  '.viewer-mobile-pinch',
 ].join(', ')
 
 function isScrollGestureTarget(target: EventTarget | null): boolean {

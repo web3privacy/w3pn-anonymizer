@@ -17,6 +17,11 @@ const CENTER_DOT_SIZE = 8
 
 function lerp(a: number, b: number, t: number) { return a + (b - a) * t }
 
+function smoothstep(t: number) {
+  const x = Math.min(1, Math.max(0, t))
+  return x * x * (3 - 2 * x)
+}
+
 interface Props {
   mode: OpticalMode
   onActivate: () => void
@@ -71,6 +76,7 @@ function SpiralArt({ paths, maskId }: { paths: SpiralLogoPaths; maskId: string }
 
 export function AnonymizerLogoMotion({ mode, onActivate, onCancel, className = '' }: Props) {
   const idleRef = useRef<SVGGElement>(null)
+  const activeWrapRef = useRef<SVGGElement>(null)
   const outerRef = useRef<SVGGElement>(null)
   const innerRef = useRef<SVGGElement>(null)
   const centerRef = useRef<SVGGElement>(null)
@@ -79,7 +85,7 @@ export function AnonymizerLogoMotion({ mode, onActivate, onCancel, className = '
   const lastTsRef = useRef(0)
 
   const angleRef = useRef(0)
-  const speedsRef = useRef({
+  const speedsRef = useRef<{ outer: number; inner: number; intensity: number }>({
     outer: OPTICAL.idleRotationDegPerSec,
     inner: OPTICAL.idleRotationDegPerSec,
     intensity: 0,
@@ -87,6 +93,8 @@ export function AnonymizerLogoMotion({ mode, onActivate, onCancel, className = '
   const outerAngleRef = useRef(0)
   const innerAngleRef = useRef(0)
   const prevModeRef = useRef<OpticalMode>('idle')
+  const modeSinceRef = useRef(0)
+  const coolDownStartRef = useRef({ outerSpeed: 110, innerSpeed: -170 })
 
   const [svgPaths, setSvgPaths] = useState<SpiralLogoPaths | null>(getSpiralLogoPathsCache())
   const [countdown, setCountdown] = useState(0)
@@ -101,24 +109,42 @@ export function AnonymizerLogoMotion({ mode, onActivate, onCancel, className = '
   }, [])
 
   useEffect(() => {
+    modeSinceRef.current = performance.now()
     const prev = prevModeRef.current
     if (mode === 'spinUp' && prev === 'idle') {
       outerAngleRef.current = angleRef.current
       innerAngleRef.current = angleRef.current
     }
+    if (mode === 'coolDown' && (prev === 'illusion' || prev === 'spinUp')) {
+      coolDownStartRef.current = {
+        outerSpeed: speedsRef.current.outer,
+        innerSpeed: speedsRef.current.inner,
+      }
+    }
     if (mode === 'idle' && prev !== 'idle' && prev !== 'disabledReducedMotion') {
-      angleRef.current = outerAngleRef.current % 360
+      angleRef.current = outerAngleRef.current
+    }
+    if (mode === 'settling' && prev === 'coolDown') {
+      angleRef.current = outerAngleRef.current
+      const idleEl = idleRef.current
+      if (idleEl) {
+        idleEl.style.opacity = '1'
+        idleEl.style.transform = `rotate(${angleRef.current}deg)`
+      }
+      if (activeWrapRef.current) activeWrapRef.current.style.opacity = '0'
+    }
+    if (mode === 'idle' && prev !== 'idle' && prev !== 'disabledReducedMotion') {
+      const idleEl = idleRef.current
+      if (idleEl) {
+        idleEl.style.opacity = '1'
+        idleEl.style.transform = `rotate(${angleRef.current}deg)`
+      }
+    }
+    if (mode === 'idle' && (prev === 'settling' || prev === 'coolDown')) {
+      setShowComplete(true)
+      window.setTimeout(() => setShowComplete(false), 2500)
     }
     prevModeRef.current = mode
-  }, [mode])
-
-  useEffect(() => {
-    if (mode === 'idle' && (prevModeRef.current === 'coolDown')) {
-      setShowComplete(true)
-      const t = window.setTimeout(() => setShowComplete(false), 2500)
-      return () => window.clearTimeout(t)
-    }
-    return undefined
   }, [mode])
 
   useEffect(() => {
@@ -134,13 +160,22 @@ export function AnonymizerLogoMotion({ mode, onActivate, onCancel, className = '
   }, [mode])
 
   const tick = useCallback((ts: number) => {
-    const dt = Math.min(0.05, (ts - (lastTsRef.current || ts)) / 1000)
+    const now = performance.now()
+    const dt = Math.min(0.032, (ts - (lastTsRef.current || ts)) / 1000)
     lastTsRef.current = ts
     const s = speedsRef.current
     const m = prevModeRef.current
 
-    let tOuter: number, tInner: number, tIntensity: number
-    let lerpRate: number
+    let coolDownProgress = 0
+    if (m === 'coolDown') {
+      coolDownProgress = Math.min(1, (now - modeSinceRef.current) / OPTICAL.coolDownDurationMs)
+    }
+
+    let tOuter: number = OPTICAL.idleRotationDegPerSec
+    let tInner: number = OPTICAL.idleRotationDegPerSec
+    let tIntensity = 0
+    let lerpRate = 3
+    let useDirectSpeeds = false
 
     if (m === 'spinUp') {
       tOuter = OPTICAL.outerRotationDegPerSec
@@ -148,15 +183,25 @@ export function AnonymizerLogoMotion({ mode, onActivate, onCancel, className = '
       tIntensity = 1
       lerpRate = 2.5
     } else if (m === 'illusion') {
-      tOuter = OPTICAL.outerRotationDegPerSec
-      tInner = OPTICAL.innerRotationDegPerSec
-      tIntensity = 1
-      lerpRate = 4
+      s.outer = OPTICAL.outerRotationDegPerSec
+      s.inner = OPTICAL.innerRotationDegPerSec
+      s.intensity = 1
+      useDirectSpeeds = true
     } else if (m === 'coolDown') {
+      const start = coolDownStartRef.current
+      const idle = OPTICAL.idleRotationDegPerSec
+      // Exponential decay keeps angular velocity decreasing monotonically to idle.
+      const speedBlend = Math.exp(-4.2 * coolDownProgress)
+      s.outer = idle + (start.outerSpeed - idle) * speedBlend
+      const counterDelta = (start.innerSpeed - start.outerSpeed) * speedBlend
+      s.inner = s.outer + counterDelta
+      s.intensity = Math.pow(Math.max(0, 1 - coolDownProgress), 1.65)
+      useDirectSpeeds = true
+    } else if (m === 'settling') {
       tOuter = OPTICAL.idleRotationDegPerSec
       tInner = OPTICAL.idleRotationDegPerSec
       tIntensity = 0
-      lerpRate = 1.8
+      lerpRate = 6
     } else {
       tOuter = OPTICAL.idleRotationDegPerSec
       tInner = OPTICAL.idleRotationDegPerSec
@@ -164,25 +209,84 @@ export function AnonymizerLogoMotion({ mode, onActivate, onCancel, className = '
       lerpRate = 3
     }
 
-    const f = Math.min(1, dt * lerpRate)
-    s.outer += (tOuter - s.outer) * f
-    s.inner += (tInner - s.inner) * f
-    s.intensity += (tIntensity - s.intensity) * f
+    if (!useDirectSpeeds) {
+      const f = Math.min(1, dt * lerpRate)
+      s.outer += (tOuter - s.outer) * f
+      s.inner += (tInner - s.inner) * f
+      s.intensity += (tIntensity - s.intensity) * f
+    }
 
-    if (m === 'idle' || m === 'disabledReducedMotion') {
-      if (m === 'idle') {
-        angleRef.current = (angleRef.current + OPTICAL.idleRotationDegPerSec * dt) % 360
-        const el = idleRef.current
-        if (el) el.style.transform = `rotate(${angleRef.current}deg)`
+    if (m === 'coolDown') {
+      innerAngleRef.current += (outerAngleRef.current - innerAngleRef.current)
+        * Math.min(1, dt * 0.75)
+    }
+
+    let idleOpacity = 0
+    let activeOpacity = 1
+    if (m === 'coolDown') {
+      const crossfadeStart = 1 - OPTICAL.settleCrossfadeMs / OPTICAL.coolDownDurationMs
+      if (coolDownProgress > crossfadeStart) {
+        const blend = smoothstep((coolDownProgress - crossfadeStart) / (1 - crossfadeStart))
+        idleOpacity = blend
+        activeOpacity = 1 - blend
+      }
+    } else if (m === 'settling' || m === 'idle') {
+      idleOpacity = 1
+      activeOpacity = 0
+    }
+
+    const idleEl = idleRef.current
+    if (idleEl) {
+      if (m === 'coolDown') {
+        const handoffAngle = outerAngleRef.current
+        angleRef.current = handoffAngle
+        idleEl.style.opacity = idleOpacity.toFixed(3)
+        idleEl.style.transform = `rotate(${handoffAngle}deg)`
+      } else if (m === 'spinUp' || m === 'illusion') {
+        idleEl.style.opacity = '0'
+      }
+    }
+
+    const activeWrap = activeWrapRef.current
+    if (activeWrap && (m === 'spinUp' || m === 'illusion' || m === 'coolDown')) {
+      activeWrap.style.opacity = activeOpacity.toFixed(3)
+    }
+
+    if (m === 'idle' || m === 'disabledReducedMotion' || m === 'settling') {
+      if (m === 'idle' || m === 'settling') {
+        angleRef.current += OPTICAL.idleRotationDegPerSec * dt
+        if (idleEl) {
+          idleEl.style.opacity = '1'
+          idleEl.style.transform = `rotate(${angleRef.current}deg)`
+        }
       }
     } else {
       outerAngleRef.current += s.outer * dt
       innerAngleRef.current += s.inner * dt
 
-      if (outerRef.current)
-        outerRef.current.style.transform = `rotate(${outerAngleRef.current % 360}deg)`
-      if (innerRef.current)
-        innerRef.current.style.transform = `rotate(${innerAngleRef.current % 360}deg)`
+      const outerAngle = outerAngleRef.current
+      const innerAngle = innerAngleRef.current
+      let outerScale = 1
+      let innerScale = 1
+      if (m === 'illusion' || m === 'spinUp' || m === 'coolDown') {
+        let breathMix = 0
+        if (m === 'illusion') breathMix = 1
+        else if (m === 'spinUp') breathMix = s.intensity
+        else if (m === 'coolDown') breathMix = Math.pow(Math.max(0, 1 - coolDownProgress), 1.4)
+        if (breathMix > 0.001) {
+          const wave = Math.sin((ts / OPTICAL.layerBreathPeriodMs) * Math.PI * 2)
+          const delta = OPTICAL.layerBreathScaleDelta * breathMix
+          outerScale = 1 + wave * delta
+          innerScale = 1 - wave * delta
+        }
+      }
+
+      if (outerRef.current) {
+        outerRef.current.style.transform = `rotate(${outerAngle}deg) scale(${outerScale.toFixed(4)})`
+      }
+      if (innerRef.current) {
+        innerRef.current.style.transform = `rotate(${innerAngle}deg) scale(${innerScale.toFixed(4)})`
+      }
 
       const intensity = s.intensity
       if (centerRef.current) {
@@ -190,7 +294,7 @@ export function AnonymizerLogoMotion({ mode, onActivate, onCancel, className = '
         const scale = lerp(OPTICAL.pulseScale.min, OPTICAL.pulseScale.max,
           (Math.sin(cycle) + 1) / 2 * intensity)
         centerRef.current.style.transform =
-          `rotate(${outerAngleRef.current % 360}deg) scale(${scale})`
+          `rotate(${outerAngle}deg) scale(${scale})`
       }
 
       for (let i = 0; i < ghostRefs.current.length; i++) {
@@ -215,20 +319,22 @@ export function AnonymizerLogoMotion({ mode, onActivate, onCancel, className = '
   }, [tick])
 
   const handleClick = () => {
-    if (isActive) onCancel()
+    if (mode !== 'idle' && mode !== 'disabledReducedMotion') onCancel()
     else onActivate()
   }
 
-  const showCopy = mode === 'spinUp' || mode === 'illusion'
+  const showCopy = mode === 'spinUp' || mode === 'illusion' || mode === 'coolDown'
   const hintText = mode === 'illusion' && countdown > 0
     ? `Focus on the green center \u00B7 ${countdown}s`
-    : 'Focus on the green center'
+    : mode === 'coolDown'
+      ? 'Restoring vision…'
+      : 'Focus on the green center'
 
   const chromeLayout = phoneChrome ? 'phone' : 'corner'
 
   const copyPortal = showCopy && typeof document !== 'undefined'
     ? createPortal(
-        <div className={`logo-motion-copy logo-motion-copy--visible logo-motion-copy--${chromeLayout}`}>
+        <div className={`logo-motion-copy logo-motion-copy--visible logo-motion-copy--${chromeLayout}${mode === 'coolDown' ? ' logo-motion-copy--wind-down' : ''}`}>
           <p className="logo-motion-copy-title">Privacy Calibration</p>
           <p className="logo-motion-copy-hint">{hintText}</p>
           <button type="button" className="logo-motion-skip" onClick={onCancel}>
@@ -285,18 +391,18 @@ export function AnonymizerLogoMotion({ mode, onActivate, onCancel, className = '
             </defs>
           )}
 
-          {!isActive && svgPaths && (
+          {svgPaths && (
             <g
               ref={idleRef}
               className="logo-motion-idle"
-              style={{ transformOrigin: `${CX}px ${CY}px` }}
+              style={{ transformOrigin: `${CX}px ${CY}px`, opacity: mode === 'idle' || mode === 'settling' ? 1 : 0 }}
             >
               <SpiralArt paths={svgPaths} maskId={maskId} />
             </g>
           )}
 
           {isActive && svgPaths && (
-            <>
+            <g ref={activeWrapRef} className="logo-motion-active-wrap">
               <g
                 ref={outerRef}
                 className="logo-motion-layer-outer"
@@ -338,7 +444,7 @@ export function AnonymizerLogoMotion({ mode, onActivate, onCancel, className = '
               >
                 <CenterArt paths={svgPaths} />
               </g>
-            </>
+            </g>
           )}
         </svg>
       </div>

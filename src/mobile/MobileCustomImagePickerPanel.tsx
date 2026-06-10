@@ -2,14 +2,11 @@ import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Icon } from '../components/Icon'
 import type { AppMobileBindings } from './bindings'
+import { DEFAULT_CUSTOM_IMAGE_PRESET_ID, customImagePresetOptions } from '../lib/custom-image-presets'
 import type { CustomImageSource } from '../types'
 
 const PRESET_SOURCES: { id: CustomImageSource; label: string }[] = [
-  { id: 'ui-faces-human', label: 'UI Faces' },
-  { id: 'ui-faces-abstract', label: 'Abstract' },
-  { id: 'cryptopunks', label: 'CryptoPunks' },
-  { id: 'aavegotchi', label: 'Aavegotchi' },
-  { id: 'celebrities', label: 'Celebrities' },
+  ...customImagePresetOptions(),
   { id: 'custom', label: 'Custom uploads' },
 ]
 
@@ -28,7 +25,7 @@ export function MobileCustomImagePickerPanel({ b }: MobileCustomImagePickerPanel
   useEffect(() => {
     if (bootstrappedRef.current || b.customImageAssets.length > 0) return
     bootstrappedRef.current = true
-    const source = b.customImageSource === 'custom' ? 'ui-faces-human' : b.customImageSource
+    const source = b.customImageSource === 'custom' ? DEFAULT_CUSTOM_IMAGE_PRESET_ID : b.customImageSource
     void b.loadCustomImagePreset(source)
   }, [b.customImageAssets.length, b.customImageSource, b.loadCustomImagePreset])
 
@@ -43,6 +40,7 @@ export function MobileCustomImagePickerPanel({ b }: MobileCustomImagePickerPanel
 
   const pickSource = (id: CustomImageSource) => {
     setSourceMenuOpen(false)
+    b.setSelectedEffect('custom-image')
     if (id === 'custom') {
       void b.loadCustomImagePreset('custom')
       b.openCustomImagePicker()

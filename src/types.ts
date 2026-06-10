@@ -58,6 +58,8 @@ export interface EffectDefinition {
   icon: string  // Material Symbol name
   /** User-facing name for the main "strength" slider (default "Intensity"). */
   strengthLabel?: string
+  /** Short (≤5 char) label for the mobile bottom-toolbar strength slider. */
+  mobileStrengthLabel?: string
   /** Additional meaningful parameters (beyond the strength slider). */
   params?: EffectParamMeta[]
 }

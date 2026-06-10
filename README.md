@@ -4,7 +4,7 @@
 
 A free, open-source tool by [Web3Privacy Now](https://www.web3privacy.info) for anonymizing faces and sensitive regions in images and videos. Rendering, export, and face detection run entirely in your browser via YuNet + ONNX Runtime Web — no uploads, no servers, no tracking.
 
-**[Try it online](https://anonymizer.web3privacy.info)** · [Source on GitHub](https://github.com/web3privacy/w3pn-anonymizer) · [Roadmap](./ROADMAP.md) · [Report a bug](https://github.com/web3privacy/w3pn-anonymizer/issues)
+**[Try it online](https://anonymizer.web3privacy.info)** · [Source on GitHub](https://github.com/web3privacy/w3pn-anonymizer) · [Roadmap](./ROADMAP.md) · [Custom image libraries](./docs/CUSTOM_IMAGE_LIBRARIES.md) · [Report a bug](https://github.com/web3privacy/w3pn-anonymizer/issues)
 
 ---
 
@@ -251,11 +251,13 @@ The YuNet ONNX model is downloaded automatically from [OpenCV Zoo](https://githu
 
 ```bash
 npm run build
+npm run release:audit
 # Deploy dist/ to static hosting (e.g. Vercel)
 ```
 
 Requirements:
 
+- Production domain and metadata must remain `https://anonymizer.web3privacy.info`
 - Serve `.mjs` as `application/javascript`
 - Ensure `public/models/` and `public/onnx/` assets are included in the deployment
 - Headers (configured in `vercel.json`):
@@ -264,8 +266,11 @@ Requirements:
   - `Cross-Origin-Resource-Policy: same-origin`
   - `Content-Security-Policy` (see `vercel.json`)
 - Apply the same headers to ONNX and WASM assets under `/onnx/` and `/models/`
+- Treat tracked `dist/` files as release artifacts, not source of truth. If `npm run release:audit`
+  warns about ignored untracked `dist/assets/*` references, either include the matching build
+  artifacts intentionally or deploy from the fresh source build output.
 
-See [docs/RUNTIME_AND_PRIVACY.md](./docs/RUNTIME_AND_PRIVACY.md) for a fuller runtime, privacy, and deployment walkthrough.
+See [docs/RUNTIME_AND_PRIVACY.md](./docs/RUNTIME_AND_PRIVACY.md) for a fuller runtime, privacy, and deployment walkthrough, and [docs/RELEASE_CLEANUP_PLAN.md](./docs/RELEASE_CLEANUP_PLAN.md) for the current cleanup checklist.
 
 ---
 

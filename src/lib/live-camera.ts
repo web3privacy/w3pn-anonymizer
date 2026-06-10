@@ -32,6 +32,18 @@ const DETECT_MAX_WIDTH_LIVE = 320
 const TRANSFORM_MAX_WIDTH = 640
 const CAPTURE_JPEG_QUALITY = 0.92
 
+function pickCustomImageAssetId(assets: CustomImageAsset[] | undefined, seed: string | number): string | undefined {
+  const ready = assets?.filter((asset) => asset.imageBitmap) ?? []
+  if (ready.length === 0) return undefined
+  let hash = 2166136261
+  const str = String(seed)
+  for (let i = 0; i < str.length; i += 1) {
+    hash ^= str.charCodeAt(i)
+    hash = Math.imul(hash, 16777619)
+  }
+  return ready[(hash >>> 0) % ready.length]?.id
+}
+
 const detectCanvas = document.createElement('canvas')
 const effectScratch = document.createElement('canvas')
 const transformScratch = document.createElement('canvas')
@@ -61,6 +73,8 @@ export interface LiveCameraOpts {
   ignoredFaceBoxes?: { x: number; y: number; width: number; height: number }[]
   /** Live-tracked zones from the preview loop — still capture reuses these for WYSIWYG. */
   snapshotZones?: Zone[]
+  /** When true, skip heavy detect/effects so UI drawers stay responsive. */
+  uiSuspended?: boolean
 }
 
 /** A single tracked face exposed to the UI for overlay boxes / removal. */
@@ -639,6 +653,9 @@ export function startLiveCameraLoop(
         height: t.height,
         effect: opts.selectedEffect,
         emoji: t.emoji,
+        customImageAssetId: opts.selectedEffect === 'custom-image'
+          ? (opts.fixedCustomImageId ?? pickCustomImageAssetId(opts.customImages, t.id))
+          : undefined,
       }))
       if (state.targetZones.length !== prevCount) state.fadeFrames = 2
       if (state.displayZones.length === 0) state.displayZones = state.targetZones.map((z) => ({ ...z }))
@@ -691,6 +708,11 @@ export function startLiveCameraLoop(
         const ph = Math.max(1, Math.round(crop.sh * previewScale))
 
         drawBaseFrame(ctx, video, pw, ph, crop)
+
+        if (opts.uiSuspended) {
+          scheduleNext()
+          return
+        }
 
         if (opts.detectEnabled) {
           // Motion runs every frame off the (still-raw) preview canvas — cheap,
@@ -851,11 +873,33 @@ export async function renderLiveCaptureFrame(
   return captureCanvas
 }
 
+/** Upscale the live preview canvas to full capture resolution (WYSIWYG). */
+function captureFromPreviewCanvas(
+  previewCanvas: HTMLCanvasElement,
+  video: HTMLVideoElement,
+  aspectRatio: LiveAspectRatio,
+): HTMLCanvasElement | null {
+  if (video.videoWidth <= 0 || video.videoHeight <= 0) return null
+  const crop = computeSourceCrop(video.videoWidth, video.videoHeight, aspectRatio)
+  const pw = Math.max(1, Math.round(crop.sw))
+  const ph = Math.max(1, Math.round(crop.sh))
+  captureCanvas.width = pw
+  captureCanvas.height = ph
+  const ctx = captureCanvas.getContext('2d', { alpha: false })
+  if (!ctx) return null
+  ctx.drawImage(previewCanvas, 0, 0, previewCanvas.width, previewCanvas.height, 0, 0, pw, ph)
+  return captureCanvas
+}
+
 export async function captureLivePhotoBlob(
   video: HTMLVideoElement,
   getOpts: () => LiveCameraOpts,
+  previewCanvas?: HTMLCanvasElement | null,
 ): Promise<Blob | null> {
-  const frame = await renderLiveCaptureFrame(video, getOpts)
+  const opts = getOpts()
+  const frame = previewCanvas && previewCanvas.width > 0
+    ? captureFromPreviewCanvas(previewCanvas, video, opts.camera.aspectRatio)
+    : await renderLiveCaptureFrame(video, getOpts)
   if (!frame) return null
   return new Promise((resolve) => {
     frame.toBlob((blob) => resolve(blob), 'image/jpeg', CAPTURE_JPEG_QUALITY)

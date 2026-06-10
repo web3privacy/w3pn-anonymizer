@@ -15,19 +15,26 @@ export const EMOJI_POOL = [
 ]
 
 export const EFFECTS: EffectDefinition[] = [
-  { id: 'blur',       label: 'Blur',        description: 'Gaussian blur',                         icon: 'blur_on',         strengthLabel: 'Blur radius' },
-  { id: 'pixelate',  label: 'Pixelate',    description: 'Mosaic (low-res) effect',               icon: 'grid_on',         strengthLabel: 'Block size' },
-  { id: 'zoom-blur', label: 'Zoom Blur',   description: 'Radial zoom blur — destroys face shape', icon: 'motion_blur',   strengthLabel: 'Distortion' },
-  { id: 'blackout',  label: 'Blackout',    description: 'Solid black fill',                       icon: 'square',          strengthLabel: 'Edge softness' },
-  { id: 'emoji',     label: 'Emoji',       description: 'Replace with random emoji',              icon: 'mood',            strengthLabel: 'Size' },
-  { id: 'noise',     label: 'Noise',       description: 'Noise anonymization',                    icon: 'grain',           strengthLabel: 'Density' },
-  { id: 'glitch',    label: 'Glitch',      description: 'RGB chroma-shift',                       icon: 'auto_fix_high',   strengthLabel: 'Shift amount' },
-  { id: 'silhouette',label: 'Silhouette',  description: 'Solid black silhouette',                 icon: 'person',          strengthLabel: 'Edge softness' },
-  { id: 'contour',   label: 'Contour',     description: 'Edge detection (Sobel)',                 icon: 'pentagon',        strengthLabel: 'Line thickness' },
-  { id: 'thermal',   label: 'Thermal',     description: 'Falsecolor thermal map',                 icon: 'thermostat',      strengthLabel: 'Color intensity' },
-  { id: 'static',    label: 'Static TV',   description: 'TV static noise',                        icon: 'tv',              strengthLabel: 'Grain density' },
-  { id: 'custom-image', label: 'Custom Image', description: 'Replace with uploaded image patches', icon: 'image',          strengthLabel: 'Opacity' },
+  { id: 'blur',       label: 'Blur',        description: 'Gaussian blur',                         icon: 'blur_on',         strengthLabel: 'Blur radius',       mobileStrengthLabel: 'BLUR' },
+  { id: 'pixelate',  label: 'Pixelate',    description: 'Mosaic (low-res) effect',               icon: 'grid_on',         strengthLabel: 'Block size',        mobileStrengthLabel: 'BLOCK' },
+  { id: 'zoom-blur', label: 'Zoom Blur',   description: 'Radial zoom blur — destroys face shape', icon: 'motion_blur',   strengthLabel: 'Distortion',        mobileStrengthLabel: 'DIST' },
+  { id: 'blackout',  label: 'Blackout',    description: 'Solid black fill',                       icon: 'square',          strengthLabel: 'Edge softness',     mobileStrengthLabel: 'EDGE' },
+  { id: 'emoji',     label: 'Emoji',       description: 'Replace with random emoji',              icon: 'mood',            strengthLabel: 'Size',              mobileStrengthLabel: 'SIZE' },
+  { id: 'noise',     label: 'Noise',       description: 'Noise anonymization',                    icon: 'grain',           strengthLabel: 'Density',           mobileStrengthLabel: 'DENSITY' },
+  { id: 'glitch',    label: 'Glitch',      description: 'RGB chroma-shift',                       icon: 'auto_fix_high',   strengthLabel: 'Shift amount',      mobileStrengthLabel: 'SHIFT' },
+  { id: 'silhouette',label: 'Silhouette',  description: 'Solid black silhouette',                 icon: 'person',          strengthLabel: 'Edge softness',     mobileStrengthLabel: 'EDGE' },
+  { id: 'contour',   label: 'Contour',     description: 'Edge detection (Sobel)',                 icon: 'pentagon',        strengthLabel: 'Line thickness',    mobileStrengthLabel: 'THICK' },
+  { id: 'thermal',   label: 'Thermal',     description: 'Falsecolor thermal map',                 icon: 'thermostat',      strengthLabel: 'Color intensity',   mobileStrengthLabel: 'COLOR' },
+  { id: 'static',    label: 'Static TV',   description: 'TV static noise',                        icon: 'tv',              strengthLabel: 'Grain density',     mobileStrengthLabel: 'GRAIN' },
+  { id: 'custom-image', label: 'Custom Image', description: 'Replace with uploaded image patches', icon: 'image',          strengthLabel: 'Opacity',           mobileStrengthLabel: 'OPACITY' },
 ]
+
+export function getMobileStrengthLabel(effectId: AnonymizeEffectId): string {
+  const meta = EFFECTS.find((e) => e.id === effectId)
+  if (meta?.mobileStrengthLabel) return meta.mobileStrengthLabel
+  if (meta?.strengthLabel) return meta.strengthLabel.slice(0, 5).toUpperCase()
+  return 'STR'
+}
 
 const scratchA = document.createElement('canvas')
 const scratchB = document.createElement('canvas')
@@ -112,7 +119,7 @@ const applyRectFeatherMask = (
   height: number,
   strength: number,
 ) => {
-  const feather = Math.max(1, Math.round(Math.min(width, height) * (0.04 + (1 - strength) * 0.2)))
+  const feather = Math.max(1, Math.round(Math.min(width, height) * (0.02 + (1 - strength) * 0.32)))
   for (let py = 0; py < height; py += 1) {
     for (let px = 0; px < width; px += 1) {
       const edge = Math.min(px, py, width - 1 - px, height - 1 - py)
@@ -371,8 +378,8 @@ const applyNoiseRect = (
   const rng = seededRandom(effectSeed('noise', rx, ry, rw, rh, options))
   const s = Number.isFinite(strength) ? clamp(strength, 0, 1) : 0.5
 
-  // Grain size: coarse at low strength, fine speckle at high strength.
-  const grain = Math.max(1, Math.round(4 - s * 2))
+  // Block size: low strength = fine speckle, high strength = coarse low-res blocks.
+  const block = Math.max(2, Math.round(2 + (1 - s) * 24))
   // Contrast push toward black/white as strength rises. Kept moderate so the
   // probability field still tracks the face's light/shadow map (a faint hint).
   const contrast = 0.25 + s * 0.4
@@ -388,17 +395,17 @@ const applyNoiseRect = (
   // Per grain-row horizontal jitter that destroys the eye/mouth shadow pattern.
   const maxBandShift = rw * (0.18 + s * 0.22)
 
-  for (let by = 0; by < rh; by += grain) {
-    for (let bx = 0; bx < rw; bx += grain) {
-      const blockW = Math.min(rw - bx, grain)
-      const blockH = Math.min(rh - by, grain)
+  for (let by = 0; by < rh; by += block) {
+    for (let bx = 0; bx < rw; bx += block) {
+      const blockW = Math.min(rw - bx, block)
+      const blockH = Math.min(rh - by, block)
 
       // Where the luminance is sampled from. In the eye/mouth bands we yank the
       // sample sideways (and a touch vertically) so those features dissolve.
       const ny = (by + blockH / 2) / rh
       const weight = bandWeight(ny)
       const shiftX = Math.round((rng() - 0.5) * 2 * weight * maxBandShift)
-      const shiftY = Math.round((rng() - 0.5) * 2 * weight * (grain * 3))
+      const shiftY = Math.round((rng() - 0.5) * 2 * weight * (block * 3))
       const sampleBx = clamp(bx + shiftX, 0, Math.max(0, rw - blockW))
       const sampleBy = clamp(by + shiftY, 0, Math.max(0, rh - blockH))
 
@@ -490,7 +497,7 @@ const applyNoiseRect = (
   // covers the face (the detect box was inflated to keep the face well inside).
   const cx = (rw - 1) / 2
   const cy = (rh - 1) / 2
-  const FEATHER = 0.78 // fraction of radius that stays fully opaque noise
+  const FEATHER = clamp(0.78 - s * 0.35, 0.38, 0.78) // softer rim at low strength only
   for (let py = 0; py < rh; py += 1) {
     const dyn = (py - cy) / Math.max(1, cy)
     for (let px = 0; px < rw; px += 1) {
@@ -619,6 +626,12 @@ const drawEmojiBlock = (
 export const pickRandomEmoji = () =>
   EMOJI_POOL[Math.floor(Math.random() * EMOJI_POOL.length)]
 
+/** Deterministic emoji pick — same seed always yields the same emoji (brush preview vs stamp). */
+export const pickEmojiFromSeed = (seed: string | number): string => {
+  const index = Math.abs(hashSeed(seed)) % EMOJI_POOL.length
+  return EMOJI_POOL[index]
+}
+
 /**
  * Returns N unique emoji from the pool (no repeats until pool is exhausted).
  * Falls back to random picks if N > pool size.
@@ -698,8 +711,8 @@ const applyContourRect = (
   const sd = src.data; const od = out.data
   const gx = [-1, 0, 1, -2, 0, 2, -1, 0, 1]
   const gy = [-1, -2, -1, 0, 0, 0, 1, 2, 1]
-  const threshold = clamp(255 - strength * 220, 20, 240)
-  const gain = 0.6 + strength * 1.8
+  const threshold = clamp(255 - strength * 200, 12, 245)
+  const gain = 0.5 + strength * 2.2
 
   // Smooth multi-frequency warp field (seeded per zone for determinism).
   const rng = seededRandom(effectSeed('contour', rx, ry, rw, rh, options))
@@ -761,13 +774,14 @@ const applyThermalRect = (
   const src = new Uint8ClampedArray(imageData.data)
   const data = imageData.data
   const rng = seededRandom(effectSeed('thermal', rx, ry, rw, rh, options))
-  const islands = Array.from({ length: Math.max(3, Math.round(4 + strength * 9)) }, () => ({
+  const islands = Array.from({ length: Math.max(3, Math.round(4 + strength * 14)) }, () => ({
     x: rng() * rw,
     y: rng() * rh,
-    radius: Math.max(4, (0.08 + rng() * 0.18) * Math.min(rw, rh)),
+    radius: Math.max(4, (0.08 + rng() * 0.22) * Math.min(rw, rh)),
     hue: rng(),
   }))
-  const warp = Math.max(1, Math.round(1 + strength * 5))
+  const warp = Math.max(1, Math.round(1 + strength * 8))
+  const spread = 0.4 + strength * 1.1
   for (let py = 0; py < rh; py += 1) {
     for (let px = 0; px < rw; px += 1) {
       const wobbleX = Math.round(Math.sin(py * 0.17 + rng() * 0.4) * warp)
@@ -779,7 +793,7 @@ const applyThermalRect = (
       let luma = (0.299 * src[si] + 0.587 * src[si + 1] + 0.114 * src[si + 2]) / 255
       for (const island of islands) {
         const d = Math.hypot(px - island.x, py - island.y) / island.radius
-        if (d < 1) luma = clamp(luma * 0.68 + island.hue * 0.32 + (1 - d) * 0.18, 0, 1)
+        if (d < 1) luma = clamp(luma * (0.55 + spread * 0.35) + island.hue * (0.25 + spread * 0.2) + (1 - d) * spread * 0.22, 0, 1)
       }
       const [r, g, b] = thermalColor(luma)
       data[dst] = r
@@ -800,12 +814,23 @@ const applyStaticRect = (
   const imageData = ctx.createImageData(rw, rh)
   const { data } = imageData
   const rng = seededRandom(effectSeed('static', rx, ry, rw, rh, options))
-  for (let i = 0; i < data.length; i += 4) {
-    const v = rng() > 0.5 ? 255 : 0
-    data[i] = v
-    data[i + 1] = v
-    data[i + 2] = v
-    data[i + 3] = 255
+  const s = Number.isFinite(strength) ? clamp(strength, 0, 1) : 0.5
+  const block = Math.max(1, Math.round(5 - s * 4))
+  for (let by = 0; by < rh; by += block) {
+    for (let bx = 0; bx < rw; bx += block) {
+      const v = rng() > 0.5 ? 255 : 0
+      const blockW = Math.min(rw - bx, block)
+      const blockH = Math.min(rh - by, block)
+      for (let yy = 0; yy < blockH; yy += 1) {
+        for (let xx = 0; xx < blockW; xx += 1) {
+          const i = ((by + yy) * rw + bx + xx) * 4
+          data[i] = v
+          data[i + 1] = v
+          data[i + 2] = v
+          data[i + 3] = 255
+        }
+      }
+    }
   }
   applyRectFeatherMask(data, rw, rh, strength)
   scratchA.width = rw
@@ -829,9 +854,9 @@ const applyCustomImageRect = (
     applyPixelateRect(ctx, rx, ry, rw, rh, 0.75)
     return
   }
-  const s = Number.isFinite(strength) ? clamp(strength, 0.05, 1) : 0.5
+  const s = Number.isFinite(strength) ? clamp(strength, 0.05, 1) : 1
   ctx.save()
-  ctx.globalAlpha = 0.45 + s * 0.55
+  ctx.globalAlpha = s
   drawImageCover(ctx, image, rx, ry, rw, rh)
   ctx.restore()
 }

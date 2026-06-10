@@ -1,6 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { OPTICAL, type OpticalMode, readEnableOpticalMode } from '../lib/optical-calibration'
 
+const CALIBRATION_MODES = new Set<OpticalMode>(['spinUp', 'illusion', 'coolDown'])
+const SESSION_MODES = new Set<OpticalMode>(['spinUp', 'illusion', 'coolDown', 'settling'])
+
 export function useOpticalCalibration() {
   const [mode, setMode] = useState<OpticalMode>(() => {
     try {
@@ -32,11 +35,16 @@ export function useOpticalCalibration() {
     clearTimers()
     setMode('spinUp')
 
-    const { spinUpDurationMs, illusionDurationMs, coolDownDurationMs } = OPTICAL
+    const { spinUpDurationMs, illusionDurationMs, coolDownDurationMs, layoutSettleMs } = OPTICAL
+    const coolDownAt = spinUpDurationMs + illusionDurationMs
+    const settlingAt = coolDownAt + coolDownDurationMs
+    const idleAt = settlingAt + layoutSettleMs
+
     const t1 = window.setTimeout(() => setMode('illusion'), spinUpDurationMs)
-    const t2 = window.setTimeout(() => setMode('coolDown'), spinUpDurationMs + illusionDurationMs)
-    const t3 = window.setTimeout(() => setMode('idle'), spinUpDurationMs + illusionDurationMs + coolDownDurationMs)
-    timersRef.current = [t1, t2, t3]
+    const t2 = window.setTimeout(() => setMode('coolDown'), coolDownAt)
+    const t3 = window.setTimeout(() => setMode('settling'), settlingAt)
+    const t4 = window.setTimeout(() => setMode('idle'), idleAt)
+    timersRef.current = [t1, t2, t3, t4]
   }, [cancel, clearTimers])
 
   useEffect(() => {
@@ -60,7 +68,11 @@ export function useOpticalCalibration() {
     timersRef.current.forEach(id => window.clearTimeout(id))
   }, [])
 
-  const isActive = mode === 'spinUp' || mode === 'illusion' || mode === 'coolDown'
+  const isCalibratingLayout = CALIBRATION_MODES.has(mode)
+  const isSessionActive = SESSION_MODES.has(mode)
+  const isSettling = mode === 'settling'
+  /** Layered hypno SVG (spin-up through crossfade). */
+  const isActive = isCalibratingLayout
 
-  return { mode, activate, cancel, isActive }
+  return { mode, activate, cancel, isActive, isCalibratingLayout, isSessionActive, isSettling }
 }

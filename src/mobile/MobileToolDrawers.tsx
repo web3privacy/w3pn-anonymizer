@@ -34,17 +34,23 @@ export function MobileToolDrawers({ b, liveMode = false }: MobileToolDrawersProp
 
       {!liveMode && drawer('tool-zone', 'Brush / Zone', (
         <div className="mobile-tool-drawer-list">
-          {ZONE_TOOLS.map((id) => (
+          {ZONE_TOOLS.map((id) => {
+            const active =
+              (id === 'brush' && b.toolMode === 'brush' && !b.eraserActive) ||
+              (id === 'eraser' && b.toolMode === 'brush' && b.eraserActive) ||
+              (id === 'rectangle' && b.toolMode === 'zone')
+            return (
             <button
               key={id}
               type="button"
-              className="mobile-tool-drawer-item"
+              className={`mobile-tool-drawer-item${active ? ' active' : ''}`}
               onClick={() => { b.applyZoneTool(id); close() }}
             >
               <Icon name={id === 'brush' ? 'brush' : id === 'eraser' ? 'ink_eraser' : 'crop_free'} size={18} />
               {zoneToolLabel(id)}
             </button>
-          ))}
+            )
+          })}
         </div>
       ))}
 
@@ -54,7 +60,7 @@ export function MobileToolDrawers({ b, liveMode = false }: MobileToolDrawersProp
             <button
               key={id}
               type="button"
-              className="mobile-tool-drawer-item"
+              className={`mobile-tool-drawer-item${id === 'crop' && b.toolMode === 'crop' ? ' active' : ''}`}
               onClick={() => { b.applyCropTool(id); close() }}
             >
               <Icon name="crop" size={18} />

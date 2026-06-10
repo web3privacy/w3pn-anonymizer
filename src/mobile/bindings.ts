@@ -71,6 +71,8 @@ export interface AppMobileBindings {
   setMobileMode: (m: MobileMode) => void
   mobilePanel: MobilePanel
   setMobilePanel: (p: MobilePanel) => void
+  mobilePanelReturnTo: MobilePanel
+  setMobilePanelReturnTo: (p: MobilePanel) => void
   galleryBatchSelect: boolean
   setGalleryBatchSelect: (v: boolean) => void
 
@@ -202,6 +204,9 @@ export interface AppMobileBindings {
   selectedZoneId: string | null
 
   categoryIndices: Record<MobileToolCategory, number>
+  zoneToolCustomized: boolean
+  effectToolCustomized: boolean
+  setEffectToolCustomized: (v: boolean) => void
   setCategoryIndex: (cat: MobileToolCategory, idx: number) => void
   activeCategory: MobileToolCategory
   setActiveCategory: (cat: MobileToolCategory) => void
@@ -251,14 +256,17 @@ export interface AppMobileBindings {
   mobileViewZoom: number
   setMobileViewZoom: (z: number) => void
   lastDetectFailed: boolean
+  isDetecting: boolean
   detector: import('../types').DetectorStatus
   detectorLoading: boolean
   addLiveMediaToLibrary: (blob: Blob, opts?: { stayInLive?: boolean }) => string | null
-  openPhotoInEditor: (photoId: string, opts?: { slide?: boolean }) => void
+  openPhotoInEditor: (photoId: string, opts?: { slide?: boolean; returnTo?: 'live' }) => void
   stepAdjacentLibraryPhoto: (dir: -1 | 1) => void
   showMobileToast: (message: string, action?: { label: string; onClick: () => void }) => void
   exportLibraryProgress: { done: number; total: number } | null
   exitLiveToWorkspace: () => void
+  mobileEditorReturnTo: import('./types').MobileEditorReturnTo
+  returnToLiveFromEditor: () => void
   stepMobileViewZoom: (direction: 1 | -1) => void
 
   adjTransform: string
