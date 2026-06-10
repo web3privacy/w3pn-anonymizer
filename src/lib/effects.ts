@@ -1,4 +1,12 @@
 import type { AnonymizeEffectId, ColorAdjustments, EffectDefinition, EffectRenderOptions, GlitchSubEffect } from '../types'
+import { glApplyColorAdjustments } from './gl/color-adjust-gl'
+import { glApplyColorShift } from './gl/color-shift-gl'
+import { glApplyContourRect } from './gl/contour-gl'
+import { glApplyNoiseRect } from './gl/noise-gl'
+import { glApplyPixelateRect, mapPixelateBlockSize } from './gl/pixelate-gl'
+import { glApplyPixelShift } from './gl/pixel-shift-gl'
+import { glApplySilhouetteRect } from './gl/silhouette-gl'
+import { glApplyThermalRect } from './gl/thermal-gl'
 
 export const EMOJI_POOL = [
   // Cats
@@ -47,6 +55,27 @@ const getContext2d = (canvas: HTMLCanvasElement) => {
     throw new Error('Canvas 2D context is not available.')
   }
   return context
+}
+
+/** Crop a rect to scratchB, run GL shader, blit back. Returns true on success. */
+const tryGpuRect = (
+  ctx: CanvasRenderingContext2D,
+  rx: number,
+  ry: number,
+  rw: number,
+  rh: number,
+  glFn: (source: TexImageSource, w: number, h: number) => HTMLCanvasElement | null,
+): boolean => {
+  scratchB.width = rw
+  scratchB.height = rh
+  const sctx = getContext2d(scratchB)
+  sctx.drawImage(ctx.canvas, rx, ry, rw, rh, 0, 0, rw, rh)
+  const glOut = glFn(scratchB, rw, rh)
+  if (glOut && glOut.width === rw && glOut.height === rh) {
+    ctx.drawImage(glOut, rx, ry)
+    return true
+  }
+  return false
 }
 
 const clamp = (value: number, min: number, max: number) =>
@@ -290,11 +319,7 @@ const applyZoomBlurRect = (
   ctx.restore()
 }
 
-/** Maps 0–1 strength to pixel block size — fine at low end, very coarse at 100%. */
-export const mapPixelateBlockSize = (strength: number): number => {
-  const s = clamp(Number.isFinite(strength) ? strength : 0.5, 0, 1)
-  return Math.max(4, Math.round(4 + Math.pow(s, 1.7) * 48))
-}
+export { mapPixelateBlockSize } from './gl/pixelate-gl'
 
 const applyPixelateRect = (
   ctx: CanvasRenderingContext2D,
@@ -314,15 +339,25 @@ const applyPixelateRect = (
   )
 
   const blockSize = mapPixelateBlockSize(strength)
+  scratchB.width = rw
+  scratchB.height = rh
+  const sctx = getContext2d(scratchB)
+  sctx.drawImage(ctx.canvas, rx, ry, rw, rh, 0, 0, rw, rh)
+  const glOut = glApplyPixelateRect(scratchB, rw, rh, strength)
+  if (glOut && glOut.width === rw && glOut.height === rh) {
+    ctx.drawImage(glOut, rx, ry)
+    return
+  }
+
   const scaledW = Math.max(1, Math.round(rw / blockSize))
   const scaledH = Math.max(1, Math.round(rh / blockSize))
 
   scratchB.width = scaledW
   scratchB.height = scaledH
-  const sctx = getContext2d(scratchB)
-  sctx.imageSmoothingEnabled = false
-  sctx.clearRect(0, 0, scaledW, scaledH)
-  sctx.drawImage(ctx.canvas, rx, ry, rw, rh, 0, 0, scaledW, scaledH)
+  const scaledCtx = getContext2d(scratchB)
+  scaledCtx.imageSmoothingEnabled = false
+  scaledCtx.clearRect(0, 0, scaledW, scaledH)
+  scaledCtx.drawImage(ctx.canvas, rx, ry, rw, rh, 0, 0, scaledW, scaledH)
 
   ctx.save()
   ctx.imageSmoothingEnabled = false
@@ -377,6 +412,20 @@ const applyNoiseRect = (
     ctx.canvas.width,
     ctx.canvas.height,
   )
+
+  scratchB.width = rw
+  scratchB.height = rh
+  const noiseSrc = getContext2d(scratchB)
+  noiseSrc.drawImage(ctx.canvas, rx, ry, rw, rh, 0, 0, rw, rh)
+  const seedRaw = effectSeed('noise', rx, ry, rw, rh, options)
+  const noiseSeed = typeof seedRaw === 'number'
+    ? seedRaw
+    : Array.from(String(seedRaw)).reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) | 0, 0) % 10_000
+  const glNoise = glApplyNoiseRect(scratchB, rw, rh, strength, noiseSeed)
+  if (glNoise && glNoise.width === rw && glNoise.height === rh) {
+    ctx.drawImage(glNoise, rx, ry)
+    return
+  }
 
   const imageData = ctx.getImageData(rx, ry, rw, rh)
   const src = new Uint8ClampedArray(imageData.data)
@@ -657,9 +706,10 @@ const applySilhouetteRect = (
   x: number, y: number, width: number, height: number, strength: number, options?: EffectRenderOptions,
 ) => {
   const { x: rx, y: ry, width: rw, height: rh } = normalizeRect(x, y, width, height, ctx.canvas.width, ctx.canvas.height)
-  const src = ctx.getImageData(rx, ry, rw, rh)
+  if (tryGpuRect(ctx, rx, ry, rw, rh, (src, w, h) => glApplySilhouetteRect(src, w, h, strength))) return
+  const srcImg = ctx.getImageData(rx, ry, rw, rh)
   const out = ctx.createImageData(rw, rh)
-  const sd = src.data
+  const sd = srcImg.data
   const od = out.data
   const rng = seededRandom(effectSeed('silhouette', rx, ry, rw, rh, options))
   const cx = (rw - 1) / 2
@@ -712,6 +762,7 @@ const applyContourRect = (
   options?: EffectRenderOptions,
 ) => {
   const { x: rx, y: ry, width: rw, height: rh } = normalizeRect(x, y, width, height, ctx.canvas.width, ctx.canvas.height)
+  if (tryGpuRect(ctx, rx, ry, rw, rh, (src, w, h) => glApplyContourRect(src, w, h, strength))) return
   const src = ctx.getImageData(rx, ry, rw, rh)
   const out = ctx.createImageData(rw, rh)
   const sd = src.data; const od = out.data
@@ -776,6 +827,7 @@ const applyThermalRect = (
   x: number, y: number, width: number, height: number, strength: number, options?: EffectRenderOptions,
 ) => {
   const { x: rx, y: ry, width: rw, height: rh } = normalizeRect(x, y, width, height, ctx.canvas.width, ctx.canvas.height)
+  if (tryGpuRect(ctx, rx, ry, rw, rh, (src, w, h) => glApplyThermalRect(src, w, h, strength))) return
   const imageData = ctx.getImageData(rx, ry, rw, rh)
   const src = new Uint8ClampedArray(imageData.data)
   const data = imageData.data
@@ -788,10 +840,17 @@ const applyThermalRect = (
   }))
   const warp = Math.max(1, Math.round(1 + strength * 8))
   const spread = 0.4 + strength * 1.1
+  // Precompute deterministic per-row/column phase jitter so we never call rng()
+  // inside the per-pixel loop (huge cost + non-determinism on mobile).
+  const phaseX = new Float32Array(rh)
+  for (let i = 0; i < rh; i += 1) phaseX[i] = rng() * 0.4
+  const phaseY = new Float32Array(rw)
+  for (let i = 0; i < rw; i += 1) phaseY[i] = rng() * 0.4
   for (let py = 0; py < rh; py += 1) {
+    const sinPhase = Math.sin(py * 0.17 + phaseX[py]) * warp
     for (let px = 0; px < rw; px += 1) {
-      const wobbleX = Math.round(Math.sin(py * 0.17 + rng() * 0.4) * warp)
-      const wobbleY = Math.round(Math.cos(px * 0.13 + rng() * 0.4) * warp)
+      const wobbleX = Math.round(sinPhase)
+      const wobbleY = Math.round(Math.cos(px * 0.13 + phaseY[px]) * warp)
       const sx = clamp(px + wobbleX, 0, rw - 1)
       const sy = clamp(py + wobbleY, 0, rh - 1)
       const si = (sy * rw + sx) * 4
@@ -928,10 +987,26 @@ export const applyColorAdjustments = (
     adj.shadows === 0 && adj.highlights === 0 && adj.preset === 'none'
   if (isNoop) return
 
+  const lut = buildColorLUT(adj)
+
+  // GPU path: visually identical (per-channel LUT + Rec.601 saturation/threshold)
+  // but offloads the per-pixel work to the GPU. Falls back to the CPU loop below
+  // whenever WebGL is unavailable or the render fails. Source === destination
+  // canvas in every call site, so we read the canvas and copy the result back.
+  if (ctx.canvas.width === w && ctx.canvas.height === h) {
+    const glOut = glApplyColorAdjustments(ctx.canvas, w, h, lut, adj)
+    if (glOut) {
+      const prevOp = ctx.globalCompositeOperation
+      ctx.globalCompositeOperation = 'copy'
+      ctx.drawImage(glOut, 0, 0)
+      ctx.globalCompositeOperation = prevOp
+      return
+    }
+  }
+
   const imageData = ctx.getImageData(0, 0, w, h)
   const { data } = imageData
 
-  const lut = buildColorLUT(adj)
   const sa = adj.saturation / 100
   const isThreshold = adj.preset === 'threshold'
   const doSat = sa !== 0 || isThreshold
@@ -1027,6 +1102,9 @@ const FEATHER_CORE = 0.55   // 55% of radius is fully opaque, then soft falloff
 // so that effects like pixelate (which clobber scratchB internally) don't trash our patch.
 const brushSrc = document.createElement('canvas')   // holds original source pixels
 const brushDst = document.createElement('canvas')   // holds processed pixels + feather mask
+// Reused by previewEffectBrush (hover preview) — runs synchronously on the main
+// thread, so a single shared canvas avoids a fresh allocation per pointer move.
+const brushPreviewCanvas = document.createElement('canvas')
 
 const getBrushCtx = (canvas: HTMLCanvasElement) =>
   canvas.getContext('2d', { willReadFrequently: true })!
@@ -1229,8 +1307,8 @@ export const previewEffectBrush = (
 
   const pw = x1 - x0; const ph = y1 - y0
 
-  // Grab source pixels
-  const tmp = document.createElement('canvas')
+  // Grab source pixels (reuse a shared canvas; setting width also clears it)
+  const tmp = brushPreviewCanvas
   tmp.width = pw; tmp.height = ph
   const tCtx = tmp.getContext('2d', { willReadFrequently: true })!
   tCtx.drawImage(srcCanvas, x0, y0, pw, ph, 0, 0, pw, ph)
@@ -1294,9 +1372,27 @@ export interface GlitchParams {
   colorShiftSat?: number      // 0–100 saturation boost %
 }
 
+// Reusable output canvases for the distort pipeline. Distort runs are always
+// sequential (live transform pass is single-flight; video export is awaited
+// frame-by-frame), so a 2-canvas ping-pong pool avoids a fresh allocation on
+// every effect pass without risking buffer reuse before the result is consumed.
+const glitchPool: HTMLCanvasElement[] = []
+
+function acquireGlitchCanvas(exclude: HTMLCanvasElement, w: number, h: number): HTMLCanvasElement {
+  let canvas = glitchPool.find((c) => c !== exclude)
+  if (!canvas) {
+    canvas = document.createElement('canvas')
+    if (glitchPool.length < 2) glitchPool.push(canvas)
+  }
+  canvas.width = w
+  canvas.height = h
+  return canvas
+}
+
 /**
  * Apply a glitch/halftone/pixel-shift/color-shift effect to the entire canvas.
- * Returns a new canvas with the effect applied (non-destructive).
+ * Returns a pooled canvas with the effect applied (non-destructive to the input).
+ * The result must be consumed (e.g. drawn elsewhere) before the next pipeline run.
  */
 export async function applyGlitchEffect(
   srcCanvas: HTMLCanvasElement,
@@ -1305,8 +1401,7 @@ export async function applyGlitchEffect(
   const { subEffect, amount, halftoneDotSize, halftoneShape } = params
   const w = srcCanvas.width
   const h = srcCanvas.height
-  const out = document.createElement('canvas')
-  out.width = w; out.height = h
+  const out = acquireGlitchCanvas(srcCanvas, w, h)
   const ctx = out.getContext('2d', { willReadFrequently: true })!
   ctx.drawImage(srcCanvas, 0, 0)
 
@@ -1317,7 +1412,7 @@ export async function applyGlitchEffect(
   } else if (subEffect === 'color-shift') {
     applyColorShiftEffect(ctx, out, amount, params.colorShiftHue, params.colorShiftSat)
   } else if (subEffect === 'glitch') {
-    applyPhaseGlitchEffect(ctx, out, amount, params.glitchShift, params.glitchColorSplit)
+    applyPhaseGlitchEffect(ctx, out, amount, params.glitchShift, params.glitchColorSplit, params.seed)
   }
 
   return out
@@ -1337,7 +1432,11 @@ function applyPhaseGlitchEffect(
   amount: number,
   glitchShift?: number,
   _colorSplit?: number,   // kept for API compat but not used
+  seed?: number,
 ) {
+  // Seeded RNG so distort glitch is deterministic per frame (stable video export);
+  // falls back to a time-based seed when none is provided.
+  const rng = seededRandom(seed ?? Date.now())
   const w = canvas.width; const h = canvas.height
   const original = ctx.getImageData(0, 0, w, h)
   const origData = new Uint8ClampedArray(original.data)
@@ -1361,9 +1460,9 @@ function applyPhaseGlitchEffect(
   const bandInvert = new Uint8Array(h)
   let row = 0
   while (row < h) {
-    const bandH = Math.max(1, Math.floor(h / numBands * (0.3 + Math.random() * 1.4)))
-    const dx = (Math.random() > 0.45 ? 1 : -1) * Math.floor(Math.random() * maxShift)
-    const inv = Math.random() < invertChance ? 1 : 0
+    const bandH = Math.max(1, Math.floor(h / numBands * (0.3 + rng() * 1.4)))
+    const dx = (rng() > 0.45 ? 1 : -1) * Math.floor(rng() * maxShift)
+    const inv = rng() < invertChance ? 1 : 0
     for (let r = row; r < Math.min(h, row + bandH); r++) {
       bandShifts[r] = dx
       bandInvert[r] = inv
@@ -1400,6 +1499,16 @@ function applyPixelShiftEffect(
   shiftType?: PixelShiftType,
 ) {
   const w = canvas.width; const h = canvas.height
+  const glType = shiftType === 'shear' ? 'shear' : shiftType === 'wave' ? 'wave' : null
+  if (glType) {
+    const glOut = glApplyPixelShift(canvas, w, h, amount, pixelShiftX, pixelShiftY, glType)
+    if (glOut && glOut.width === w && glOut.height === h) {
+      ctx.globalCompositeOperation = 'copy'
+      ctx.drawImage(glOut, 0, 0)
+      ctx.globalCompositeOperation = 'source-over'
+      return
+    }
+  }
   const imageData = ctx.getImageData(0, 0, w, h)
   const src = new Uint8ClampedArray(imageData.data)
   const d = imageData.data
@@ -1454,6 +1563,13 @@ function applyColorShiftEffect(
   satBoost?: number,
 ) {
   const w = canvas.width; const h = canvas.height
+  const glOut = glApplyColorShift(canvas, w, h, amount, hueRotation ?? 0, satBoost ?? 0)
+  if (glOut && glOut.width === w && glOut.height === h) {
+    ctx.globalCompositeOperation = 'copy'
+    ctx.drawImage(glOut, 0, 0)
+    ctx.globalCompositeOperation = 'source-over'
+    return
+  }
   const imageData = ctx.getImageData(0, 0, w, h)
   const src = new Uint8ClampedArray(imageData.data)
   const d = imageData.data
@@ -1495,7 +1611,7 @@ function rotateHueSat(r: number, g: number, b: number, hueDeg: number, satAdd: n
     else h = (rn - gn) / d2 + 4
     h /= 6
   }
-  h = (h + hueDeg / 360) % 1
+  h = ((h + hueDeg / 360) % 1 + 1) % 1
   s = Math.min(1, Math.max(0, s + satAdd))
   // HSL → RGB
   const hue2rgb = (p: number, q: number, t: number) => {

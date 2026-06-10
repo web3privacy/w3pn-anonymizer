@@ -10,8 +10,6 @@ interface MobileTopBarProps {
   variant?: 'workspace' | 'live' | 'about'
   onClose?: () => void
   pipelineMsRef?: React.Ref<HTMLSpanElement>
-  showViewReset?: boolean
-  onResetView?: () => void
 }
 
 export const MobileTopBar = memo(function MobileTopBar({

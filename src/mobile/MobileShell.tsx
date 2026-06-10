@@ -1,5 +1,5 @@
 import { useCallback, useEffect } from 'react'
-import type { AppMobileBindings } from './bindings'
+import { useMobileBindings } from './useMobileBindings'
 import { MobileBatchDrawer } from './drawers/MobileBatchDrawer'
 import { MobileGalleryDrawer } from './drawers/MobileGalleryDrawer'
 import { MobileBottomToolbar } from './MobileBottomToolbar'
@@ -14,7 +14,6 @@ import './mobile-redesign.css'
 import './mobile-landscape.css'
 
 interface MobileShellProps {
-  b: AppMobileBindings
   fmtBytes: (n: number) => string
   setSidebarView: (v: 'grid' | 'list') => void
   sidebarView: 'grid' | 'list'
@@ -24,7 +23,6 @@ interface MobileShellProps {
 }
 
 export function MobileShell({
-  b,
   fmtBytes,
   setSidebarView,
   sidebarView,
@@ -32,6 +30,7 @@ export function MobileShell({
   batchProcessCount,
   embedEditor = false,
 }: MobileShellProps) {
+  const b = useMobileBindings()
   const showHome = b.photos.length === 0 && b.mobileMode !== 'live'
   const showLive = b.mobileMode === 'live'
   const selectedProcessableCount = b.photos.filter((p) => b.selectedForBatch.has(p.id) && !p.isVideo).length
@@ -145,7 +144,6 @@ export function MobileShell({
     return (
       <div className="mobile-shell mobile-shell-live">
         <MobileLiveMode
-          b={b}
           onOpenLibrary={openGallery}
           onOpenCapturedPhoto={b.openPhotoInEditor}
           onExitToWorkspace={() => b.exitLiveToWorkspace()}
@@ -176,7 +174,10 @@ export function MobileShell({
               showGalleryButton
               onOpenGallery={openGallery}
               showLiveButton
-              onLiveMode={() => { if (b.detectorLoading) return; b.setMobileMode('live'); b.setMobilePanel(null) }}
+              onLiveMode={() => {
+                if (b.detectorLoading) { b.showMobileToast('Loading face detector…'); return }
+                b.setMobileMode('live'); b.setMobilePanel(null)
+              }}
             />
             <MobileEditorToolbar b={b} />
           </>

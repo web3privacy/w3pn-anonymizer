@@ -25,6 +25,12 @@ const TOP_K = 5000
 let session: ort.InferenceSession | null = null
 let initPromise: Promise<boolean> | null = null
 
+// Reusable preprocessing buffers. The model input is a fixed 640x640 tensor, so
+// the resize canvas and the CHW float buffer (~4.9 MB) can be allocated once and
+// reused across every inference instead of per call (big GC win on mobile).
+let resizeCanvas: HTMLCanvasElement | null = null
+let chwBuffer: Float32Array | null = null
+
 export interface DetectorLoadProgress {
   loaded: number
   total: number
@@ -143,15 +149,42 @@ export async function initYuNet(): Promise<boolean> {
     // Inference stays fast because we detect on small frames; live mode further
     // shrinks the detect resolution. A timeout guards against a stuck compile.
     ort.env.wasm.numThreads = 1
-    const create = modelBuffer
-      ? ort.InferenceSession.create(new Uint8Array(modelBuffer), { executionProviders: ['wasm'] })
-      : ort.InferenceSession.create(modelUrl, { executionProviders: ['wasm'] })
+
+    // Prefer the WebGPU execution provider when the browser exposes it — this
+    // runs inference on the GPU entirely locally (no data leaves the browser),
+    // a big win on the heavy thorough/video detection paths. WASM remains the
+    // fallback if WebGPU is unavailable or session creation fails (mobile Safari
+    // support is still uneven). The JSEP wasm needed for WebGPU ships in onnx/.
+    const modelSource: Uint8Array | string = modelBuffer ? new Uint8Array(modelBuffer) : modelUrl
+    const webgpuAvailable = typeof navigator !== 'undefined' && 'gpu' in navigator
+
+    const createSession = async (): Promise<ort.InferenceSession> => {
+      if (webgpuAvailable) {
+        try {
+          if (import.meta.env.DEV) console.log('[yunet-wasm] Trying WebGPU EP…')
+          return await withTimeout(
+            ort.InferenceSession.create(modelSource as Uint8Array, {
+              executionProviders: ['webgpu', 'wasm'],
+            }),
+            30000,
+            'ONNX session (webgpu)',
+          )
+        } catch (err) {
+          console.warn('[yunet-wasm] WebGPU EP unavailable, falling back to WASM:', err)
+        }
+      }
+      return withTimeout(
+        ort.InferenceSession.create(modelSource as Uint8Array, { executionProviders: ['wasm'] }),
+        30000,
+        'ONNX session (wasm)',
+      )
+    }
 
     try {
       if (import.meta.env.DEV) {
         console.log('[yunet-wasm] Creating session…', modelUrl)
       }
-      session = await withTimeout(create, 30000, 'ONNX session')
+      session = await createSession()
       if (import.meta.env.DEV) {
         console.log('[yunet-wasm] Session ready, inputs:', session.inputNames)
       }
@@ -215,19 +248,21 @@ export async function detectYuNet(
   const scaleX = origW / inputW
   const scaleY = origH / inputH
 
-  // Resize canvas to inputW × inputH and prepare pixel data
-  const resizeCanvas = document.createElement('canvas')
-  resizeCanvas.width = padW
-  resizeCanvas.height = padH
-  const ctx = resizeCanvas.getContext('2d')!
+  // Resize canvas to inputW × inputH and prepare pixel data (reused across calls)
+  if (!resizeCanvas) {
+    resizeCanvas = document.createElement('canvas')
+    resizeCanvas.width = padW
+    resizeCanvas.height = padH
+  }
+  const ctx = resizeCanvas.getContext('2d', { willReadFrequently: true })!
   ctx.clearRect(0, 0, padW, padH)
   ctx.drawImage(canvas, 0, 0, origW, origH, 0, 0, inputW, inputH)
 
   const imageData = ctx.getImageData(0, 0, padW, padH)
   const pixels = imageData.data // RGBA
 
-  // Convert to NCHW float32 tensor (BGR order, values 0-255)
-  const chw = new Float32Array(3 * padH * padW)
+  // Convert to NCHW float32 tensor (BGR order, values 0-255) into a reused buffer
+  const chw = chwBuffer ?? (chwBuffer = new Float32Array(3 * padH * padW))
   const planeSize = padH * padW
   for (let i = 0; i < padH * padW; i++) {
     const ri = i * 4
@@ -288,6 +323,15 @@ export async function detectYuNet(
       }
     }
   }
+
+  // Release ORT tensors now that all output data has been copied into rawFaces.
+  // ORT Web tensors hold WASM-side memory that is not freed by GC alone.
+  try {
+    (inputTensor as { dispose?: () => void }).dispose?.()
+    for (const key of Object.keys(results)) {
+      (results[key] as { dispose?: () => void }).dispose?.()
+    }
+  } catch { /* dispose is best-effort */ }
 
   // Sort by score descending and apply NMS
   rawFaces.sort((a, b) => b.score - a.score)

@@ -1,11 +1,8 @@
 import { Icon } from '../components/Icon'
-import type { AppMobileBindings } from './bindings'
+import { useMobileBindings } from './useMobileBindings'
 
-interface MobileDrawMaskPanelProps {
-  b: AppMobileBindings
-}
-
-export function MobileDrawMaskPanel({ b }: MobileDrawMaskPanelProps) {
+export function MobileDrawMaskPanel() {
+  const b = useMobileBindings()
   const isVideo = b.activePhoto?.isVideo
   const drawActive = isVideo ? b.videoMaskDrawActive : b.imageMaskDrawActive
   if (!drawActive) return null

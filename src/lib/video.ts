@@ -7,6 +7,8 @@ import {
 import { applyColorAdjustments, applyEffectRect, isColorAdjNoop, pickRandomEmoji, type PixelShiftType } from './effects'
 import type { EffectRenderOptions } from '../types'
 import type { AnonymizeEffectId, ColorAdjustments, CustomImageAsset, CustomImageSource, Zone } from '../types'
+import { getFrameZonesAtTime, type VideoTrackKeyframe } from './video-timeline-core'
+import { expandTimelineFramesAsync, isVideoTimelineWorkerAvailable } from './video-timeline-client'
 import fixWebmDuration from 'webm-duration-fix'
 import { Muxer as Mp4Muxer, ArrayBufferTarget as Mp4ArrayBufferTarget } from 'mp4-muxer'
 import { Muxer as WebmMuxer, ArrayBufferTarget as WebmArrayBufferTarget } from 'webm-muxer'
@@ -187,10 +189,6 @@ interface VideoTrackState {
   confirmed: boolean
 }
 
-interface VideoTrackKeyframe {
-  timeSec: number
-  zones: Zone[]
-}
 
 function getCaptureStream(video: CaptureVideoElement): MediaStream | null {
   if (typeof video.captureStream === 'function') return video.captureStream()
@@ -942,91 +940,6 @@ async function normalizeRecordedVideoBlob(blob: Blob, mimeType: string): Promise
   }
 }
 
-function interpolateZone(a: Zone, b: Zone, t: number): Zone {
-  return {
-    ...a,
-    x: a.x + (b.x - a.x) * t,
-    y: a.y + (b.y - a.y) * t,
-    width: a.width + (b.width - a.width) * t,
-    height: a.height + (b.height - a.height) * t,
-    effect: b.effect,
-  }
-}
-
-function zonesAtTime(timeline: VideoTrackKeyframe[], mediaTime: number): Zone[] {
-  if (timeline.length === 0) return []
-  if (mediaTime <= timeline[0].timeSec) return timeline[0].zones.map(cloneZone)
-
-  let prev = timeline[0]
-  let next: VideoTrackKeyframe | null = null
-  for (let i = 1; i < timeline.length; i++) {
-    if (timeline[i].timeSec >= mediaTime) {
-      next = timeline[i]
-      break
-    }
-    prev = timeline[i]
-  }
-  if (!next) return prev.zones.map(cloneZone)
-
-  const span = Math.max(0.001, next.timeSec - prev.timeSec)
-  const t = clamp((mediaTime - prev.timeSec) / span, 0, 1)
-  const nextById = new Map(next.zones.map((zone) => [zone.id, zone]))
-
-  const zones = prev.zones.map((zone) => {
-    const matchingNext = nextById.get(zone.id)
-    return matchingNext ? interpolateZone(zone, matchingNext, t) : cloneZone(zone)
-  })
-
-  next.zones.forEach((zone) => {
-    if (!prev.zones.some((prevZone) => prevZone.id === zone.id) && t > 0.66) zones.push(cloneZone(zone))
-  })
-  return zones
-}
-
-function zonesBetweenKeyframes(prev: VideoTrackKeyframe, next: VideoTrackKeyframe, mediaTime: number): Zone[] {
-  if (mediaTime <= prev.timeSec) return prev.zones.map(cloneZone)
-  if (mediaTime >= next.timeSec) return next.zones.map(cloneZone)
-
-  const span = Math.max(0.001, next.timeSec - prev.timeSec)
-  const t = clamp((mediaTime - prev.timeSec) / span, 0, 1)
-  const nextById = new Map(next.zones.map((zone) => [zone.id, zone]))
-
-  const zones = prev.zones.map((zone) => {
-    const matchingNext = nextById.get(zone.id)
-    return matchingNext ? interpolateZone(zone, matchingNext, t) : cloneZone(zone)
-  })
-
-  next.zones.forEach((zone) => {
-    if (!prev.zones.some((prevZone) => prevZone.id === zone.id) && t > 0.66) zones.push(cloneZone(zone))
-  })
-  return zones
-}
-
-function getFrameZonesAtTime(
-  timeline: VideoTrackKeyframe[],
-  timedZones: VideoTimedZone[],
-  mediaTime: number,
-): Zone[] {
-  let zones: Zone[] = []
-  if (timeline.length > 0) {
-    if (timeline.length <= 1 || mediaTime <= timeline[0].timeSec || mediaTime >= timeline[timeline.length - 1].timeSec) {
-      zones = zonesAtTime(timeline, mediaTime)
-    } else {
-      let keyframeIndex = 0
-      while (keyframeIndex < timeline.length - 2 && timeline[keyframeIndex + 1].timeSec < mediaTime) {
-        keyframeIndex += 1
-      }
-      zones = zonesBetweenKeyframes(timeline[keyframeIndex], timeline[keyframeIndex + 1], mediaTime)
-    }
-  }
-  for (const timedZone of timedZones) {
-    if (mediaTime >= timedZone.startSec && mediaTime <= timedZone.endSec) {
-      zones.push({ ...timedZone.zone, id: `${timedZone.id}-t${Math.round(mediaTime * 1000)}` })
-    }
-  }
-  return zones
-}
-
 function waitForSeek(video: HTMLVideoElement, timeSec: number): Promise<void> {
   const targetTime = Math.min(Math.max(0, timeSec), Number.isFinite(video.duration) ? video.duration : timeSec)
   if (Math.abs(video.currentTime - targetTime) < 0.001) return Promise.resolve()
@@ -1506,6 +1419,8 @@ export async function processVideo(
     }
 
     await waitForSeek(video, 0)
+    options.onPhase?.('preparing')
+    const expandedFrames = await expandTimelineFramesAsync(timeline, timedZones, fps, totalFrames)
     options.onPhase?.('rendering')
 
     const effectOptions: EffectRenderOptions = {
@@ -1527,7 +1442,8 @@ export async function processVideo(
         return
       }
       ctx.drawImage(sourceFrame ?? video, 0, 0, w, h)
-      const zones = getFrameZonesAtTime(timeline, timedZones, mediaTime)
+      const frameIndex = clamp(Math.round(mediaTime * fps), 0, Math.max(0, totalFrames - 1))
+      const zones = (expandedFrames[frameIndex] ?? getFrameZonesAtTime(timeline, timedZones, mediaTime))
         .map((zone) => applyVideoEffectSettings(zone, options, timedZoneIds))
       drawZones(ctx, zones, w, h, options.strength, effectOptions)
       if (colorAdjEnabled && options.colorAdj) {
@@ -1616,7 +1532,7 @@ export function getVideoPipelineCapabilities(): VideoPipelineCapabilities {
     mediaRecorder: typeof MediaRecorder !== 'undefined',
     manualCanvasFrameCapture,
     requestVideoFrameCallback: 'requestVideoFrameCallback' in HTMLVideoElement.prototype,
-    timelineWorker: typeof Worker !== 'undefined',
+    timelineWorker: isVideoTimelineWorkerAvailable(),
     offscreenCanvas: typeof OffscreenCanvas !== 'undefined',
     webCodecs: Boolean(host.VideoEncoder && host.VideoFrame),
     webCodecsRenderer,

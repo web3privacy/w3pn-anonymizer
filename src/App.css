@@ -2692,9 +2692,9 @@ input[type="number"].tb-quality-num {
 .about-link:hover { text-decoration: underline; opacity: 0.85; }
 
 /* ── Feedback textarea ─────────────────────────────────────────────── */
+.feedback-subject,
 .feedback-textarea {
   width: 100%;
-  min-height: 100px;
   padding: 0.5rem;
   font: inherit;
   font-size: 0.8rem;
@@ -2702,12 +2702,20 @@ input[type="number"].tb-quality-num {
   border-radius: 6px;
   background: var(--surface-muted);
   color: var(--text-primary);
+}
+.feedback-subject {
+  margin-bottom: 0.5rem;
+}
+.feedback-textarea {
+  min-height: 100px;
   resize: vertical;
 }
+.feedback-subject:focus,
 .feedback-textarea:focus {
   outline: none;
   border-color: var(--accent);
 }
+.feedback-subject::placeholder,
 .feedback-textarea::placeholder {
   color: var(--text-muted);
 }

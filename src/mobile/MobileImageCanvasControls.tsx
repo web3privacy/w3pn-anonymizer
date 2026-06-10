@@ -1,18 +1,16 @@
 import { memo, useEffect, useRef, useState } from 'react'
 import { Icon } from '../components/Icon'
 import type { AppMobileBindings } from './bindings'
+import { useMobileBindings } from './useMobileBindings'
 import { useHoldRepeat } from '../lib/useHoldRepeat'
-
-interface MobileImageCanvasControlsProps {
-  b: AppMobileBindings
-}
 
 function isEditFrameMode(b: AppMobileBindings): boolean {
   const p = b.activePhoto
   return Boolean(p && !p.isVideo && p.derivedFromVideoId && p.derivedFromVideoTime != null)
 }
 
-export const MobileImageCanvasControls = memo(function MobileImageCanvasControls({ b }: MobileImageCanvasControlsProps) {
+export const MobileImageCanvasControls = memo(function MobileImageCanvasControls() {
+  const b = useMobileBindings()
   const photo = b.activePhoto
   const editFrame = photo ? isEditFrameMode(b) : false
   const hasZones = b.activeZones.length > 0

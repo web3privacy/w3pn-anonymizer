@@ -2324,7 +2324,7 @@
   cursor: pointer;
 }
 
-/* ── Live mode floating controls — no glass strip over the preview ── */
+/* ── Live mode floating controls — transparent strip (matches desktop) ── */
 .app-shell-mobile .mobile-live-floating-controls {
   background: transparent;
   backdrop-filter: none;
@@ -3041,6 +3041,12 @@
   justify-content: center;
   padding: 0;
   cursor: pointer;
+}
+
+.mobile-gallery-delete.confirming {
+  background: #c2362b;
+  border-color: #e0594e;
+  color: #fff;
 }
 
 .mobile-gallery-delete--list {

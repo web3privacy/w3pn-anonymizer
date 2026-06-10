@@ -333,6 +333,7 @@ interface FramePipelineState {
   prevDetectTs: number
   motion: number
   motionPrev: Uint8ClampedArray | null
+  motionBuf: Uint8ClampedArray | null
 }
 
 /** Cheap whole-frame motion estimate (0..1) via downscaled grayscale frame diff. */
@@ -343,20 +344,26 @@ function estimateMotion(source: HTMLCanvasElement, state: FramePipelineState): n
     motionCanvas.width = w
     motionCanvas.height = h
     state.motionPrev = null
+    state.motionBuf = null
   }
   const mctx = motionCanvas.getContext('2d', { alpha: false })
   if (!mctx) return 0
   mctx.drawImage(source, 0, 0, source.width, source.height, 0, 0, w, h)
   const data = mctx.getImageData(0, 0, w, h).data
   const prev = state.motionPrev
-  const cur = new Uint8ClampedArray(w * h)
+  // Ping-pong between two persistent buffers instead of allocating each frame.
+  const cur = state.motionBuf && state.motionBuf.length === w * h
+    ? state.motionBuf
+    : new Uint8ClampedArray(w * h)
   let diffSum = 0
   for (let i = 0, p = 0; i < data.length; i += 4, p += 1) {
     const lum = (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114) | 0
     cur[p] = lum
     if (prev) diffSum += Math.abs(lum - prev[p])
   }
+  // Swap: this frame's buffer becomes prev; old prev becomes the spare to refill.
   state.motionPrev = cur
+  state.motionBuf = prev
   if (!prev) return 0
   // Normalize: average per-pixel luminance delta mapped to ~0..1.
   const avg = diffSum / (w * h)
@@ -398,8 +405,9 @@ function applyFrameEffects(
 ) {
   const pipelineT0 = performance.now()
 
-  applyColorAdjustments(ctx, opts.colorAdj, ctx.canvas)
-
+  // Color adjustments are applied earlier in the frame tick (before the distort
+  // source is sampled) so distort no longer discards them. Here we only blit the
+  // distort scratch and per-face effects.
   const sub = opts.transform.enabled.length > 0
   const key = transformFingerprint(opts)
   if (sub) {
@@ -509,6 +517,7 @@ export function startLiveCameraLoop(
     prevDetectTs: 0,
     motion: 0,
     motionPrev: null,
+    motionBuf: null,
   }
 
   const runTransformPass = (srcW: number, srcH: number, opts: LiveCameraOpts) => {
@@ -526,6 +535,9 @@ export function startLiveCameraLoop(
           opts.transform.strengths,
           opts.transform.params,
           opts.transform.pixelShiftType,
+          // Vary the seed each pass so the live glitch keeps animating (~every
+          // TRANSFORM_INTERVAL_MS); video export passes a per-frame seed instead.
+          gen,
         )
         if (gen !== state.transformGen) return
         if (transformScratch.width !== srcW || transformScratch.height !== srcH) {
@@ -756,6 +768,13 @@ export function startLiveCameraLoop(
           reportFaceCount(0)
           callbacks?.onZones?.([])
         }
+
+        // Apply color adjustments to the live frame BEFORE sampling the distort
+        // source, so the distort pipeline (and its blit in applyFrameEffects)
+        // operates on the color-adjusted image — matching the capture path
+        // (renderLiveCaptureFrame) and never discarding color adjustments.
+        // Detection above already sampled the raw frame, so YuNet is unaffected.
+        applyColorAdjustments(ctx, opts.colorAdj, ctx.canvas)
 
         if (opts.transform.enabled.length > 0 && !transformPending.current && ts - lastTransformAt >= TRANSFORM_INTERVAL_MS) {
           lastTransformAt = ts

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Icon } from '../../components/Icon'
 import type { PhotoItem } from '../../types'
 import { MobileToolDrawer } from '../MobileToolDrawer'
@@ -55,6 +55,24 @@ export function MobileGalleryDrawer({
   exportProgress,
 }: MobileGalleryDrawerProps) {
   const [downloadSheetOpen, setDownloadSheetOpen] = useState(false)
+  // Two-tap delete confirmation: first tap arms the button, second tap deletes.
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
+  const pendingResetRef = useRef<number | null>(null)
+
+  useEffect(() => () => {
+    if (pendingResetRef.current != null) window.clearTimeout(pendingResetRef.current)
+  }, [])
+
+  const handleDeleteTap = (id: string) => {
+    if (pendingResetRef.current != null) window.clearTimeout(pendingResetRef.current)
+    if (pendingDeleteId === id) {
+      setPendingDeleteId(null)
+      onDeletePhoto(id)
+      return
+    }
+    setPendingDeleteId(id)
+    pendingResetRef.current = window.setTimeout(() => setPendingDeleteId(null), 3000)
+  }
 
   const handleTap = (id: string) => {
     if (batchSelectMode) {
@@ -179,11 +197,11 @@ export function MobileGalleryDrawer({
                     </button>
                     <button
                       type="button"
-                      className="mobile-gallery-delete"
-                      onClick={(e) => { e.stopPropagation(); onDeletePhoto(p.id) }}
-                      aria-label={`Delete ${p.name.split('/').pop()}`}
+                      className={`mobile-gallery-delete${pendingDeleteId === p.id ? ' confirming' : ''}`}
+                      onClick={(e) => { e.stopPropagation(); handleDeleteTap(p.id) }}
+                      aria-label={pendingDeleteId === p.id ? `Tap again to delete ${p.name.split('/').pop()}` : `Delete ${p.name.split('/').pop()}`}
                     >
-                      <Icon name="delete" size={15} />
+                      <Icon name={pendingDeleteId === p.id ? 'delete_forever' : 'delete'} size={15} />
                     </button>
                   </div>
                 )
@@ -215,11 +233,11 @@ export function MobileGalleryDrawer({
                     </button>
                     <button
                       type="button"
-                      className="mobile-gallery-delete mobile-gallery-delete--list"
-                      onClick={(e) => { e.stopPropagation(); onDeletePhoto(p.id) }}
-                      aria-label={`Delete ${p.name.split('/').pop()}`}
+                      className={`mobile-gallery-delete mobile-gallery-delete--list${pendingDeleteId === p.id ? ' confirming' : ''}`}
+                      onClick={(e) => { e.stopPropagation(); handleDeleteTap(p.id) }}
+                      aria-label={pendingDeleteId === p.id ? `Tap again to delete ${p.name.split('/').pop()}` : `Delete ${p.name.split('/').pop()}`}
                     >
-                      <Icon name="delete" size={15} />
+                      <Icon name={pendingDeleteId === p.id ? 'delete_forever' : 'delete'} size={15} />
                     </button>
                   </div>
                 )

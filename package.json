@@ -11,6 +11,8 @@
     "dev:ipv4": "vite --host 127.0.0.1 --port 5173 --strictPort",
     "build": "tsc && vite build",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "preview": "vite preview",
     "electron:dev": "npm run build && electron .",
     "electron:build": "npm run build && electron-builder --mac",
@@ -27,6 +29,10 @@
     "icons:favicons": "node scripts/generate-favicons.mjs",
     "release:audit": "node scripts/release-audit.mjs",
     "smoke": "node scripts/release-smoke.mjs",
+    "smoke:vectorize": "node scripts/vectorize-e2e.mjs",
+    "smoke:gl": "node scripts/gl-parity-e2e.mjs",
+    "smoke:editor": "node scripts/editor-e2e.mjs",
+    "smoke:visual": "node scripts/visual-e2e.mjs",
     "release:check": "npm run lint && npm run build && npm run smoke && npm run release:audit"
   },
   "build": {
@@ -116,6 +122,7 @@
     "playwright": "^1.60.0",
     "sharp": "^0.34.5",
     "typescript": "^5.2.2",
-    "vite": "^8.0.16"
+    "vite": "^8.0.16",
+    "vitest": "^4.1.8"
   }
 }

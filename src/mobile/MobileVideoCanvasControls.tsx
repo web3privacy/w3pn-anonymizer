@@ -126,7 +126,7 @@ export const MobileVideoCanvasControls = memo(function MobileVideoCanvasControls
         </div>
       )}
 
-      {drawActive && !b.videoProcessing && showFaceTools && <MobileDrawMaskPanel b={b} />}
+      {drawActive && !b.videoProcessing && showFaceTools && <MobileDrawMaskPanel />}
     </div>
   )
 })

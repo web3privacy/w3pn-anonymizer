@@ -3,7 +3,7 @@ import type { Zone } from '../types'
 import { applyLiveTrackSettings, readLiveTrackCapabilities } from '../lib/live-camera-controls'
 import { captureLivePhotoBlob, startLiveCameraLoop, type LiveCameraOpts, type LiveZoneInfo } from '../lib/live-camera'
 import { Icon } from '../components/Icon'
-import type { AppMobileBindings } from './bindings'
+import { useMobileBindings } from './useMobileBindings'
 import { DEFAULT_LIVE_CAMERA_SETTINGS, type LiveCameraSettings } from './liveCameraTypes'
 import { MobileBottomToolbar } from './MobileBottomToolbar'
 import { MobileLiveCameraSettings } from './MobileLiveCameraSettings'
@@ -22,7 +22,6 @@ const LIVE_PREVIEW_PANELS: ReadonlySet<MobilePanel> = new Set([
 ])
 
 interface MobileLiveModeProps {
-  b: AppMobileBindings
   onOpenLibrary: () => void
   onExitToWorkspace: () => void
   onFallbackUpload: () => void
@@ -31,13 +30,13 @@ interface MobileLiveModeProps {
 }
 
 export function MobileLiveMode({
-  b,
   onOpenLibrary,
   onExitToWorkspace,
   onFallbackUpload,
   onCaptureSaved,
   onOpenCapturedPhoto,
 }: MobileLiveModeProps) {
+  const b = useMobileBindings()
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const streamRef = useRef<MediaStream | null>(null)

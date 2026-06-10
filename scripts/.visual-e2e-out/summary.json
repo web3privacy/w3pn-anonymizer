@@ -1,0 +1,13 @@
+{
+  "timestamp": "2026-06-10T20:37:45.048Z",
+  "base": "http://127.0.0.1:4173",
+  "failures": [],
+  "screenshots": [
+    "01-desktop-home.png",
+    "02-desktop-editor.png",
+    "03-desktop-anonymized.png",
+    "04-desktop-vectorize.png",
+    "05-mobile-home.png",
+    "06-mobile-after-load.png"
+  ]
+}

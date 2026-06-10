@@ -292,6 +292,138 @@
   text-transform: uppercase;
 }
 
+/* ── Desktop video editor — mobile-style controls ─────────────── */
+.app-shell-desktop-v2--video {
+  --mobile-accent: #00ff78;
+  --mobile-accent-dim: rgba(0, 255, 120, 0.15);
+  --mobile-glass-bg: rgba(8, 8, 8, 0.52);
+  --mobile-glass-border: rgba(255, 255, 255, 0.1);
+  --mobile-glass-blur: 20px;
+  --mobile-pad-h: 14px;
+  --mobile-draw-mask-h: 44px;
+}
+
+.app-shell-desktop-v2--video .viewer,
+.app-shell-desktop-v2--video .editor-area {
+  background: #000;
+}
+
+.app-shell-desktop-v2--video .video-player-wrap {
+  padding: 0.75rem 1rem 0.5rem;
+}
+
+.app-shell-desktop-v2--video .video-action-row.mobile-canvas-bottom-bar--inline {
+  position: relative;
+  inset: auto;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 34px;
+  gap: 8px;
+  align-items: center;
+  padding: 0.35rem 0 0;
+  pointer-events: auto;
+  z-index: 5;
+  min-height: 48px;
+}
+
+.app-shell-desktop-v2--video .video-action-row .mobile-canvas-action-cluster,
+.app-shell-desktop-v2--video .video-action-row .mobile-zoom-side-btn {
+  pointer-events: auto;
+}
+
+.app-shell-desktop-v2--video .video-player-wrap .mobile-draw-mask-panel {
+  position: relative;
+  inset: auto;
+  margin-top: 0.35rem;
+  pointer-events: auto;
+}
+
+.app-shell-desktop-v2--video:has(.video-player-wrap .mobile-draw-mask-panel) {
+  --mobile-draw-mask-h: 44px;
+}
+
+.app-shell-desktop-v2--video .mobile-anonymize-btn {
+  background: var(--mobile-accent);
+  color: #000;
+  border: 1px solid var(--mobile-accent);
+  border-radius: 999px;
+  padding: 10px 20px;
+  font-size: 0.58rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  min-width: 92px;
+  min-height: 40px;
+  box-shadow: none;
+}
+
+.app-shell-desktop-v2--video .mobile-anonymize-btn:disabled {
+  opacity: 0.45;
+}
+
+.app-shell-desktop-v2--video .mobile-canvas-secondary-btn {
+  height: 40px;
+  min-height: 40px;
+  border-radius: 999px;
+  padding: 0 10px;
+  font-size: 0.5rem;
+  letter-spacing: 0.06em;
+  border-color: rgba(255, 255, 255, 0.3);
+  background: transparent;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.app-shell-desktop-v2--video .mobile-canvas-secondary-btn.active {
+  border-color: var(--mobile-accent);
+  color: var(--mobile-accent);
+}
+
+.app-shell-desktop-v2--video .mobile-zoom-side-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+}
+
+.app-shell-desktop-v2--video .mobile-canvas-bottom-bar--video .mobile-canvas-action-cluster {
+  gap: 8px;
+}
+
+.app-shell-desktop-v2--video .video-timeline-row {
+  padding-top: 0.25rem;
+  padding-bottom: 8px;
+}
+
+.app-shell-desktop-v2--video .video-timeline-time {
+  font-size: 0.58rem;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.app-shell-desktop-v2--video .video-timeline-play {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid var(--mobile-glass-border);
+  border-radius: 8px;
+  background: var(--mobile-glass-bg);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  color: #fff;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+}
+
+.app-shell-desktop-v2--video .video-timeline-scrubber {
+  accent-color: var(--mobile-accent);
+}
+
+.app-shell-desktop-v2--video .mobile-video-progress {
+  margin-left: 0;
+  margin-right: 0;
+  width: 100%;
+}
+
+.app-shell-desktop-v2--video .mobile-draw-mask-panel {
+  --text-primary: #fff;
+  --text-muted: rgba(255, 255, 255, 0.85);
+}
+
 .desktop-live-overlay {
   position: fixed;
   inset: 0;
