@@ -64,7 +64,7 @@ export const MobileBottomToolbar = memo(function MobileBottomToolbar({ b, liveMo
 
   return (
     <div className={`mobile-bottom-toolbar${isVideoEditor && b.videoProcessing ? ' mobile-bottom-toolbar--processing' : ''}`}>
-      {!b.videoProcessing && !isVideoEditor && b.toolMode !== 'crop' ? (
+      {!b.videoProcessing && b.toolMode !== 'crop' ? (
       <div className="mobile-sliders-row">
         <div className="mobile-slider-group">
           <span className="mobile-slider-label">{strLabel}</span>

@@ -172,16 +172,16 @@ export const MobileImageCanvasControls = memo(function MobileImageCanvasControls
                 APPLY CROP
               </button>
             </div>
-          ) : (
+          ) : canAnonymize ? (
             <button
               className="mobile-anonymize-btn"
               type="button"
               onClick={b.applyZones}
-              disabled={busy || !canAnonymize}
+              disabled={busy}
             >
               ANONYMIZE
             </button>
-          )}
+          ) : null}
           </div>
         </div>
 

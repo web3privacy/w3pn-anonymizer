@@ -180,6 +180,8 @@ export interface AppMobileBindings {
   selectedEmoji: string | null
   onToggleEmojiRandom: (random: boolean) => void
   onPickEmoji: (emoji: string) => void
+  captureEffectPickerSnapshot: () => EffectPickerSnapshot | null
+  restoreEffectPickerSnapshot: (snap: EffectPickerSnapshot) => void | Promise<void>
   /** Confirmed emoji choice (null = random per face). */
   liveFixedEmoji: string | null
   /** Confirmed custom-image asset id (null = random per face). */
@@ -294,6 +296,18 @@ export interface AppMobileBindings {
   toggleDistortEffect: (id: import('../lib/distort-effects').DistortEffectId) => void
   distortStrengthByEffect: Record<import('../lib/distort-effects').DistortEffectId, number>
   setDistortStrength: (id: import('../lib/distort-effects').DistortEffectId, value: number) => void
+}
+
+export interface EffectPickerSnapshot {
+  zones: Zone[]
+  zonesAnonymized: boolean
+  selectedEffect: AnonymizeEffectId
+  emojiRandom: boolean
+  selectedEmoji: string | null
+  customImageRandom: boolean
+  selectedCustomImageId: string | null
+  customImageSource: CustomImageSource
+  workCanvasSnap: ImageData | null
 }
 
 export type { GlitchSubEffect, NormalizeCodecEngine }

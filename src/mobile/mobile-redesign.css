@@ -1688,6 +1688,16 @@
   display: none;
 }
 
+.mobile-effects-apply-footer {
+  width: 100%;
+}
+
+.mobile-effects-apply-footer .mobile-distort-apply-btn {
+  width: 100%;
+  min-height: 44px;
+  font-size: 0.62rem;
+}
+
 .mobile-emoji-grid {
   display: grid;
   grid-auto-flow: column;

@@ -1136,6 +1136,11 @@ function App() {
     setZonesAnonymized(false)
   }, [activePhotoId])
 
+  const updateActiveZoneFields = useCallback((updater: (zones: Zone[]) => Zone[]) => {
+    if (!activePhotoId) return
+    setZonesByPhoto((cur) => ({ ...cur, [activePhotoId]: updater(cur[activePhotoId] ?? []) }))
+  }, [activePhotoId])
+
   const setActiveDirty = useCallback((isDirty: boolean) => {
     if (!activePhotoId) return
     setDirtyByPhoto((cur) => ({ ...cur, [activePhotoId]: isDirty }))
@@ -1262,36 +1267,36 @@ function App() {
     setEmojiRandom(random)
     emojiRandomRef.current = random
     if (random) {
-      setActiveZones((zs) => zs.map((z) => (z.effect === 'emoji' ? { ...z, emoji: pickRandomEmoji() } : z)))
+      updateActiveZoneFields((zs) => zs.map((z) => (z.effect === 'emoji' ? { ...z, emoji: pickRandomEmoji() } : z)))
     } else if (selectedEmojiRef.current) {
       const emoji = selectedEmojiRef.current
-      setActiveZones((zs) => zs.map((z) => (z.effect === 'emoji' ? { ...z, emoji } : z)))
+      updateActiveZoneFields((zs) => zs.map((z) => (z.effect === 'emoji' ? { ...z, emoji } : z)))
     }
-  }, [])
+  }, [updateActiveZoneFields])
 
   const handlePickEmoji = useCallback((emoji: string) => {
     setEmojiRandom(false)
     setSelectedEmoji(emoji)
     emojiRandomRef.current = false
     selectedEmojiRef.current = emoji
-    setActiveZones((zs) => zs.map((z) => (z.effect === 'emoji' ? { ...z, emoji } : z)))
-  }, [])
+    updateActiveZoneFields((zs) => zs.map((z) => (z.effect === 'emoji' ? { ...z, emoji } : z)))
+  }, [updateActiveZoneFields])
 
   const handleToggleCustomRandom = useCallback((random: boolean) => {
     setCustomImageRandom(random)
     customImageRandomRef.current = random
-    setActiveZones((zs) => zs.map((z) => (z.effect === 'custom-image'
+    updateActiveZoneFields((zs) => zs.map((z) => (z.effect === 'custom-image'
       ? { ...z, customImageAssetId: random ? pickCustomImageAssetId(customImageAssetsRef.current, z.id) : (selectedCustomImageIdRef.current ?? z.customImageAssetId) }
       : z)))
-  }, [])
+  }, [updateActiveZoneFields])
 
   const handlePickCustomImage = useCallback((assetId: string) => {
     setCustomImageRandom(false)
     setSelectedCustomImageId(assetId)
     customImageRandomRef.current = false
     selectedCustomImageIdRef.current = assetId
-    setActiveZones((zs) => zs.map((z) => (z.effect === 'custom-image' ? { ...z, customImageAssetId: assetId } : z)))
-  }, [])
+    updateActiveZoneFields((zs) => zs.map((z) => (z.effect === 'custom-image' ? { ...z, customImageAssetId: assetId } : z)))
+  }, [updateActiveZoneFields])
 
   const updateNormalizeSetting = useCallback(<K extends keyof NormalizeSettings>(key: K, value: NormalizeSettings[K]) => {
     setNormalizeSettings((cur) => ({ ...cur, [key]: value }))
@@ -3550,7 +3555,10 @@ function App() {
     selectedEmoji,
     emojiRandom,
     selectedCustomImageId,
+    customImageRandom,
     customImageSource,
+    brushStrength,
+    detectFaceOffset,
     mobilePanel,
     autoDetect,
   ])
@@ -4279,6 +4287,73 @@ function App() {
       }
     })
   }, [activePhoto, activePhotoId, activeZones, isMobile, lastZoneTool, reapplyZoneEffectsPreview, setActiveDirty])
+
+  const captureEffectPickerSnapshot = useCallback((): import('./mobile/bindings').EffectPickerSnapshot | null => {
+    const photo = activePhotoRef.current
+    if (!photo || photo.isVideo || !activePhotoId) return null
+    const wc = workCanvasRef.current
+    const ctx = getWorkCtx()
+    let workCanvasSnap: ImageData | null = null
+    if (wc && ctx && wc.width > 0 && wc.height > 0) {
+      workCanvasSnap = ctx.getImageData(0, 0, wc.width, wc.height)
+    }
+    return {
+      zones: activeZones.map((z) => ({ ...z })),
+      zonesAnonymized,
+      selectedEffect: selectedEffectRef.current,
+      emojiRandom,
+      selectedEmoji,
+      customImageRandom,
+      selectedCustomImageId,
+      customImageSource,
+      workCanvasSnap,
+    }
+  }, [
+    activePhotoId,
+    activeZones,
+    customImageRandom,
+    customImageSource,
+    emojiRandom,
+    selectedCustomImageId,
+    selectedEmoji,
+    zonesAnonymized,
+    getWorkCtx,
+  ])
+
+  const restoreEffectPickerSnapshot = useCallback(async (snap: import('./mobile/bindings').EffectPickerSnapshot) => {
+    const photoId = activePhotoIdRef.current
+    if (!photoId) return
+    if (snap.customImageSource !== customImageSource) {
+      await loadCustomImagePreset(snap.customImageSource)
+    }
+    setEmojiRandom(snap.emojiRandom)
+    emojiRandomRef.current = snap.emojiRandom
+    setSelectedEmoji(snap.selectedEmoji)
+    selectedEmojiRef.current = snap.selectedEmoji
+    setCustomImageRandom(snap.customImageRandom)
+    customImageRandomRef.current = snap.customImageRandom
+    setSelectedCustomImageId(snap.selectedCustomImageId)
+    selectedCustomImageIdRef.current = snap.selectedCustomImageId
+    setCustomImageSource(snap.customImageSource)
+    selectedEffectRef.current = snap.selectedEffect
+    setSelectedEffectState(snap.selectedEffect)
+    setZonesByPhoto((cur) => ({ ...cur, [photoId]: snap.zones }))
+    setSelectedZoneId(null)
+    setZonesAnonymized(snap.zonesAnonymized)
+    setAppliedByPhoto((cur) => ({ ...cur, [photoId]: snap.zonesAnonymized }))
+    const wc = workCanvasRef.current
+    const ctx = getWorkCtx()
+    if (snap.workCanvasSnap && wc && ctx) {
+      ctx.putImageData(snap.workCanvasSnap, 0, 0)
+      previewBakedRef.current = snap.zonesAnonymized
+      renderCanvas()
+    } else if (snap.zonesAnonymized && snap.zones.length > 0) {
+      await reapplyZoneEffectsPreview(snap.zones)
+    } else {
+      previewBakedRef.current = false
+      renderCanvas()
+    }
+  }, [customImageSource, getWorkCtx, loadCustomImagePreset, reapplyZoneEffectsPreview, renderCanvas])
 
   // Build a primitive signature of zones so the re-bake effect only fires when
   // the geometry / effect / emoji actually changes — not on every render.
@@ -5215,6 +5290,8 @@ function App() {
     selectedEmoji,
     onToggleEmojiRandom: handleToggleEmojiRandom,
     onPickEmoji: handlePickEmoji,
+    captureEffectPickerSnapshot,
+    restoreEffectPickerSnapshot,
     customImageRandom,
     selectedCustomImageId,
     onToggleCustomRandom: handleToggleCustomRandom,
@@ -7388,16 +7465,16 @@ function App() {
                 </button>
               </div>
             )}
-            {activePhoto && toolMode !== 'crop' && activeZones.length > 0 && (
+            {activePhoto && toolMode !== 'crop' && activeZones.length > 0 && !zonesAnonymized && (
               <div className="viewer-corner">
                 <button
-                  className={`corner-btn${zonesAnonymized ? '' : ' corner-btn-primary'}`}
+                  className="corner-btn corner-btn-primary"
                   type="button"
                   onClick={applyZones}
-                  disabled={isBusy || zonesAnonymized}
-                  title={zonesAnonymized ? 'Already applied — change zones or effect to re-apply' : `Apply anonymization to ${activeZones.length} zone${activeZones.length !== 1 ? 's' : ''}`}
+                  disabled={isBusy}
+                  title={`Apply anonymization to ${activeZones.length} zone${activeZones.length !== 1 ? 's' : ''}`}
                 >
-                  {zonesAnonymized ? 'Applied ✓' : 'Anonymize'}
+                  Anonymize
                 </button>
               </div>
             )}
