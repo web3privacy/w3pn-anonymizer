@@ -11,6 +11,8 @@ import { MobileLiveFaceOverlay } from './MobileLiveFaceOverlay'
 import { MobileLiveFloatingControls } from './MobileLiveFloatingControls'
 import { MobileToolDrawers } from './MobileToolDrawers'
 import { MobileTopBar } from './MobileTopBar'
+import { VoiceMaskPanel } from '../components/VoiceMaskPanel'
+import { useVoiceAnonymizer } from '../hooks/useVoiceAnonymizer'
 import { saveLiveCapture } from './liveSessionBuffer'
 import type { MobilePanel } from './types'
 
@@ -41,6 +43,7 @@ export function MobileLiveMode({
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const videoTrackRef = useRef<MediaStreamTrack | null>(null)
+  const audioTrackRef = useRef<MediaStreamTrack | null>(null)
   const loopRef = useRef<{ stop: () => void } | null>(null)
   const cameraRequestRef = useRef(0)
   const mountedRef = useRef(true)
@@ -65,6 +68,7 @@ export function MobileLiveMode({
   const [ignoredFaceIds, setIgnoredFaceIds] = useState<Set<string>>(() => new Set())
   const [capturePreviewUrl, setCapturePreviewUrl] = useState<string | null>(null)
   const [lastCapturePhotoId, setLastCapturePhotoId] = useState<string | null>(null)
+  const [lastCaptureType, setLastCaptureType] = useState<'photo' | 'video'>('photo')
   const capturePreviewUrlRef = useRef<string | null>(null)
   const [captureFlash, setCaptureFlash] = useState(false)
   // Latest tracked faces from the loop, kept in a ref to avoid per-frame renders.
@@ -99,6 +103,10 @@ export function MobileLiveMode({
     snapshotZones: [],
   })
 
+  const [voiceMaskOpen, setVoiceMaskOpen] = useState(false)
+  // Lifted so the mic button beside the capture control reflects the live
+  // running state and shares one mic stream with the voice sheet below.
+  const voice = useVoiceAnonymizer()
   const [error, setError] = useState<string | null>(null)
   const [ready, setReady] = useState(false)
   const [starting, setStarting] = useState(false)
@@ -106,6 +114,21 @@ export function MobileLiveMode({
 
   const handleRecordingChange = useCallback((state: { recording: boolean; elapsedSec: number }) => {
     setLiveRecording(state)
+  }, [])
+
+  const toggleVoiceMask = useCallback(() => setVoiceMaskOpen((o) => !o), [])
+
+  // Audio mixed into recorded live videos: the anonymized (distorted) track when
+  // the voice mask is running, otherwise the clean camera mic. Falls back to the
+  // raw mic if the distorted track isn't ready yet.
+  const voiceRef = useRef(voice)
+  voiceRef.current = voice
+  const getRecordingAudioTrack = useCallback(() => {
+    const v = voiceRef.current
+    if (v.running && v.settings.preset !== 'off') {
+      return v.getOutputTrack() ?? audioTrackRef.current
+    }
+    return audioTrackRef.current
   }, [])
 
   useEffect(() => {
@@ -195,6 +218,7 @@ export function MobileLiveMode({
     streamRef.current?.getTracks().forEach((t) => t.stop())
     streamRef.current = null
     videoTrackRef.current = null
+    audioTrackRef.current = null
     setTrackCaps(readLiveTrackCapabilities(null))
     startingRef.current = false
     setStarting(false)
@@ -234,12 +258,24 @@ export function MobileLiveMode({
       if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
         throw new DOMException('Camera API unavailable', !window.isSecureContext ? 'SecurityError' : 'NotSupportedError')
       }
+      // Request the mic alongside the camera so a single capture records both
+      // video and audio. Audio is best-effort: if the mic is blocked or missing
+      // we silently fall back to video-only rather than failing the camera.
+      const audioConstraint: MediaTrackConstraints = {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      }
       const preferred: MediaStreamConstraints = {
         video: {
           facingMode: { ideal: facingModeRef.current },
           width: { ideal: 1280 },
           height: { ideal: 720 },
         },
+        audio: audioConstraint,
+      }
+      const videoOnlyPreferred: MediaStreamConstraints = {
+        video: preferred.video,
         audio: false,
       }
       const fallback: MediaStreamConstraints = {
@@ -254,7 +290,13 @@ export function MobileLiveMode({
         if (name === 'OverconstrainedError' || name === 'ConstraintNotSatisfiedError' || name === 'NotFoundError') {
           stream = await navigator.mediaDevices.getUserMedia(fallback)
         } else {
-          throw firstError
+          // Most likely the mic was denied while the camera is allowed — retry
+          // without audio so live preview still works (just no recorded sound).
+          try {
+            stream = await navigator.mediaDevices.getUserMedia(videoOnlyPreferred)
+          } catch {
+            throw firstError
+          }
         }
       }
       if (!mountedRef.current || requestId !== cameraRequestRef.current) {
@@ -264,6 +306,7 @@ export function MobileLiveMode({
       streamRef.current = stream
       const track = stream.getVideoTracks()[0] ?? null
       videoTrackRef.current = track
+      audioTrackRef.current = stream.getAudioTracks()[0] ?? null
       setTrackCaps(readLiveTrackCapabilities(track))
       if (track) {
         track.onended = () => {
@@ -346,6 +389,7 @@ export function MobileLiveMode({
       if (capturePreviewUrlRef.current) URL.revokeObjectURL(capturePreviewUrlRef.current)
       capturePreviewUrlRef.current = url
       setCapturePreviewUrl(url)
+      setLastCaptureType('photo')
       saveLiveCapture(blob, 'photo')
       const photoId = onCaptureSavedRef.current?.(blob, 'photo') ?? null
       if (photoId) setLastCapturePhotoId(photoId)
@@ -353,7 +397,15 @@ export function MobileLiveMode({
   }, [])
 
   const handleVideoSaved = useCallback((blob: Blob, type: 'photo' | 'video') => {
-    onCaptureSavedRef.current?.(blob, type)
+    if (type === 'video' && blob.size > 0) {
+      const url = URL.createObjectURL(blob)
+      if (capturePreviewUrlRef.current) URL.revokeObjectURL(capturePreviewUrlRef.current)
+      capturePreviewUrlRef.current = url
+      setCapturePreviewUrl(url)
+      setLastCaptureType('video')
+    }
+    const photoId = onCaptureSavedRef.current?.(blob, type) ?? null
+    if (photoId) setLastCapturePhotoId(photoId)
   }, [])
 
   const canvasFitClass = cameraSettings.displayFit === 'cover'
@@ -413,13 +465,22 @@ export function MobileLiveMode({
         {capturePreviewUrl && (
           <button
             type="button"
-            className="mobile-live-capture-thumb"
+            className={`mobile-live-capture-thumb${lastCaptureType === 'video' ? ' mobile-live-capture-thumb--video' : ''}`}
             onClick={() => {
               if (lastCapturePhotoId) onOpenCapturedPhoto?.(lastCapturePhotoId, { slide: true, returnTo: 'live' })
             }}
-            aria-label="Edit captured photo"
+            aria-label={lastCaptureType === 'video' ? 'Open captured video' : 'Edit captured photo'}
           >
-            <img src={capturePreviewUrl} alt="" draggable={false} />
+            {lastCaptureType === 'video' ? (
+              <>
+                <video src={capturePreviewUrl} muted playsInline preload="metadata" />
+                <span className="mobile-live-capture-thumb-play" aria-hidden="true">
+                  <Icon name="play_circle" size={22} filled />
+                </span>
+              </>
+            ) : (
+              <img src={capturePreviewUrl} alt="" draggable={false} />
+            )}
           </button>
         )}
         {b.liveDetectEnabled && (
@@ -438,19 +499,41 @@ export function MobileLiveMode({
         canvasRef={canvasRef}
         onCapturePhoto={capturePhoto}
         onVideoSaved={handleVideoSaved}
+        getAudioTrack={getRecordingAudioTrack}
         onOpenCameraSettings={() => setCameraSettingsOpen(true)}
         onToggleFlash={toggleFlash}
         flashActive={cameraSettings.torch}
         flashAvailable={trackCaps.torch}
-        disabled={!ready}
+        disabled={!ready || voiceMaskOpen}
         onRecordingChange={handleRecordingChange}
       />
 
       <div className="mobile-shell-bottom mobile-live-toolbar-wrap">
-        <MobileBottomToolbar b={b} liveMode liveFaceCount={liveFaceCount} />
+        <MobileBottomToolbar
+          b={b}
+          liveMode
+          liveFaceCount={liveFaceCount}
+          liveVoiceRunning={voice.running}
+          liveVoiceOpen={voiceMaskOpen}
+          onToggleVoice={toggleVoiceMask}
+        />
       </div>
 
       <MobileToolDrawers b={b} liveMode />
+
+      {voiceMaskOpen && (
+        <div className="mobile-live-voice-sheet">
+          <button
+            type="button"
+            className="mobile-live-voice-close"
+            onClick={() => setVoiceMaskOpen(false)}
+            aria-label="Close voice mask"
+          >
+            <Icon name="close" size={18} />
+          </button>
+          <VoiceMaskPanel controller={voice} />
+        </div>
+      )}
 
       <MobileLiveCameraSettings
         open={cameraSettingsOpen}

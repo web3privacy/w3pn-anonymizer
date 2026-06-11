@@ -17,9 +17,18 @@ interface MobileBottomToolbarProps {
   b: AppMobileBindings
   liveMode?: boolean
   liveFaceCount?: number
+  /** Live voice-mask: mic running (recording anonymized audio) → green icon. */
+  liveVoiceRunning?: boolean
+  /** Voice-mask sheet currently open (button shows the drawer-open state). */
+  liveVoiceOpen?: boolean
+  /** Open/close the voice-mask sheet (only wired in live mode). */
+  onToggleVoice?: () => void
 }
 
-export const MobileBottomToolbar = memo(function MobileBottomToolbar({ b, liveMode = false, liveFaceCount = 0 }: MobileBottomToolbarProps) {
+export const MobileBottomToolbar = memo(function MobileBottomToolbar({
+  b, liveMode = false, liveFaceCount = 0,
+  liveVoiceRunning = false, liveVoiceOpen = false, onToggleVoice,
+}: MobileBottomToolbarProps) {
   const strVal = Math.min(100, Math.max(1, Math.round(b.brushStrength * 100)))
   const sizeVal = Math.min(99, Math.max(0, Math.round(b.brushSize)))
   const isVideoEditor = !liveMode && Boolean(b.activePhoto?.isVideo)
@@ -125,6 +134,18 @@ export const MobileBottomToolbar = memo(function MobileBottomToolbar({ b, liveMo
             </button>
           )
         })}
+        {liveMode && onToggleVoice && (
+          <button
+            type="button"
+            className={`mobile-tool-btn mobile-tool-btn-voice${liveVoiceOpen ? ' active' : ''}${liveVoiceRunning ? ' selected' : ' mic-off'}`}
+            onClick={onToggleVoice}
+            aria-label={liveVoiceRunning ? 'Voice mask on (recording anonymized audio)' : 'Voice mask off'}
+            aria-pressed={liveVoiceRunning}
+          >
+            <Icon name={liveVoiceRunning ? 'mic' : 'mic_off'} size={22} filled={liveVoiceRunning} />
+            <span className="mobile-tool-btn-label">VOICE</span>
+          </button>
+        )}
       </div>
     </div>
   )

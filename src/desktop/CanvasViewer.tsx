@@ -5,6 +5,7 @@ import {
   type RefObject,
   type Ref,
 } from 'react'
+import { createPortal } from 'react-dom'
 import { ElapsedTimer } from '../components/ElapsedTimer'
 import { Icon } from '../components/Icon'
 import { ToolSliderRow } from '../components/ToolSliderRow'
@@ -63,6 +64,7 @@ export interface CanvasViewerProps {
   autoDetect: boolean
   mobileGestureActive: boolean
   vectorizePanelOpen: boolean
+  vectorizePreviewActive: boolean
   vectorizing: boolean
   zonesAnonymized: boolean
   undoCount: number
@@ -128,6 +130,7 @@ export interface CanvasViewerProps {
   onRunVectorizePreview: (params: VectorizeParams) => void
   onUpdateVectorizeParam: <K extends keyof VectorizeParams>(key: K, value: VectorizeParams[K]) => void
   onExportAsSvg: () => void
+  onApplyVectorizePreview: () => void
   onSaveSnapshot: () => void
   onUndo: () => void
   onResetPhotoToOriginal: () => void
@@ -155,6 +158,7 @@ export function CanvasViewer(props: CanvasViewerProps) {
     autoDetect,
     mobileGestureActive,
     vectorizePanelOpen,
+    vectorizePreviewActive,
     vectorizing,
     zonesAnonymized,
     undoCount,
@@ -220,6 +224,7 @@ export function CanvasViewer(props: CanvasViewerProps) {
     onRunVectorizePreview,
     onUpdateVectorizeParam,
     onExportAsSvg,
+    onApplyVectorizePreview,
     onSaveSnapshot,
     onUndo,
     onResetPhotoToOriginal,
@@ -277,38 +282,45 @@ export function CanvasViewer(props: CanvasViewerProps) {
         </div>
       )}
 
-      {/* Detecting overlay */}
-      {isDetecting && (
-        <div className="detecting-overlay" style={{ flexDirection: 'column', gap: '0.3rem', minWidth: 260, alignItems: 'center' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-            <span>⏳</span>
-            <span>Detecting faces…</span>
-            <ElapsedTimer />
-          </div>
-          {activePhoto && (
-            <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', maxWidth: 230, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {activePhoto.name.split('/').pop()}
-            </span>
-          )}
-          {detectionStep && (
-            <span style={{ fontSize: '0.58rem', color: 'var(--accent)', opacity: 0.9 }}>{detectionStep}</span>
-          )}
-          <div className="local-proof-bar">
-            <div className="local-proof-progress" />
-            <span className="local-proof-label">
-              <Icon name="lock" size={10} /> All data stays on your device
-            </span>
-          </div>
-          <button
-            className="btn btn-sm"
-            type="button"
-            onClick={onCancelDetection}
-            style={{ marginTop: '0.15rem', fontSize: '0.6rem', padding: '0.15rem 0.5rem' }}
+      {/* Detecting overlay — portaled on mobile so it sits above bottom drawers */}
+      {(() => {
+        if (!isDetecting) return null
+        const overlay = (
+          <div
+            className={`detecting-overlay${isMobile ? ' detecting-overlay--portal' : ''}`}
+            style={{ flexDirection: 'column', gap: '0.3rem', minWidth: 260, alignItems: 'center' }}
           >
-            Stop
-          </button>
-        </div>
-      )}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+              <span>⏳</span>
+              <span>Detecting faces…</span>
+              <ElapsedTimer />
+            </div>
+            {activePhoto && (
+              <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', maxWidth: 230, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {activePhoto.name.split('/').pop()}
+              </span>
+            )}
+            {detectionStep && (
+              <span style={{ fontSize: '0.58rem', color: 'var(--accent)', opacity: 0.9 }}>{detectionStep}</span>
+            )}
+            <div className="local-proof-bar">
+              <div className="local-proof-progress" />
+              <span className="local-proof-label">
+                <Icon name="lock" size={10} /> All data stays on your device
+              </span>
+            </div>
+            <button
+              className="btn btn-sm"
+              type="button"
+              onClick={onCancelDetection}
+              style={{ marginTop: '0.15rem', fontSize: '0.6rem', padding: '0.15rem 0.5rem' }}
+            >
+              Stop
+            </button>
+          </div>
+        )
+        return isMobile ? createPortal(overlay, document.body) : overlay
+      })()}
       {/* Local processing proof badge */}
       {!isDetecting && localProcessingMs != null && (
         <div className="local-proof-badge">
@@ -606,7 +618,7 @@ export function CanvasViewer(props: CanvasViewerProps) {
         })()}
 
         {/* SVG vectorize preview overlay */}
-        {vectorizePanelOpen && svgPreviewUrl && (() => {
+        {vectorizePreviewActive && svgPreviewUrl && (() => {
           const t = transformRef.current
           const hasFrame = t.drawWidth > 0 && t.drawHeight > 0
           return (
@@ -683,15 +695,24 @@ export function CanvasViewer(props: CanvasViewerProps) {
             </div>
           )}
 
-          <button
-            className="btn btn-primary"
-            type="button"
-            onClick={onExportAsSvg}
-            disabled={isBusy || vectorizing}
-            style={{ marginTop: '0.4rem', width: '100%' }}
-          >
-            <Icon name="download" size={14} /> Download SVG
-          </button>
+          <div className="vectorize-panel-actions">
+            <button
+              className="btn vectorize-download-btn"
+              type="button"
+              onClick={onExportAsSvg}
+              disabled={isBusy || vectorizing}
+            >
+              <Icon name="download" size={14} /> Download SVG
+            </button>
+            <button
+              className="btn btn-primary vectorize-apply-btn"
+              type="button"
+              onClick={onApplyVectorizePreview}
+              disabled={isBusy || vectorizing || !svgPreviewUrl}
+            >
+              Apply
+            </button>
+          </div>
         </div>
       )}
 

@@ -3,12 +3,15 @@ import type { PixelShiftType } from './effects'
 import type { AnonymizeEffectId, NormalizeSettings } from '../types'
 
 export const DEMO_MEDIA = [
+  './demo/demo-privacy-street.png',
+  './demo/demo-document-photo.png',
   './demo/demo-1.webp',
-  './demo/demo-2.webp',
   './demo/demo-3.jpg',
-  './demo/demo-4.png',
   './demo/demo-5.png',
   './demo/vitalik-rap.webm',
+  './demo/demo-voice.m4a',
+  './demo/demo-document.txt',
+  './demo/demo-document-scan.pdf',
 ]
 
 export const DEFAULT_ADJ_TRANSFORM_PARAMS = {
@@ -69,9 +72,8 @@ export const EFFECT_ICONS: Record<AnonymizeEffectId, string> = {
   emoji:        'mood',
   noise:        'grain',
   glitch:       'auto_fix_high',
-  silhouette:   'person',
   contour:      'pentagon',
   thermal:      'thermostat',
-  static:       'tv',
+  ascii:        'data_array',
   'custom-image': 'image',
 }

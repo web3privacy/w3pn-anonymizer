@@ -1786,6 +1786,39 @@
   color: rgba(255, 255, 255, 0.5);
 }
 
+.mobile-vectorize-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-top: 0.55rem;
+}
+
+.mobile-vectorize-download-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  width: 100%;
+  min-height: 38px;
+  border-radius: 999px;
+  border: 1px solid #fff;
+  background: #000;
+  color: #fff;
+  font-size: 0.52rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+
+.mobile-vectorize-download-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.mobile-vectorize-apply-btn {
+  width: 100%;
+}
+
 .mobile-vectorize-download {
   flex: 0 0 auto;
   width: 100%;
@@ -2057,6 +2090,49 @@
   font-weight: 700;
   letter-spacing: 0.04em;
   color: #fff;
+}
+
+.mobile-face-more-classes {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-height: 46px;
+  margin-top: 8px;
+  padding: 8px 4px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  color: #fff;
+  cursor: pointer;
+}
+
+.mobile-face-more-classes-text {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.mobile-face-more-classes-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.mobile-face-more-classes-count {
+  min-width: 20px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--mobile-accent, #00ff78);
+  color: #04140b;
+  font-size: 0.6rem;
+  font-weight: 800;
+  text-align: center;
 }
 
 /* iOS-style switch */
@@ -2998,6 +3074,17 @@
 
 .mobile-gallery-list-shell.selected .mobile-gallery-list-item {
   border-color: var(--mobile-accent);
+}
+
+/* Green outline marks already-anonymized assets in the mobile gallery. */
+.mobile-gallery-item-shell.anonymized .mobile-gallery-item-thumb,
+.mobile-gallery-list-shell.anonymized .mobile-gallery-list-thumb {
+  box-shadow: 0 0 0 2px #22c55e;
+  border-radius: 8px;
+}
+.mobile-gallery-item-shell.anonymized.selected .mobile-gallery-item,
+.mobile-gallery-list-shell.anonymized.selected .mobile-gallery-list-item {
+  box-shadow: 0 0 0 1px var(--mobile-accent), 0 0 0 3px rgba(34, 197, 94, 0.5);
 }
 
 .mobile-gallery-check {

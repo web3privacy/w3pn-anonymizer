@@ -1,16 +1,21 @@
 # Runtime, Privacy, and Deployment Notes
 
-The public web release runs **entirely in the browser**. Face detection uses **YuNet** via ONNX Runtime Web (WebAssembly). No image or video pixels are sent to any server.
+The public web release runs **entirely in the browser**. Faces are detected with **YuNet**, optional objects with **YOLO**, and sensitive text with **on-device OCR (Tesseract.js)** — all via ONNX Runtime Web / WebAssembly. No image, video, audio, or document content is sent to any server.
 
 ## Browser runtime
 
 The frontend depends on these same-origin assets:
 
 - `public/models/face_detection_yunet_2023mar.onnx`
+- `public/models/privacy/*.onnx` + `*.metadata.json` (optional YOLO models — placed locally; some `.onnx` files are not bundled in git)
 - `public/onnx/*` (ORT WASM binaries)
+- `public/tesseract/*` (self-hosted OCR LSTM core + `worker.min.js`) and `public/tesseract/lang/{eng,ces}.traineddata`
+- `public/worklets/*` (AudioWorklet processors: level meter, noise gate, voice mask)
 - `public/fonts/*`
 - `public/vendor/browser-image-compression.js`
 - `public/vendor/imagetracer_v1.2.6.js`
+
+Heavy optional assets (YOLO ONNX, OCR engine + language data) are **lazy-loaded**: only face detection and live mode initialize on boot, and the rest are prefetched into the HTTP cache in the background while the user is idle (respecting Save-Data / slow connections).
 
 For correct YuNet execution in production:
 
@@ -27,10 +32,13 @@ If headers or MIME types are wrong, ONNX Runtime may fail to initialize.
 
 At runtime the app makes **no third-party network requests**. All `fetch()` calls are same-origin:
 
-- ONNX model and WASM loaders
+- ONNX model and WASM loaders (YuNet, YOLO)
+- Tesseract OCR engine, worker, and language data
+- AudioWorklet processor modules
 - Custom image preset manifests and assets
 - Bundled demo media
 - Brand SVG assets
+- Background prefetch warming of the above optional models/OCR assets
 
 External links (GitHub, Web3Privacy Now, mailto) open only when the user clicks them.
 
@@ -45,9 +53,35 @@ External links (GitHub, Web3Privacy Now, mailto) open only when the user clicks 
 ### Video path
 
 1. The source video remains a browser `Blob`.
-2. The app samples detection frames across the timeline (in-browser YuNet).
+2. The app samples detection frames across the timeline (in-browser YuNet + optional YOLO when enabled).
 3. Timeline interpolation, masking, frame overrides, preview rendering, and final encoding stay in-browser.
 4. The final output is saved only on explicit export.
+
+### Audio path
+
+1. Audio files open in **audio mode** (no canvas upload).
+2. Preview and export use the Web Audio API locally.
+3. Video export can **keep**, **remove**, or **distort** audio (distorted mux is best-effort; WAV export for audio-only).
+4. Voice disguise uses DSP (pitch/ring-mod/filters/formant) — not a guaranteed forensic defeat. No speech-to-text or speaker identification.
+
+### Live mode path
+
+1. Camera/microphone streams are obtained via `getUserMedia` and processed in-browser (canvas effects for video, AudioWorklets for the voice mask).
+2. Optional monitoring routes masked audio to the speakers; recording captures the **masked** output only.
+3. Nothing is uploaded; recordings are saved only on explicit download.
+
+### Document path
+
+1. PDFs are parsed and rendered locally with `pdfjs-dist`; TXT/MD/DOCX are read as text.
+2. PII is detected with regex + checksum recognizers (no model, no OCR upload).
+3. Redaction (blackout/blur/pixelate or token replacement) is applied locally; exports are flattened PDFs, ZIPs of page images, or token-replaced text.
+4. Detected PII strings are kept only in memory and are never embedded in exports or persisted.
+
+### Sensitive-text (OCR) path
+
+1. On still images, Tesseract.js recognizes words + bounding boxes fully in-browser.
+2. The recognized text is run through the same PII recognizers; matches become redaction zones.
+3. Recognized text and PII are kept in memory only.
 
 ### What stays in memory
 
@@ -67,6 +101,8 @@ During a session:
 |---------|-----|------|
 | `localStorage` | `anonymizer-theme` | Theme preference (desktop) |
 | `localStorage` | `anonymizer-enable-optical-mode` | Home logo animation toggle |
+| `localStorage` | `anonymizer-privacy-settings` | Privacy target toggles, thresholds, label toggle, enabled raw classes, audio effect prefs (no media) |
+| `localStorage` | `anonymizer-voice-mask` | Live voice-mask preset/strength prefs (no audio) |
 | `sessionStorage` | `anonymizer-live-meta` | Live capture metadata only (no blob) |
 
 No image or video content is persisted to browser storage.
@@ -98,6 +134,7 @@ Configured in [`vercel.json`](../vercel.json) and mirrored in [`vite.config.ts`]
 - browser queue limit: `2000` media items
 - image input limit: `50 MB` per file
 - video input limit: `500 MB` per file
+- audio input limit: `100 MB` per file
 - video export bitrate: `6 Mbps` video + `128 kbps` audio
 - default FPS when metadata is unavailable: `30`
 - normalized FPS operating range: `10-60`

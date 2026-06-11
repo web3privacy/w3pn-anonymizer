@@ -30,7 +30,7 @@ describe('isMediaFile', () => {
     expect(isMediaFile(file('a.mp4', 'video/mp4', MAX_VIDEO_FILE_SIZE + 1))).toBe(false)
   })
   it('rejects unknown extensions', () => {
-    expect(isMediaFile(file('a.txt', '', 1000))).toBe(false)
+    expect(isMediaFile(file('a.exe', '', 1000))).toBe(false)
   })
 })
 
@@ -39,6 +39,11 @@ describe('isVideoFileCheck', () => {
     expect(isVideoFileCheck(file('a.webm', '', 1))).toBe(true)
     expect(isVideoFileCheck(file('a', 'video/mp4', 1))).toBe(true)
     expect(isVideoFileCheck(file('a.jpg', 'image/jpeg', 1))).toBe(false)
+  })
+  it('treats an explicit audio mime as not-video even for .webm', () => {
+    // audio/webm must not be misrouted into the video pipeline.
+    expect(isVideoFileCheck(file('a.webm', 'audio/webm', 1))).toBe(false)
+    expect(isVideoFileCheck(file('a.ogg', 'audio/ogg', 1))).toBe(false)
   })
 })
 

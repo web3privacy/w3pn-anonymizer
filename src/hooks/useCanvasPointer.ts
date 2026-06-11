@@ -414,6 +414,7 @@ export function useCanvasPointer({
       height: 0.001,
       effect: selectedEffect,
       emoji: resolveEmoji(),
+      detectionType: 'manual_zone',
       customImageAssetId: selectedEffect === 'custom-image'
         ? resolveCustomImageAssetId(zoneId)
         : undefined,

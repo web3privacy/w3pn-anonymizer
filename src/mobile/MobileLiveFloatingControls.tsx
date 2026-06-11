@@ -3,7 +3,8 @@ import { Icon } from '../components/Icon'
 import { LiveRecorder } from '../lib/live-recorder'
 import { saveLiveCapture } from './liveSessionBuffer'
 
-const HOLD_MS = 1500
+// Hold duration before a press flips from "take photo" to "start video".
+const HOLD_MS = 500
 const RING_R = 30
 const RING_C = 2 * Math.PI * RING_R
 
@@ -11,6 +12,8 @@ interface MobileLiveFloatingControlsProps {
   canvasRef: React.RefObject<HTMLCanvasElement | null>
   onCapturePhoto: () => void | Promise<void>
   onVideoSaved?: (blob: Blob, type: 'photo' | 'video') => void
+  /** Live microphone track to mix into recorded video (capture records both). */
+  getAudioTrack?: () => MediaStreamTrack | null
   onOpenCameraSettings?: () => void
   onToggleFlash?: () => void
   flashActive?: boolean
@@ -23,6 +26,7 @@ export const MobileLiveFloatingControls = memo(function MobileLiveFloatingContro
   canvasRef,
   onCapturePhoto,
   onVideoSaved,
+  getAudioTrack,
   onOpenCameraSettings,
   onToggleFlash,
   flashActive,
@@ -43,12 +47,12 @@ export const MobileLiveFloatingControls = memo(function MobileLiveFloatingContro
   const startRecording = useCallback(() => {
     const canvas = canvasRef.current
     if (!canvas || recordingRef.current) return
-    if (recorderRef.current.start(canvas)) {
+    if (recorderRef.current.start(canvas, 24, getAudioTrack?.() ?? null)) {
       recordingRef.current = true
       setRecording(true)
       setElapsedSec(0)
     }
-  }, [canvasRef])
+  }, [canvasRef, getAudioTrack])
 
   const stopRecording = useCallback(async () => {
     if (!recordingRef.current) return
@@ -66,6 +70,13 @@ export const MobileLiveFloatingControls = memo(function MobileLiveFloatingContro
   useEffect(() => {
     onRecordingChange?.({ recording, elapsedSec })
   }, [recording, elapsedSec, onRecordingChange])
+
+  // Stop any in-flight recording on unmount (exit live / close overlay) so the
+  // MediaRecorder and its cloned mic track don't keep running until tab close.
+  useEffect(() => {
+    const recorder = recorderRef.current
+    return () => { if (recorder.isRecording()) void recorder.stop() }
+  }, [])
 
   useEffect(() => {
     if (!recording) return

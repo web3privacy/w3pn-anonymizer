@@ -1,0 +1,11 @@
+{
+  "id": "yolo-license-plate",
+  "inputSize": 640,
+  "format": "yolov8",
+  "classes": {
+    "0": "license_plate"
+  },
+  "mapToPrivacyTypes": {
+    "license_plate": "license_plate"
+  }
+}

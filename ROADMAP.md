@@ -2,6 +2,79 @@
 
 This is the long-term product roadmap for features we want to implement in later batches.
 
+## Known limitations & next fixes (June 2026 audit)
+
+A focused bug hunt across the newer subsystems (audio, document/OCR, extended
+detection, import/export, live capture) fixed a batch of issues and surfaced the
+items below. **Photos and video core editing were unaffected.**
+
+### Fixed in this pass
+- **One effect per region** — cross-type de-dup now also drops a generic `object`
+  box that is mostly contained inside a featured detection (low IoU, high
+  containment), so a region is never redacted twice (`detectorUtils.ts`).
+- **Audio ghost noise** — `AudioModeViewer` now tears down its Web Audio graph
+  (oscillators, noise source, analyser → destination) on unmount and resets the
+  transport when the source changes; `play()` is awaited before flipping to
+  "playing".
+- **Custom audio intensity** — moving the Intensity slider no longer zeroes a
+  user's Advanced (custom-preset) parameters (`audioPresets.ts`).
+- **Voice mask** — double-start mutex, recording-URL revoke on teardown, and a
+  `MediaRecorder` mime probe (Safari/Firefox safe) (`useVoiceAnonymizer.ts`).
+- **Live capture leak** — an in-flight recording is now stopped on unmount
+  (`MobileLiveFloatingControls.tsx`).
+- **Detection availability** — `screen`/`document` are available if *any* backing
+  model (coco **or** custom) is ready; PII-only mode no longer runs face
+  detection when Faces is disabled; `pii_text` is no longer mislabeled as an
+  ONNX target in the "More privacy targets" sheet.
+- **OCR performance** — images are downscaled to ≤2000 px before OCR (normalized
+  boxes keep their position) to avoid freezes/OOM on large photos.
+- **Classification / detection polish** — `audio/webm` is no longer misrouted to
+  the video pipeline; IBAN regex is case-insensitive; tiny labels clamp inside
+  the frame; generic-object labels are Title-cased; `showDetectionLabels`
+  defaults to on unless explicitly disabled; video track-mode `audio` no longer
+  gets stuck in `remove_audio`.
+- **DOCX import disabled** — DOCX was parsed as raw text (it is a ZIP), producing
+  garbage and a leaky export; it is now rejected until a real parser is wired.
+
+### Highest-priority remaining work
+1. **Apply voice distortion on video export.** Preview anonymizes the audio, but
+   `processVideo` only honors `remove_audio` — `distort_voice` muxes the raw
+   track. Decode → `renderProcessedAudioBuffer` → mux in both the WebCodecs and
+   `MediaRecorder` paths (`src/lib/video.ts`, `src/hooks/useVideoController.ts`).
+   *Privacy gap.*
+2. **Bake in-session redactions into library/batch export.** "Download all" uses
+   the raw blob for audio/documents unless the user clicked per-item Export, so a
+   library ZIP can ship un-redacted audio/PDF/TXT. Re-run the audio pipeline /
+   document redaction (or require commit) inside `exportItemToFile`
+   (`usePhotoLibrary.ts`). *Privacy gap.*
+3. **OCR for scanned / image-only PDFs.** Document mode uses the pdf.js text
+   layer only; scanned pages get zero detections and export unchanged. Reuse
+   `detectPiiViaOcr` on each rendered page canvas (or warn/block export when a
+   page has no text layer).
+4. **Real DOCX support** via `mammoth` (re-enable the import once parsing +
+   redacted export are correct).
+
+### Secondary fixes
+- **Mobile track-mode parity** — expose the `VideoTrackModeSelect` dropdown +
+  embedded audio editor on mobile video (currently desktop-only).
+- **Mute editor preview for "Video only"** — bind `muted` on the editor `<video>`
+  to `trackMode === 'video'` / `audioSettings.mode === 'remove_audio'`.
+- **Document robustness** — merge/dedupe overlapping text spans before export;
+  match PII across token boundaries (pdf.js / OCR split `user@`+`domain`);
+  blur/pixelate PDF redaction via an offscreen copy instead of a self-blit;
+  mask PII in the editor DOM (reveal on hover); release page rasters
+  (`URL.createObjectURL`/`revoke` instead of permanent `data:` URLs).
+- **OCR worker lifecycle** — call `disposeOcr()` on teardown / extended idle;
+  prefetch `worker.min.js` + non-SIMD core fallback; wire `setOcrProgressCallback`
+  into the detection progress UI.
+- **YOLO decoding hardening** — guard transposed `[1, anchors, 84]` outputs and
+  auto-detect pixel-vs-normalized coordinate scale; cache `probeYoloModel*`
+  results and add a per-model session mutex to avoid duplicate ORT sessions.
+- **Live recorder race** — disable the capture button until `stop()` resolves to
+  avoid an empty/stale second capture.
+- **Mark live-recorded video as anonymized** (green outline + `-anon` name).
+- **Bundle size** — code-split the largest chunks (pdf/jspdf/onnx/html2canvas).
+
 ## Next Privacy / Anonymization Upgrades
 
 - OCR redaction for text, handles, emails, wallet addresses, ENS names, and UI labels.

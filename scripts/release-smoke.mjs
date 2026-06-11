@@ -93,7 +93,7 @@ async function testViewport(browser, vp) {
       local: Object.keys(localStorage),
       session: Object.keys(sessionStorage),
     }))
-    const allowedLocal = ['anonymizer-theme', 'anonymizer-enable-optical-mode']
+    const allowedLocal = ['anonymizer-theme', 'anonymizer-enable-optical-mode', 'anonymizer-privacy-settings']
     const badLocal = storage.local.filter((k) => !allowedLocal.includes(k))
     if (badLocal.length) fail(`${vp.name}: unexpected localStorage keys: ${badLocal.join(', ')}`)
     else pass(`${vp.name}: localStorage OK (${storage.local.join(', ') || 'empty'})`)

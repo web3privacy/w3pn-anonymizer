@@ -1,0 +1,33 @@
+CONFIDENTIAL — Onboarding record (sample for redaction testing)
+
+Name: Jane Doe
+Email: jane.doe@example.com
+Backup email: j.doe.work@company.co.uk
+Phone: +420 777 123 456
+Office line: (212) 555-0142
+
+Billing
+  Card: 4242 4242 4242 4242
+  IBAN: GB82 WEST 1234 5698 7654 32
+  Backup IBAN: DE89 3704 0044 0532 0130 00
+
+Identity
+  National ID (rodné číslo): 900101/0007
+  Postal code: 110 00
+
+Infrastructure
+  Server: https://internal.example.org/admin/login
+  Host IP: 192.168.10.42
+  IPv6: 2001:0db8:85a3:0000:0000:8a2e:0370:7334
+
+Secrets (rotate immediately if leaked)
+  Stripe: sk_live_4eC39HqLyjWDarjtT1zdp7dc
+  AWS: AKIAIOSFODNN7EXAMPLE
+  GitHub: ghp_16C7e42F292c6912E7710c838347Ae178B4a
+
+Wallets
+  ETH: 0x52908400098527886E0F7030069857D2E4169EE7
+  BTC: 1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2
+
+Notes: order number 1234567890123456 is NOT a real card (fails Luhn) and
+should stay visible. Meeting at 9:00 in room 14.

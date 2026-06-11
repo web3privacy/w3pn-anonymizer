@@ -9,7 +9,10 @@ import {
 import { applyColorAdjustments, applyEffectRect, applyGlitchEffect, pickUniqueEmojis } from '../lib/effects'
 import { exportCanvasToBlob } from '../lib/export-canvas'
 import { pickCustomImageAssetId } from '../lib/ids'
-import { detectFaces } from '../lib/detector'
+import { detectImagePrivacyDetections } from '../lib/detections/run-image-detection'
+import { normalizedBoxToPixel } from '../lib/detections/adapters'
+import { effectForDetectionType } from '../lib/detection-config'
+import { expandPixelBox } from '../lib/face-offset'
 import { normalizeSinglePhoto } from '../lib/normalize'
 import { waitForUi } from '../lib/video-overlay-helpers'
 import {
@@ -27,6 +30,8 @@ import type {
   ColorAdjustments,
   CustomImageAsset,
   CustomImageSource,
+  DetectionCategoryConfig,
+  ModelAvailabilityStatus,
   NormalizeResult,
   NormalizeSettings,
   PhotoItem,
@@ -59,6 +64,9 @@ export interface DetectSettingsSnapshot {
   confidence: number
   thorough: boolean
   faceOffset: number
+  detectionConfig: DetectionCategoryConfig[]
+  modelStatus: Record<string, ModelAvailabilityStatus>
+  enabledClasses: string[]
 }
 
 export interface UseBatchNormalizeParams {
@@ -223,20 +231,40 @@ export function useBatchNormalize({
             bmp.close()
             try {
               const detect = detectSettingsRef.current
-              const boxes = await detectFaces(tmp, detect?.thorough ?? false, detect?.confidence ?? 0.5)
-              if (boxes.length > 0) {
-                const effId = s.batchAnonymizeEffect as AnonymizeEffectId
+              if (detect) {
+                const { detections } = await detectImagePrivacyDetections(tmp, {
+                  detectionConfig: detect.detectionConfig,
+                  modelStatus: detect.modelStatus,
+                  confidence: detect.confidence,
+                  thorough: detect.thorough,
+                  enabledClasses: detect.enabledClasses,
+                })
+                if (detections.length > 0) {
+                const defaultEff = s.batchAnonymizeEffect as AnonymizeEffectId
                 const strength = s.batchAnonymizeStrength
-                const batchEmojis = pickUniqueEmojis(boxes.length)
-                boxes.forEach((b, i) => {
+                const batchEmojis = pickUniqueEmojis(detections.length)
+                const W = tmp.width
+                const H = tmp.height
+                detections.forEach((det, i) => {
+                  const effId = effectForDetectionType(det.type, detect.detectionConfig, defaultEff)
+                  let box = normalizedBoxToPixel(det.bbox, W, H)
+                  if (det.type === 'face') {
+                    box = expandPixelBox(box.x, box.y, box.width, box.height, W, H, detect.faceOffset)
+                    box = {
+                      x: box.x * W,
+                      y: box.y * H,
+                      width: box.width * W,
+                      height: box.height * H,
+                    }
+                  }
                   const zoneId = `${photo.id}-${i}`
                   applyEffectRect(
                     tmpCtx,
                     effId,
-                    b.x,
-                    b.y,
-                    b.width,
-                    b.height,
+                    box.x,
+                    box.y,
+                    box.width,
+                    box.height,
                     strength,
                     batchEmojis[i],
                     effId === 'custom-image'
@@ -249,6 +277,7 @@ export function useBatchNormalize({
                       : undefined,
                   )
                 })
+              }
               }
             } catch { /* detection failed — skip anonymize for this photo */ }
             const anonBlob = await exportCanvasToBlob(tmp, s.outputFormat, s.quality, 'full')

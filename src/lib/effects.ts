@@ -1,12 +1,19 @@
-import type { AnonymizeEffectId, ColorAdjustments, EffectDefinition, EffectRenderOptions, GlitchSubEffect } from '../types'
+import type { AnonymizeEffectId, AsciiCharset, ColorAdjustments, EffectDefinition, EffectRenderOptions, GlitchSubEffect } from '../types'
 import { glApplyColorAdjustments } from './gl/color-adjust-gl'
 import { glApplyColorShift } from './gl/color-shift-gl'
 import { glApplyContourRect } from './gl/contour-gl'
 import { glApplyNoiseRect } from './gl/noise-gl'
 import { glApplyPixelateRect, mapPixelateBlockSize } from './gl/pixelate-gl'
 import { glApplyPixelShift } from './gl/pixel-shift-gl'
-import { glApplySilhouetteRect } from './gl/silhouette-gl'
 import { glApplyThermalRect } from './gl/thermal-gl'
+
+// Module-level fallback for the ASCII glyph pool. Render paths that build their
+// own EffectRenderOptions (live camera, video export, batch) read this when no
+// explicit `asciiCharset` is threaded through, so the user's choice applies
+// everywhere without plumbing the option through every call site.
+let asciiCharsetDefault: AsciiCharset = 'all'
+export const setAsciiCharsetDefault = (charset: AsciiCharset) => { asciiCharsetDefault = charset }
+export const getAsciiCharsetDefault = (): AsciiCharset => asciiCharsetDefault
 
 export const EMOJI_POOL = [
   // Cats
@@ -30,10 +37,9 @@ export const EFFECTS: EffectDefinition[] = [
   { id: 'emoji',     label: 'Emoji',       description: 'Replace with random emoji',              icon: 'mood',            strengthLabel: 'Size',              mobileStrengthLabel: 'SIZE' },
   { id: 'noise',     label: 'Noise',       description: 'Noise anonymization',                    icon: 'grain',           strengthLabel: 'Density',           mobileStrengthLabel: 'DENSITY' },
   { id: 'glitch',    label: 'Glitch',      description: 'RGB chroma-shift',                       icon: 'auto_fix_high',   strengthLabel: 'Shift amount',      mobileStrengthLabel: 'SHIFT' },
-  { id: 'silhouette',label: 'Silhouette',  description: 'Solid black silhouette',                 icon: 'person',          strengthLabel: 'Edge softness',     mobileStrengthLabel: 'EDGE' },
   { id: 'contour',   label: 'Contour',     description: 'Edge detection (Sobel)',                 icon: 'pentagon',        strengthLabel: 'Line thickness',    mobileStrengthLabel: 'THICK' },
   { id: 'thermal',   label: 'Thermal',     description: 'Falsecolor thermal map',                 icon: 'thermostat',      strengthLabel: 'Color intensity',   mobileStrengthLabel: 'COLOR' },
-  { id: 'static',    label: 'Static TV',   description: 'TV static noise',                        icon: 'tv',              strengthLabel: 'Grain density',     mobileStrengthLabel: 'GRAIN' },
+  { id: 'ascii',     label: 'ASCII',       description: 'ASCII-art character mosaic',             icon: 'data_array',      strengthLabel: 'Cell size',         mobileStrengthLabel: 'CELL' },
   { id: 'custom-image', label: 'Custom Image', description: 'Replace with uploaded image patches', icon: 'image',          strengthLabel: 'Opacity',           mobileStrengthLabel: 'OPACITY' },
 ]
 
@@ -700,55 +706,6 @@ export const pickUniqueEmojis = (count: number): string[] => {
   return result
 }
 
-// ── Silueta ──────────────────────────────────────────────────────
-const applySilhouetteRect = (
-  ctx: CanvasRenderingContext2D,
-  x: number, y: number, width: number, height: number, strength: number, options?: EffectRenderOptions,
-) => {
-  const { x: rx, y: ry, width: rw, height: rh } = normalizeRect(x, y, width, height, ctx.canvas.width, ctx.canvas.height)
-  if (tryGpuRect(ctx, rx, ry, rw, rh, (src, w, h) => glApplySilhouetteRect(src, w, h, strength))) return
-  const srcImg = ctx.getImageData(rx, ry, rw, rh)
-  const out = ctx.createImageData(rw, rh)
-  const sd = srcImg.data
-  const od = out.data
-  const rng = seededRandom(effectSeed('silhouette', rx, ry, rw, rh, options))
-  const cx = (rw - 1) / 2
-  const cy = (rh - 1) / 2
-  const steps = 6
-
-  for (let py = 0; py < rh; py += 1) {
-    for (let px = 0; px < rw; px += 1) {
-      const dst = (py * rw + px) * 4
-      let edgeAccum = 0
-      for (let step = 0; step < steps; step += 1) {
-        const scale = 1 - step * (0.07 + strength * 0.025)
-        const ox = Math.round(cx + (px - cx) * scale)
-        const oy = Math.round(cy + (py - cy) * scale)
-        const left = (oy * rw + clamp(ox - 1, 0, rw - 1)) * 4
-        const right = (oy * rw + clamp(ox + 1, 0, rw - 1)) * 4
-        const top = (clamp(oy - 1, 0, rh - 1) * rw + ox) * 4
-        const bottom = (clamp(oy + 1, 0, rh - 1) * rw + ox) * 4
-        const gx =
-          (0.299 * sd[right] + 0.587 * sd[right + 1] + 0.114 * sd[right + 2]) -
-          (0.299 * sd[left] + 0.587 * sd[left + 1] + 0.114 * sd[left + 2])
-        const gy =
-          (0.299 * sd[bottom] + 0.587 * sd[bottom + 1] + 0.114 * sd[bottom + 2]) -
-          (0.299 * sd[top] + 0.587 * sd[top + 1] + 0.114 * sd[top + 2])
-        edgeAccum += Math.sqrt(gx * gx + gy * gy) * (1 - step * 0.11)
-      }
-      const cxn = (px - cx) / Math.max(1, rw / 2)
-      const cyn = (py - cy) / Math.max(1, rh / 2)
-      const vignette = clamp(1 - Math.sqrt(cxn * cxn + cyn * cyn) * 0.45, 0, 1)
-      const v = clamp(20 + edgeAccum / steps * 1.6 + vignette * 72 + rng() * 18, 0, 185)
-      od[dst] = clamp(v * 0.25, 0, 255)
-      od[dst + 1] = clamp(v * 0.28, 0, 255)
-      od[dst + 2] = clamp(v * 0.32, 0, 255)
-      od[dst + 3] = 255
-    }
-  }
-  ctx.putImageData(out, rx, ry)
-}
-
 // ── Kontury (Sobel edge detection + destructive warp) ────────────
 // The plain Sobel still traces the exact feature geometry (eye spacing, nose,
 // jaw), which a viewer can read. We warp the sampling coordinates with a smooth
@@ -870,38 +827,70 @@ const applyThermalRect = (
   ctx.putImageData(imageData, rx, ry)
 }
 
-// ── Static TV noise ───────────────────────────────────────────────
-const applyStaticRect = (
+// ── ASCII art mosaic ──────────────────────────────────────────────
+// Downsamples the region to a coarse grid, then renders each cell as a
+// monospace glyph picked from a luminance ramp on a black background.
+// Identity is destroyed (only a low-res light/dark map survives) while the
+// result reads as a stylised "terminal" rendering. Higher strength = larger
+// cells = fewer glyphs = stronger anonymization.
+//
+// The glyph pool is selectable (`asciiCharset` option). Each ramp is ordered
+// from "light" (sparse) to "dark" (dense) so the luminance→glyph mapping still
+// tracks the brightness map regardless of which character family is chosen.
+const ASCII_RAMPS: Record<AsciiCharset, string> = {
+  // Mixed punctuation + letters + digits — the classic dense ASCII-art ramp.
+  all: ' .,:;irsXA253hMHGS#9B&@',
+  // Digits only, ordered roughly light → dark by ink coverage.
+  numbers: ' 1733256894890',
+  // Latin letters only, ordered roughly light → dark by ink coverage.
+  letters: ' ilcvxznuoakebpqdghRABDMW',
+  // Punctuation, symbols and "exotic" glyphs, light → dark.
+  other: " .'\u00b7:;!|/\\?*+=<>~\u00a4\u00a7%#\u00a3\u20ac@\u2588",
+}
+
+const applyAsciiRect = (
   ctx: CanvasRenderingContext2D,
-  x: number, y: number, width: number, height: number, strength: number, options?: EffectRenderOptions,
+  x: number, y: number, width: number, height: number, strength: number,
+  options?: EffectRenderOptions,
 ) => {
   const { x: rx, y: ry, width: rw, height: rh } = normalizeRect(x, y, width, height, ctx.canvas.width, ctx.canvas.height)
-  const imageData = ctx.createImageData(rw, rh)
-  const { data } = imageData
-  const rng = seededRandom(effectSeed('static', rx, ry, rw, rh, options))
   const s = Number.isFinite(strength) ? clamp(strength, 0, 1) : 0.5
-  const block = Math.max(1, Math.round(5 - s * 4))
-  for (let by = 0; by < rh; by += block) {
-    for (let bx = 0; bx < rw; bx += block) {
-      const v = rng() > 0.5 ? 255 : 0
-      const blockW = Math.min(rw - bx, block)
-      const blockH = Math.min(rh - by, block)
-      for (let yy = 0; yy < blockH; yy += 1) {
-        for (let xx = 0; xx < blockW; xx += 1) {
-          const i = ((by + yy) * rw + bx + xx) * 4
-          data[i] = v
-          data[i + 1] = v
-          data[i + 2] = v
-          data[i + 3] = 255
-        }
-      }
+  const cell = Math.max(4, Math.round(5 + s * 13)) // 5..18 px per glyph
+  const cols = Math.max(2, Math.floor(rw / cell))
+  const rows = Math.max(2, Math.floor(rh / cell))
+
+  // Downsample the source patch to cols×rows average colours.
+  scratchB.width = cols
+  scratchB.height = rows
+  const sctx = getContext2d(scratchB)
+  sctx.imageSmoothingEnabled = true
+  sctx.clearRect(0, 0, cols, rows)
+  sctx.drawImage(ctx.canvas, rx, ry, rw, rh, 0, 0, cols, rows)
+  const cellData = sctx.getImageData(0, 0, cols, rows).data
+
+  const cw = rw / cols
+  const chh = rh / rows
+  ctx.save()
+  ctx.fillStyle = '#000'
+  ctx.fillRect(rx, ry, rw, rh)
+  ctx.font = `${Math.round(Math.min(cw, chh) * 1.25)}px ui-monospace, "SF Mono", Menlo, Consolas, monospace`
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  const charset = options?.asciiCharset ?? asciiCharsetDefault
+  const ramp = ASCII_RAMPS[charset] ?? ASCII_RAMPS.all
+  for (let gy = 0; gy < rows; gy += 1) {
+    for (let gx = 0; gx < cols; gx += 1) {
+      const i = (gy * cols + gx) * 4
+      const luma = (0.299 * cellData[i] + 0.587 * cellData[i + 1] + 0.114 * cellData[i + 2]) / 255
+      const ch = ramp[clamp(Math.floor(luma * ramp.length), 0, ramp.length - 1)]
+      if (ch === ' ') continue
+      // Terminal-green tint scaled by brightness keeps the "matrix" look.
+      const v = Math.round(110 + luma * 145)
+      ctx.fillStyle = `rgb(${Math.round(v * 0.18)}, ${v}, ${Math.round(v * 0.36)})`
+      ctx.fillText(ch, rx + (gx + 0.5) * cw, ry + (gy + 0.5) * chh)
     }
   }
-  applyRectFeatherMask(data, rw, rh, strength)
-  scratchA.width = rw
-  scratchA.height = rh
-  getContext2d(scratchA).putImageData(imageData, 0, 0)
-  ctx.drawImage(scratchA, rx, ry)
+  ctx.restore()
 }
 
 const applyCustomImageRect = (
@@ -1075,17 +1064,14 @@ export const applyEffectRect = (
     case 'glitch':
       applyZoneGlitchRect(ctx, x, y, width, height, strength, options)
       return
-    case 'silhouette':
-      applySilhouetteRect(ctx, x, y, width, height, strength, options)
-      return
     case 'contour':
       applyContourRect(ctx, x, y, width, height, strength, options)
       return
     case 'thermal':
       applyThermalRect(ctx, x, y, width, height, strength, options)
       return
-    case 'static':
-      applyStaticRect(ctx, x, y, width, height, strength, options)
+    case 'ascii':
+      applyAsciiRect(ctx, x, y, width, height, strength, options)
       return
     case 'custom-image':
       applyCustomImageRect(ctx, x, y, width, height, strength, options)
@@ -1179,7 +1165,7 @@ export const applyEffectBrush = (
   }
 
   // ── 3. Feathered circle mask on brushDst (destination-in) ─────
-  const innerR = r * (effect === 'blackout' || effect === 'static' || effect === 'custom-image' ? featherCoreFor(strength) : FEATHER_CORE)
+  const innerR = r * (effect === 'blackout' || effect === 'ascii' || effect === 'custom-image' ? featherCoreFor(strength) : FEATHER_CORE)
   const grad = bdCtx.createRadialGradient(lcx, lcy, innerR, lcx, lcy, r)
   grad.addColorStop(0, 'rgba(0,0,0,1)')
   grad.addColorStop(1, 'rgba(0,0,0,0)')
@@ -1335,7 +1321,7 @@ export const previewEffectBrush = (
   }
 
   // Feather mask
-  const innerR = r * (effect === 'blackout' || effect === 'static' || effect === 'custom-image' ? featherCoreFor(strength) : FEATHER_CORE)
+  const innerR = r * (effect === 'blackout' || effect === 'ascii' || effect === 'custom-image' ? featherCoreFor(strength) : FEATHER_CORE)
   const grad = tCtx.createRadialGradient(lcx, lcy, innerR, lcx, lcy, r)
   grad.addColorStop(0, 'rgba(0,0,0,1)'); grad.addColorStop(1, 'rgba(0,0,0,0)')
   tCtx.globalCompositeOperation = 'destination-in'

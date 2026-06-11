@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, type ReactNode } from 'react'
 import { useMobileBindings } from './useMobileBindings'
 import { MobileBatchDrawer } from './drawers/MobileBatchDrawer'
 import { MobileGalleryDrawer } from './drawers/MobileGalleryDrawer'
@@ -20,6 +20,8 @@ interface MobileShellProps {
   toggleBatchSelect: (id: string) => void
   batchProcessCount: number
   embedEditor?: boolean
+  documentViewer?: ReactNode
+  audioViewer?: ReactNode
 }
 
 export function MobileShell({
@@ -29,6 +31,8 @@ export function MobileShell({
   toggleBatchSelect,
   batchProcessCount,
   embedEditor = false,
+  documentViewer,
+  audioViewer,
 }: MobileShellProps) {
   const b = useMobileBindings()
   const showHome = b.photos.length === 0 && b.mobileMode !== 'live'
@@ -39,20 +43,27 @@ export function MobileShell({
   // (e.g. home after addRecords, editor/video after activePhoto type change).
   useEffect(() => {
     if (b.photos.length > 0 && b.mobileMode === 'home') {
-      b.setMobileMode(b.activePhoto?.isVideo ? 'video' : 'editor')
+      b.setMobileMode(b.activePhoto?.isVideo ? 'video' : b.activePhoto?.isAudio ? 'audio' : b.activePhoto?.isDocument ? 'document' : 'editor')
     }
     if (b.photos.length === 0 && b.mobileMode !== 'live') {
       b.setMobileMode('home')
     }
-  }, [b.photos.length, b.mobileMode, b.activePhoto?.isVideo, b.setMobileMode])
+  }, [b.photos.length, b.mobileMode, b.activePhoto?.isVideo, b.activePhoto?.isAudio, b.activePhoto?.isDocument, b.setMobileMode])
 
   useEffect(() => {
-    if (b.activePhoto?.isVideo && b.mobileMode === 'editor') {
+    const p = b.activePhoto
+    if (!p) return
+    const isImage = !p.isVideo && !p.isAudio && !p.isDocument
+    if (p.isVideo && b.mobileMode === 'editor') {
       b.setMobileMode('video')
-    } else if (b.activePhoto && !b.activePhoto.isVideo && b.mobileMode === 'video') {
+    } else if (p.isAudio && (b.mobileMode === 'editor' || b.mobileMode === 'video')) {
+      b.setMobileMode('audio')
+    } else if (p.isDocument && b.mobileMode !== 'document' && b.mobileMode !== 'live') {
+      b.setMobileMode('document')
+    } else if (isImage && (b.mobileMode === 'video' || b.mobileMode === 'audio' || b.mobileMode === 'document')) {
       b.setMobileMode('editor')
     }
-  }, [b.activePhoto?.id, b.activePhoto?.isVideo, b.mobileMode, b.setMobileMode])
+  }, [b.activePhoto?.id, b.activePhoto?.isVideo, b.activePhoto?.isAudio, b.activePhoto?.isDocument, b.mobileMode, b.setMobileMode])
 
   const openGallery = useCallback(() => {
     b.setGalleryBatchSelect(false)
@@ -73,6 +84,7 @@ export function MobileShell({
       onClose={() => b.setMobilePanel(null)}
       photos={b.photos}
       displayedPhotos={b.displayedPhotos}
+      anonymizedPhotoIds={b.anonymizedPhotoIds}
       activePhotoId={b.activePhotoId}
       sidebarView={sidebarView}
       setSidebarView={setSidebarView}
@@ -82,7 +94,8 @@ export function MobileShell({
       onDeletePhoto={b.deletePhoto}
       onSelectPhoto={(id) => {
         b.selectPhoto(id)
-        b.setMobileMode('editor')
+        const photo = b.photos.find((p) => p.id === id)
+        b.setMobileMode(photo?.isVideo ? 'video' : photo?.isAudio ? 'audio' : photo?.isDocument ? 'document' : 'editor')
       }}
       onAddFiles={b.openUnifiedPicker}
       onSelectBatch={() => {
@@ -161,6 +174,51 @@ export function MobileShell({
       <div className="mobile-shell">
         <MobileHomeDefault b={b} />
       </div>
+    )
+  }
+
+  // Documents have their own viewer + redaction sidebar (rendered in the
+  // workspace); the mobile shell only provides the top chrome and drawers — no
+  // image editing toolbar or tool drawers.
+  if (embedEditor && b.activePhoto?.isDocument) {
+    return (
+      <MobileEditorLayout
+        chrome={(
+          <MobileTopBar
+            onAbout={() => b.setAboutOpen(true)}
+            showGalleryButton
+            onOpenGallery={openGallery}
+          />
+        )}
+        bottom={null}
+        drawers={<>{galleryDrawer}{batchDrawer}</>}
+      >
+        <div className="mobile-doc-viewer">{documentViewer}</div>
+      </MobileEditorLayout>
+    )
+  }
+
+  // Voice mode: render the audio viewer on its own (no image editing chrome).
+  if (embedEditor && b.activePhoto?.isAudio) {
+    return (
+      <MobileEditorLayout
+        chrome={(
+          <MobileTopBar
+            onAbout={() => b.setAboutOpen(true)}
+            showGalleryButton
+            onOpenGallery={openGallery}
+            showLiveButton
+            onLiveMode={() => {
+              if (b.detectorLoading) { b.showMobileToast('Loading face detector…'); return }
+              b.setMobileMode('live'); b.setMobilePanel(null)
+            }}
+          />
+        )}
+        bottom={null}
+        drawers={<>{galleryDrawer}{batchDrawer}</>}
+      >
+        <div className="mobile-doc-viewer mobile-audio-viewer">{audioViewer}</div>
+      </MobileEditorLayout>
     )
   }
 

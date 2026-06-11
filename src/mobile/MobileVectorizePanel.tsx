@@ -84,15 +84,25 @@ export function MobileVectorizePanel({ b }: MobileVectorizePanelProps) {
         <p className="mobile-vectorize-size">Preview ~{Math.round(b.svgPreviewSize / 1024)} KB</p>
       )}
 
-      <button
-        type="button"
-        className="mobile-distort-apply-btn mobile-vectorize-download"
-        onClick={() => { void b.exportAsSvg() }}
-        disabled={b.isBusy || b.vectorizing}
-      >
-        <Icon name="download" size={16} />
-        DOWNLOAD SVG
-      </button>
+      <div className="mobile-vectorize-actions">
+        <button
+          type="button"
+          className="mobile-vectorize-download-btn"
+          onClick={() => { void b.exportAsSvg() }}
+          disabled={b.isBusy || b.vectorizing}
+        >
+          <Icon name="download" size={16} />
+          DOWNLOAD SVG
+        </button>
+        <button
+          type="button"
+          className="mobile-distort-apply-btn mobile-vectorize-apply-btn"
+          onClick={() => { void b.applyVectorizePreview() }}
+          disabled={b.isBusy || b.vectorizing}
+        >
+          APPLY
+        </button>
+      </div>
     </div>
   )
 }

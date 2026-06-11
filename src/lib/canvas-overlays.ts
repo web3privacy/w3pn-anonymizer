@@ -1,4 +1,5 @@
 import type { NormalizedRect, Zone } from '../types'
+import { DETECTION_COLORS } from './detection-config'
 
 /**
  * Editor overlay drawing helpers. The caller is expected to have already
@@ -8,6 +9,38 @@ import type { NormalizedRect, Zone } from '../types'
 
 const SELECTED_COLOR = '#ff7a1a'
 const DEFAULT_COLOR = '#2f81f7'
+
+/** Smallest still-legible caption (px in view space). */
+const LABEL_FONT_PX = 9
+
+/** Draw a tiny type caption at the box's top-left. Faces stay unlabeled. */
+function drawZoneLabel(
+  ctx: CanvasRenderingContext2D,
+  zx: number,
+  zy: number,
+  label: string,
+  color: string,
+  topBound: number,
+) {
+  ctx.save()
+  ctx.font = `600 ${LABEL_FONT_PX}px ui-sans-serif, system-ui, -apple-system, sans-serif`
+  ctx.textBaseline = 'alphabetic'
+  const padX = 2.5
+  const padY = 1.5
+  const textW = ctx.measureText(label).width
+  const chipH = LABEL_FONT_PX + padY * 2
+  const chipW = textW + padX * 2
+  // Sit the chip just above the box, but drop it inside the box when that would
+  // clip above the image edge (zones hugging the top).
+  const cy = zy - chipH - 1 < topBound ? zy + 1 : zy - chipH - 1
+  ctx.fillStyle = 'rgba(0,0,0,0.72)'
+  ctx.fillRect(zx, cy, chipW, chipH)
+  ctx.fillStyle = color
+  ctx.fillRect(zx, cy, 2, chipH)
+  ctx.fillStyle = '#fff'
+  ctx.fillText(label, zx + padX, cy + chipH - padY - 1)
+  ctx.restore()
+}
 
 /** Stroke the normalize crop rectangle (template/draft) in view space. */
 export function drawNormalizeCropInView(
@@ -35,13 +68,15 @@ export function drawZoneInView(
   drawWidth: number,
   drawHeight: number,
   selected: boolean,
+  options?: { showLabel?: boolean },
 ) {
   const zx = -drawWidth / 2 + zone.x * drawWidth
   const zy = -drawHeight / 2 + zone.y * drawHeight
   const zw = zone.width * drawWidth
   const zh = zone.height * drawHeight
+  const typeColor = zone.detectionType ? DETECTION_COLORS[zone.detectionType] : undefined
   ctx.save()
-  ctx.strokeStyle = selected ? SELECTED_COLOR : DEFAULT_COLOR
+  ctx.strokeStyle = selected ? SELECTED_COLOR : (typeColor ?? DEFAULT_COLOR)
   ctx.lineWidth = selected ? 2.5 : 1.8
   ctx.setLineDash(selected ? [] : [])
   ctx.strokeRect(zx, zy, zw, zh)
@@ -51,4 +86,8 @@ export function drawZoneInView(
     ctx.fillRect(zx + zw - hs / 2, zy + zh - hs / 2, hs, hs)
   }
   ctx.restore()
+  // Tiny caption (faces excluded — they carry no label).
+  if (options?.showLabel && zone.label && zone.detectionType !== 'face') {
+    drawZoneLabel(ctx, zx, zy, zone.label, typeColor ?? (selected ? SELECTED_COLOR : DEFAULT_COLOR), -drawHeight / 2)
+  }
 }

@@ -17,12 +17,14 @@ import { zonesWithFaceOffset } from '../lib/face-offset'
 import { createId } from '../lib/ids'
 import {
   buildAnonymizedExportName,
+  buildMediaExportName,
   isRasterImageFormat,
+  libraryItemKind,
   originalsFromPhotoItems,
   photosNeedingSave,
   recordsToPhotoItems,
   resolveNextActiveAfterDelete,
-  selectLibraryExportImages,
+  selectLibraryExportItems,
   validateRecordsForAdd,
   type InputRecord,
 } from '../lib/photo-library'
@@ -431,7 +433,9 @@ export function usePhotoLibrary(options: UsePhotoLibraryOptions): PhotoLibraryAp
         const blob = await res.blob()
         const ext = url.split('.').pop() ?? 'jpg'
         const name = url.split('/').pop() ?? `demo-${i + 1}.${ext}`
-        const mime = blob.type || (ext === 'webm' ? 'video/webm' : ext === 'webp' ? 'image/webp' : ext === 'png' ? 'image/png' : 'image/jpeg')
+        const AUDIO_MIME: Record<string, string> = { m4a: 'audio/mp4', mp3: 'audio/mpeg', wav: 'audio/wav', aac: 'audio/aac', ogg: 'audio/ogg', flac: 'audio/flac' }
+        const DOC_MIME: Record<string, string> = { pdf: 'application/pdf', txt: 'text/plain', md: 'text/markdown', markdown: 'text/markdown', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }
+        const mime = blob.type || AUDIO_MIME[ext] || DOC_MIME[ext] || (ext === 'webm' ? 'video/webm' : ext === 'webp' ? 'image/webp' : ext === 'png' ? 'image/png' : 'image/jpeg')
         return { file: new File([blob], name, { type: mime }), name, source: 'upload' as const }
       }))
       addRecords(fetched)
@@ -700,109 +704,98 @@ export function usePhotoLibrary(options: UsePhotoLibraryOptions): PhotoLibraryAp
     videoAbortRef,
   ])
 
+  // Produce the export blob + filename for a single library item. Images are
+  // re-baked from zones into the chosen image format; videos/audio/documents are
+  // exported using their current (already-anonymized when processed) blob.
+  const exportItemToFile = useCallback(async (photo: PhotoItem): Promise<{ blob: Blob; name: string }> => {
+    if (libraryItemKind(photo) !== 'image') {
+      return { blob: photo.blob, name: buildMediaExportName(photo) }
+    }
+    const canvas = await bakePhotoToCanvas({
+      photo,
+      sourceBlob: originalBlobByPhoto[photo.id] ?? photo.blob,
+      zones: zonesWithFaceOffset(zonesByPhoto[photo.id] ?? [], detectFaceOffset),
+      colorAdj: colorAdjByPhoto[photo.id],
+      brushStrength,
+      activeWorkCanvas: photo.id === activePhotoId ? workCanvasRef.current : null,
+      isActivePhoto: photo.id === activePhotoId,
+      effectOptionsForZone: (zone) => ({
+        customImages: customImageAssets,
+        customImageSource,
+        customImageAssetId: zone.customImageAssetId,
+        zoneId: zone.id,
+        seed: `${photo.id}:${zone.id}`,
+      }),
+    })
+    const blob = await exportCanvasToBlob(canvas, exportFormat, exportQuality, exportPngDepth)
+    return { blob, name: buildAnonymizedExportName(photo.name, exportFormat) }
+  }, [
+    activePhotoId, brushStrength, colorAdjByPhoto, customImageAssets, customImageSource,
+    detectFaceOffset, exportFormat, exportPngDepth, exportQuality, originalBlobByPhoto,
+    workCanvasRef, zonesByPhoto,
+  ])
+
   const exportAllLibraryZip = useCallback(async (photoIds?: string[]) => {
-    const { images, skippedVideos } = selectLibraryExportImages(photos, photoIds)
-    if (images.length === 0) {
-      showMobileToast('No photos in library to export.')
+    const { items } = selectLibraryExportItems(photos, photoIds)
+    if (items.length === 0) {
+      showMobileToast('No media in library to export.')
       return
     }
     setIsExporting(true)
-    setExportLibraryProgress({ done: 0, total: images.length })
+    setExportLibraryProgress({ done: 0, total: items.length })
     try {
       const zip = new JSZip()
       const usage = new Map<string, number>()
       let done = 0
-      for (const photo of images) {
-        setExportLibraryProgress({ done, total: images.length })
-        const canvas = await bakePhotoToCanvas({
-          photo,
-          sourceBlob: originalBlobByPhoto[photo.id] ?? photo.blob,
-          zones: zonesWithFaceOffset(zonesByPhoto[photo.id] ?? [], detectFaceOffset),
-          colorAdj: colorAdjByPhoto[photo.id],
-          brushStrength,
-          activeWorkCanvas: photo.id === activePhotoId ? workCanvasRef.current : null,
-          isActivePhoto: photo.id === activePhotoId,
-          effectOptionsForZone: (zone) => ({
-            customImages: customImageAssets,
-            customImageSource,
-            customImageAssetId: zone.customImageAssetId,
-            zoneId: zone.id,
-            seed: `${photo.id}:${zone.id}`,
-          }),
-        })
-        const blob = await exportCanvasToBlob(canvas, exportFormat, exportQuality, exportPngDepth)
-        const outName = buildAnonymizedExportName(photo.name, exportFormat)
-        zip.file(makeZipSafeName(outName, usage), blob)
+      for (const photo of items) {
+        setExportLibraryProgress({ done, total: items.length })
+        try {
+          const { blob, name } = await exportItemToFile(photo)
+          zip.file(makeZipSafeName(name, usage), blob)
+        } catch (err) {
+          console.error('library export item failed', photo.name, err)
+        }
         done += 1
       }
       const zipBlob = await zip.generateAsync({ type: 'blob' })
       saveAs(zipBlob, `anonymizer-library-${new Date().toISOString().slice(0, 10)}.zip`)
-      showMobileToast(
-        skippedVideos > 0
-          ? `Downloaded ${images.length} photos · ${skippedVideos} video${skippedVideos !== 1 ? 's' : ''} skipped`
-          : `Downloaded ${images.length} photo${images.length !== 1 ? 's' : ''} as ZIP`,
-      )
+      showMobileToast(`Downloaded ${items.length} item${items.length !== 1 ? 's' : ''} as ZIP`)
     } catch {
       showMobileToast('ZIP export failed.')
     } finally {
       setIsExporting(false)
       setExportLibraryProgress(null)
     }
-  }, [
-    activePhotoId, brushStrength, colorAdjByPhoto, customImageAssets, customImageSource,
-    detectFaceOffset, exportFormat, exportPngDepth, exportQuality, originalBlobByPhoto,
-    photos, setExportLibraryProgress, setIsExporting, showMobileToast, workCanvasRef, zonesByPhoto,
-  ])
+  }, [exportItemToFile, photos, setExportLibraryProgress, setIsExporting, showMobileToast])
 
   const exportAllLibraryIndividual = useCallback(async (photoIds?: string[]) => {
-    const { images, skippedVideos } = selectLibraryExportImages(photos, photoIds)
-    if (images.length === 0) {
-      showMobileToast('No photos in library to export.')
+    const { items } = selectLibraryExportItems(photos, photoIds)
+    if (items.length === 0) {
+      showMobileToast('No media in library to export.')
       return
     }
     setIsExporting(true)
-    setExportLibraryProgress({ done: 0, total: images.length })
+    setExportLibraryProgress({ done: 0, total: items.length })
     try {
       let done = 0
-      for (const photo of images) {
-        setExportLibraryProgress({ done, total: images.length })
-        const canvas = await bakePhotoToCanvas({
-          photo,
-          sourceBlob: originalBlobByPhoto[photo.id] ?? photo.blob,
-          zones: zonesWithFaceOffset(zonesByPhoto[photo.id] ?? [], detectFaceOffset),
-          colorAdj: colorAdjByPhoto[photo.id],
-          brushStrength,
-          activeWorkCanvas: photo.id === activePhotoId ? workCanvasRef.current : null,
-          isActivePhoto: photo.id === activePhotoId,
-          effectOptionsForZone: (zone) => ({
-            customImages: customImageAssets,
-            customImageSource,
-            customImageAssetId: zone.customImageAssetId,
-            zoneId: zone.id,
-            seed: `${photo.id}:${zone.id}`,
-          }),
-        })
-        const blob = await exportCanvasToBlob(canvas, exportFormat, exportQuality, exportPngDepth)
-        const outName = buildAnonymizedExportName(photo.name, exportFormat)
-        saveAs(blob, outName)
+      for (const photo of items) {
+        setExportLibraryProgress({ done, total: items.length })
+        try {
+          const { blob, name } = await exportItemToFile(photo)
+          saveAs(blob, name)
+        } catch (err) {
+          console.error('library export item failed', photo.name, err)
+        }
         done += 1
       }
-      showMobileToast(
-        skippedVideos > 0
-          ? `Downloaded ${images.length} files · ${skippedVideos} video${skippedVideos !== 1 ? 's' : ''} skipped`
-          : `Downloaded ${images.length} file${images.length !== 1 ? 's' : ''}`,
-      )
+      showMobileToast(`Downloaded ${items.length} file${items.length !== 1 ? 's' : ''}`)
     } catch {
       showMobileToast('Export failed.')
     } finally {
       setIsExporting(false)
       setExportLibraryProgress(null)
     }
-  }, [
-    activePhotoId, brushStrength, colorAdjByPhoto, customImageAssets, customImageSource,
-    detectFaceOffset, exportFormat, exportPngDepth, exportQuality, originalBlobByPhoto,
-    photos, setExportLibraryProgress, setIsExporting, showMobileToast, workCanvasRef, zonesByPhoto,
-  ])
+  }, [exportItemToFile, photos, setExportLibraryProgress, setIsExporting, showMobileToast])
 
   return {
     isDragOver,

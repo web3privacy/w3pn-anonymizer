@@ -15,9 +15,11 @@ import type {
   ColorAdjustments,
   CustomImageAsset,
   CustomImageSource,
-  DetectionTarget,
+  DetectionCategoryConfig,
   DetectorStatus,
+  ModelAvailabilityStatus,
   PhotoItem,
+  PrivacyDetectionType,
   ToolMode,
   Zone,
 } from '../types'
@@ -48,18 +50,19 @@ export interface EditorToolStripProps {
   activePhoto: PhotoItem | null
   setToolMode: Dispatch<SetStateAction<ToolMode>>
   setZonesAnonymized: Dispatch<SetStateAction<boolean>>
-  detectTarget: DetectionTarget
-  setDetectTarget: Dispatch<SetStateAction<DetectionTarget>>
+  detectionConfig: DetectionCategoryConfig[]
+  modelStatus: Record<string, ModelAvailabilityStatus>
+  enabledClasses: string[]
+  setEnabledClasses: (updater: string[] | ((cur: string[]) => string[])) => void
+  toggleDetectionClass: (className: string, enabled: boolean) => void
+  setCategoryEnabled: (type: PrivacyDetectionType, enabled: boolean) => void
   detectSensitivity: number
   setDetectSensitivity: Dispatch<SetStateAction<number>>
   detectFaceOffset: number
   setDetectFaceOffset: Dispatch<SetStateAction<number>>
-  detectThorough: boolean
-  setDetectThorough: Dispatch<SetStateAction<boolean>>
   setAutoDetect: Dispatch<SetStateAction<boolean>>
   showBoxes: boolean
   setShowBoxes: Dispatch<SetStateAction<boolean>>
-  detectFacesOnActiveImage: (robust?: boolean) => void
   adjFlyoutOpen: boolean
   adjFlyoutAnchor: FlyoutAnchor | null
   adjFlyoutBtnRef: RefObject<HTMLButtonElement>
@@ -86,7 +89,7 @@ export interface EditorToolStripProps {
   applyAdjTransformToCanvas: () => void | Promise<void>
   setCropDraft: Dispatch<SetStateAction<{ x: number; y: number; w: number; h: number } | null>>
   updateSelectedZoneEffect: (effect: AnonymizeEffectId) => void
-  setEffectPickerOpen: Dispatch<SetStateAction<'emoji' | 'custom-image' | null>>
+  setEffectPickerOpen: Dispatch<SetStateAction<'emoji' | 'custom-image' | 'ascii' | null>>
   customImageAssets: CustomImageAsset[]
   loadCustomImagePreset: (source: CustomImageSource) => void | Promise<void>
   customImageSource: CustomImageSource
@@ -121,18 +124,19 @@ export function EditorToolStrip(props: EditorToolStripProps) {
     activePhoto,
     setToolMode,
     setZonesAnonymized,
-    detectTarget,
-    setDetectTarget,
+    detectionConfig,
+    modelStatus,
+    enabledClasses,
+    setEnabledClasses,
+    toggleDetectionClass,
+    setCategoryEnabled,
     detectSensitivity,
     setDetectSensitivity,
     detectFaceOffset,
     setDetectFaceOffset,
-    detectThorough,
-    setDetectThorough,
     setAutoDetect,
     showBoxes,
     setShowBoxes,
-    detectFacesOnActiveImage,
     adjFlyoutOpen,
     adjFlyoutAnchor,
     adjFlyoutBtnRef,
@@ -273,21 +277,24 @@ export function EditorToolStrip(props: EditorToolStripProps) {
         >
           <div className="ts-flyout-title">Face detection</div>
           <FaceSettingsPanel
-            target={detectTarget}
-            onTargetChange={setDetectTarget}
+            detectionConfig={detectionConfig}
+            modelStatus={modelStatus}
+            onToggleCategory={setCategoryEnabled}
+            enabledClasses={enabledClasses}
+            onToggleClass={toggleDetectionClass}
+            onSetAllClasses={(names, enabled) => setEnabledClasses((cur) => {
+              if (enabled) return Array.from(new Set([...cur, ...names]))
+              const remove = new Set(names)
+              return cur.filter((c) => !remove.has(c))
+            })}
             sensitivity={detectSensitivity}
             onSensitivityChange={setDetectSensitivity}
             faceOffset={detectFaceOffset}
             onFaceOffsetChange={setDetectFaceOffset}
-            thorough={detectThorough}
-            onThoroughChange={setDetectThorough}
-            detectEnabled={autoDetect}
-            onDetectEnabledChange={(v) => { setAutoDetect(v); setShowBoxes(v) }}
+            facesEnabled={autoDetect}
+            onFacesToggle={(v) => { setAutoDetect(v); setShowBoxes(v) }}
             showBoxes={showBoxes}
             onShowBoxesChange={setShowBoxes}
-            detectorReady={detector.mode === 'yunet-wasm'}
-            isVideo={Boolean(activePhoto?.isVideo)}
-            onDetectNow={() => { void detectFacesOnActiveImage(detectThorough); setFaceFlyoutOpen(false) }}
             compact
           />
         </div>,
@@ -412,7 +419,7 @@ export function EditorToolStrip(props: EditorToolStripProps) {
                 type="button"
                 onClick={() => {
                   updateSelectedZoneEffect(ef.id)
-                  if (ef.id === 'emoji' || ef.id === 'custom-image') {
+                  if (ef.id === 'emoji' || ef.id === 'custom-image' || ef.id === 'ascii') {
                     setEffectFlyoutOpen(false)
                     setEffectPickerOpen(ef.id)
                     if (ef.id === 'custom-image' && customImageAssets.length === 0) {

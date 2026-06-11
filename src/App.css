@@ -479,6 +479,17 @@
 .photo-item.batch-selected { border-color: var(--accent); background: var(--accent-soft); }
 .photo-item.batch-selected.active { border-color: var(--accent); }
 
+/* Green outline marks already-anonymized assets (processed media or applied masks). */
+.photo-item.anonymized {
+  border-color: #22c55e;
+  box-shadow: inset 0 0 0 1px #22c55e;
+}
+.photo-item.anonymized:hover { border-color: #34d76b; }
+.photo-item.anonymized.active {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 2px var(--accent), inset 0 0 0 3px rgba(34, 197, 94, 0.55);
+}
+
 /* Batch select checkbox overlay */
 .batch-checkbox {
   position: absolute;
@@ -2598,6 +2609,50 @@ input[type="number"].tb-quality-num {
   background: rgba(255, 255, 255, 0.14);
 }
 
+.detect-settings-ready {
+  font-size: 0.5rem;
+  letter-spacing: 0.05em;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: rgba(0, 255, 120, 0.18);
+  color: var(--accent, #00ff78);
+}
+
+.detect-settings-section--extended {
+  margin-top: 0.35rem;
+}
+
+.detect-settings-extended-hint {
+  margin: 0 0 0.45rem;
+  font-size: 0.65rem;
+  line-height: 1.35;
+  color: var(--text-muted);
+}
+
+.detect-settings-targets--extended {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.detect-settings-targets--extended .detect-settings-target {
+  min-height: 4.2rem;
+  padding: 0.45rem 0.35rem 0.55rem;
+}
+
+.detect-settings-target-chip {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  position: absolute;
+  top: 6px;
+  right: 6px;
+}
+
+.detect-settings-target-name {
+  text-align: center;
+  line-height: 1.15;
+  font-size: 0.62rem;
+}
+
 .detect-settings-slider-head {
   display: flex;
   justify-content: space-between;
@@ -2629,6 +2684,128 @@ input[type="number"].tb-quality-num {
   margin-top: 0.25rem;
   width: 100%;
   justify-content: center;
+}
+
+/* "All classes" — shared between desktop flyout and mobile drawer */
+.detect-class-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.detect-class-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  background: var(--surface-2, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+  border-radius: 0.6rem;
+  color: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.detect-class-toggle-text {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.detect-class-toggle-count,
+.detect-class-count {
+  min-width: 1.25rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: var(--accent, #2f7bff);
+  color: #fff;
+  font-size: 0.66rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.detect-class-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.detect-class-hint {
+  margin: 0;
+  font-size: 0.7rem;
+  line-height: 1.4;
+  color: var(--text-muted, rgba(255, 255, 255, 0.5));
+}
+
+.detect-class-empty {
+  margin: 0;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  color: var(--text-muted, rgba(255, 255, 255, 0.55));
+}
+
+.detect-class-search {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.55rem;
+  background: var(--surface-2, rgba(255, 255, 255, 0.05));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+  border-radius: 0.55rem;
+  color: var(--text-muted, rgba(255, 255, 255, 0.6));
+}
+
+.detect-class-search input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: inherit;
+  font-size: 0.8rem;
+}
+
+.detect-class-search-clear {
+  display: inline-flex;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.7;
+}
+
+.detect-class-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 320px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.detect-class-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-height: 42px;
+  padding: 0.3rem 0.15rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  cursor: pointer;
+}
+
+.detect-class-row--all {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.16);
+  margin-bottom: 0.15rem;
+}
+
+.detect-class-name {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.8rem;
+  text-transform: capitalize;
 }
 
 .feedback-backdrop {
@@ -3955,6 +4132,67 @@ input[type="number"].tb-quality-num {
   padding: 0.7rem 0.85rem 0.85rem;
 }
 
+/* ── ASCII charset picker ─────────────────────────────────────── */
+.ascii-charset-picker {
+  padding: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.ascii-charset-label {
+  margin: 0;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary, #aaa);
+}
+
+.ascii-charset-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.5rem;
+}
+
+.ascii-charset-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0.7rem 0.5rem;
+  border-radius: 10px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.14));
+  background: var(--surface-2, rgba(255, 255, 255, 0.04));
+  color: var(--text, #eee);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.ascii-charset-chip:hover {
+  border-color: rgba(0, 255, 120, 0.5);
+}
+
+.ascii-charset-chip.active {
+  border-color: var(--mobile-accent, #00ff78);
+  background: rgba(0, 255, 120, 0.12);
+  color: var(--mobile-accent, #00ff78);
+}
+
+.ascii-charset-sample {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 1.1rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.ascii-charset-name {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
 .effect-picker-dialog .mobile-custom-image-source-wrap {
   position: relative;
 }
@@ -3996,3 +4234,1499 @@ input[type="number"].tb-quality-num {
   padding-top: 0.55rem;
   border-radius: 0 0 8px 8px;
 }
+
+/* ── Privacy targets panel ─────────────────────────────── */
+.privacy-targets-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin-bottom: 0.5rem;
+}
+
+.privacy-targets-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.privacy-target-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.privacy-target-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  width: 100%;
+  padding: 0.35rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-bg);
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.privacy-target-row.coming-soon .privacy-target-toggle {
+  opacity: 0.72;
+  cursor: not-allowed;
+}
+
+.privacy-target-row.coming-soon .privacy-target-toggle:disabled {
+  pointer-events: none;
+}
+
+.privacy-target-model-status--coming_soon {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.privacy-target-model-status--loading {
+  color: var(--accent);
+}
+
+.privacy-target-model-status--error {
+  color: #e85d5d;
+}
+
+.privacy-targets-coming-soon-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.35rem;
+  margin: 0 0 0.35rem;
+  padding: 0.45rem 0.5rem;
+  font-size: 0.68rem;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--panel-bg) 88%, var(--accent) 12%);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.privacy-targets-coming-soon-note code {
+  font-size: 0.62rem;
+}
+
+
+.privacy-target-chip {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.privacy-target-label {
+  flex: 1;
+  font-size: 0.78rem;
+}
+
+.privacy-target-model-status {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  text-transform: lowercase;
+}
+
+.privacy-target-count {
+  font-size: 0.65rem;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.privacy-targets-hint {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin: 0;
+}
+
+.privacy-targets-panel--compact .privacy-target-toggle {
+  padding: 0.3rem 0.35rem;
+}
+
+/* ── Audio mode viewer (video-style stage + bottom toolbar) ───────── */
+.audio-mode-viewer {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-height: 0;
+  width: 100%;
+  background: var(--viewer-bg, var(--bg));
+}
+
+/* Embedded variant inside the video editor (audio track settings). */
+.video-audio-panel {
+  flex: 0 0 auto;
+  max-height: 48vh;
+  border-bottom: 1px solid var(--border);
+  /* Scroll the controls instead of clipping them — with distort presets +
+     advanced sliders the toolbar is taller than the old fixed 320px box, which
+     used to hide the transport/mode buttons behind the canvas. */
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  display: flex;
+  flex-direction: column;
+}
+
+.video-track-mode {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-primary);
+  flex: 0 0 auto;
+}
+
+/* Collapsible header for the video editor's audio tools. */
+.video-audio-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.45rem 0.6rem;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel, var(--bg));
+  color: var(--text-primary);
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.video-audio-toggle:hover { background: rgba(255, 255, 255, 0.05); }
+.video-audio-toggle.open { color: #00FF78; }
+.video-audio-toggle-chevron { font-size: 0.9rem; line-height: 1; opacity: 0.8; }
+.video-track-mode-label {
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+.video-track-mode-select {
+  margin-left: auto;
+  background: var(--panel-bg);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.74rem;
+  cursor: pointer;
+}
+.audio-mode-viewer--embed {
+  /* Let the parent .video-audio-panel own the scroll/height; the embedded stage
+     is content-sized so the bottom toolbar is always reachable. */
+  flex: 0 0 auto;
+  max-height: none;
+}
+.audio-mode-viewer--embed .audio-stage {
+  flex: 0 0 auto;
+}
+.audio-mode-viewer--embed .audio-wave-wrap {
+  min-height: 84px;
+  max-height: 120px;
+}
+.audio-mode-viewer--embed .audio-toolbar {
+  padding-bottom: 0.7rem;
+}
+
+/* Large central visualization that eats as much space as possible. */
+.audio-stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.9rem 1.1rem 0.4rem;
+  background:
+    radial-gradient(120% 90% at 50% 0%, rgba(0, 255, 120, 0.06), transparent 70%),
+    var(--viewer-bg, var(--bg));
+}
+
+.audio-stage-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.audio-stage-title {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  min-width: 0;
+}
+.audio-stage-title span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audio-stage-badges {
+  display: flex;
+  gap: 0.35rem;
+  flex: 0 0 auto;
+}
+
+.audio-badge {
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.18rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+.audio-badge--proc { color: #00FF78; border-color: rgba(0, 255, 120, 0.55); }
+.audio-badge--orig { color: #ff9f43; border-color: rgba(255, 159, 67, 0.55); }
+.audio-badge--meta.is-anon { color: #00FF78; border-color: rgba(0, 255, 120, 0.55); }
+
+.audio-wave-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 120px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.25);
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.audio-wave-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.audio-wave-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+/* Mobile: transport timeline overlaid on the bottom of the audio preview. */
+.audio-wave-transport {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 0.4rem 0.6rem calc(0.4rem + env(safe-area-inset-bottom, 0px));
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.62), rgba(0, 0, 0, 0.18) 70%, transparent);
+}
+.audio-wave-transport .audio-transport { margin: 0; }
+.audio-wave-transport .audio-mode-time { color: rgba(255, 255, 255, 0.82); }
+
+/* Bottom toolbar (mirrors video editor controls). */
+.audio-toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.6rem 1.1rem calc(0.8rem + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--border);
+  background: var(--panel, var(--bg));
+}
+
+.audio-toolbar-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.audio-transport {
+  flex-wrap: nowrap;
+}
+.audio-mode-scrubber { flex: 1; min-width: 80px; }
+.audio-mode-time {
+  flex: 0 0 auto;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  min-width: 8ch;
+  text-align: right;
+}
+
+.audio-toolbar-modes {
+  justify-content: space-between;
+}
+.audio-seg {
+  display: inline-flex;
+  gap: 0.25rem;
+  padding: 0.15rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.audio-seg .btn { border: none; }
+
+/* A/B compare as a real toggle switch — the active side is highlighted and the
+   thumb slides, so the current monitoring source is unambiguous. */
+.audio-ab-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.2rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel-bg, rgba(255, 255, 255, 0.04));
+  cursor: pointer;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+}
+.audio-ab-switch-label { transition: color 0.15s ease; white-space: nowrap; }
+.audio-ab-switch.is-orig .audio-ab-switch-label--orig { color: #ff4d4f; }
+.audio-ab-switch.is-anon .audio-ab-switch-label--anon { color: #00FF78; }
+.audio-ab-switch-track {
+  position: relative;
+  width: 34px;
+  height: 18px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  flex: 0 0 auto;
+  transition: background 0.15s ease;
+}
+.audio-ab-switch.is-orig .audio-ab-switch-track { background: rgba(255, 77, 79, 0.4); }
+.audio-ab-switch.is-anon .audio-ab-switch-track { background: rgba(0, 255, 120, 0.4); }
+.audio-ab-switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.18s ease;
+}
+.audio-ab-switch.is-anon .audio-ab-switch-thumb { transform: translateX(16px); }
+
+.audio-presets-row { gap: 0.35rem; }
+.audio-preset-chip { flex: 0 0 auto; }
+/* Presets stay on a single row; chips share the width and ellipsize. */
+.audio-mode-viewer--mobile .audio-presets-row { flex-wrap: nowrap; }
+.audio-mode-viewer--mobile .audio-preset-chip {
+  flex: 1 1 0;
+  min-width: 0;
+  justify-content: center;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  padding-inline: 0.35rem;
+  font-size: 0.72rem;
+}
+/* The selected anonymization preset reads green so the active mask is obvious. */
+.audio-preset-chip.active {
+  background: rgba(0, 255, 120, 0.16) !important;
+  border-color: #00FF78 !important;
+  color: #00FF78 !important;
+  font-weight: 700;
+}
+
+.audio-advanced-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  align-self: flex-start;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  cursor: pointer;
+  padding: 0.2rem 0;
+}
+.audio-advanced-toggle:hover { color: var(--text); }
+
+.audio-advanced {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.25rem 1rem;
+  padding: 0.4rem 0;
+}
+
+.audio-toolbar-footer {
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.audio-mode-warning {
+  font-size: 0.66rem;
+  color: var(--text-muted);
+  margin: 0;
+  line-height: 1.4;
+  flex: 1;
+  min-width: 180px;
+}
+
+.audio-export-group {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+.audio-export-format {
+  background: var(--surface);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.4rem 0.5rem;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+/* Unified blue Download button (matches the photo/video action toolbar). */
+.audio-download-btn {
+  background: #3b5bdb;
+  border-color: #3b5bdb;
+  color: #fff;
+  font-weight: 600;
+}
+.audio-download-btn:disabled { opacity: 0.6; cursor: default; }
+
+/* Mobile voice mode: viewer fills the shell below the top bar. */
+.mobile-audio-viewer .audio-mode-viewer {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Mobile setting category buttons (open the bottom drawers). */
+.audio-mobile-settings {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.4rem;
+}
+.audio-setting-btn {
+  justify-content: flex-start;
+  gap: 0.4rem;
+}
+.audio-setting-btn b { margin-left: auto; color: #00FF78; }
+
+.audio-drawer-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.2rem 0 0.4rem;
+}
+.audio-drawer-hint {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  margin: 0.3rem 0 0;
+  line-height: 1.45;
+}
+
+/* ── Redesigned audio controls (shared mobile/desktop) ── */
+
+/* Mobile: primary Download CTA + privacy info live inside the preview. */
+.audio-preview-actions {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+}
+.audio-download-wrap { position: relative; flex: 1; }
+.audio-download-main {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  width: 100%;
+  padding: 0.7rem 1rem;
+  border: none;
+  border-radius: 12px;
+  background: #00FF78;
+  color: #04130b;
+  font-weight: 700;
+  font-size: 0.86rem;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+}
+.audio-download-main:disabled { opacity: 0.6; cursor: default; }
+
+/* Audio-mode buttons share the document mode's concise UPPERCASE labelling. */
+.audio-mode-viewer .btn,
+.audio-download-main,
+.audio-download-btn {
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.audio-info-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel-bg, rgba(255, 255, 255, 0.04));
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.audio-info-btn:hover { color: var(--text); }
+.audio-info-btn.active {
+  color: #00FF78;
+  border-color: rgba(0, 255, 120, 0.55);
+}
+
+/* Mobile preview foot: A/B compare on top, then [level meter | info + download]. */
+.audio-ab-switch--compact {
+  gap: 0.35rem;
+  padding: 0.2rem 0.4rem;
+  font-size: 0.66rem;
+}
+.audio-preview-actions-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.audio-preview-actions-right .audio-download-wrap { flex: 0 0 auto; }
+.audio-download-main--compact {
+  width: auto;
+  padding: 0.5rem 0.95rem;
+  border-radius: 10px;
+  font-size: 0.82rem;
+}
+
+/* Backdrop catches outside clicks for every audio popover/flyout. */
+.audio-pop-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+}
+
+.audio-format-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  z-index: 41;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel, #14181d);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+}
+.audio-format-menu-title {
+  margin: 0.1rem 0.3rem 0.25rem;
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.audio-format-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 0.55rem 0.6rem;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+.audio-format-item:hover { background: rgba(255, 255, 255, 0.07); }
+.audio-format-item.active { color: #00FF78; font-weight: 600; }
+
+.audio-warn-pop {
+  position: absolute;
+  z-index: 41;
+  bottom: calc(100% + 8px);
+  right: 0;
+  max-width: min(320px, 86vw);
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel, #14181d);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  font-size: 0.72rem;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.audio-intensity-row { flex-wrap: nowrap; }
+/* The intensity slider should fill the whole row, not just its content width. */
+.audio-intensity-row .tool-slider-row { flex: 1 1 auto; min-width: 0; }
+
+/* Voice / Tone / Timing tab bar (bottom menu on mobile, flyout anchor on desktop). */
+.audio-cat-bar {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  gap: 0.4rem;
+}
+.audio-cat-tabs {
+  display: flex;
+  flex: 1;
+  gap: 0.3rem;
+  padding: 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel-bg, rgba(255, 255, 255, 0.03));
+}
+
+/* Mobile category row reuses the live-mode tool buttons; keep it horizontal
+   inside the audio toolbar even in landscape (where the live toolbar stacks). */
+.audio-mode-viewer .audio-cat-bar { flex: 1; }
+.audio-mode-viewer .audio-cat-bar .mobile-tool-categories {
+  flex: 1;
+  flex-direction: row;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.audio-cat-tab {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0.5rem 0.4rem;
+  border: none;
+  border-radius: 9px;
+  background: none;
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.audio-cat-tab:hover { color: var(--text); }
+.audio-cat-tab.active {
+  background: rgba(0, 255, 120, 0.14);
+  color: #00FF78;
+}
+
+/* Desktop flyout panel floating above the tab bar. */
+.audio-flyout {
+  position: absolute;
+  z-index: 41;
+  bottom: calc(100% + 10px);
+  left: 0;
+  right: 0;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel, #14181d);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.5);
+}
+.audio-flyout-title {
+  margin: 0 0 0.4rem;
+  font-size: 0.64rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.audio-flyout-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.2rem 1rem;
+}
+
+/* Tab strip inside the mobile category drawer. */
+.audio-drawer-tabs {
+  display: flex;
+  gap: 0.3rem;
+  padding: 0.15rem;
+  margin-bottom: 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel-bg, rgba(255, 255, 255, 0.03));
+}
+.audio-drawer-tab {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  padding: 0.5rem 0.4rem;
+  border: none;
+  border-radius: 9px;
+  background: none;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.audio-drawer-tab.active {
+  background: rgba(0, 255, 120, 0.14);
+  color: #00FF78;
+}
+
+/* Desktop action-toolbar audio download submenu. */
+.tb-download-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+}
+.tb-download-menu {
+  position: absolute;
+  z-index: 9999;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 160px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel, #14181d);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
+}
+.tb-download-menu-title {
+  margin: 0.1rem 0.3rem 0.2rem;
+  font-size: 0.6rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.tb-download-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 0.45rem 0.55rem;
+  border: none;
+  border-radius: 7px;
+  background: none;
+  color: var(--text-primary);
+  font-size: 0.76rem;
+  cursor: pointer;
+}
+.tb-download-item:hover { background: rgba(255, 255, 255, 0.07); }
+.tb-download-item.active { color: #00FF78; font-weight: 600; }
+
+.app-shell-desktop-v2--audio .editor-area,
+.app-shell-mobile--audio .editor-area {
+  grid-template-rows: auto 1fr;
+}
+
+@media (max-width: 720px) {
+  .audio-advanced,
+  .audio-flyout-grid { grid-template-columns: 1fr; }
+  .audio-toolbar-modes { justify-content: space-between; }
+  .audio-preset-chip {
+    flex: 1 1 calc(33.333% - 0.24rem);
+    justify-content: center;
+    padding-inline: 0.3rem;
+  }
+}
+
+/* ── Document anonymizer mode ──────────────────────────── */
+.photo-item-media-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 6px;
+}
+.photo-item-media-placeholder.photo-item-thumb {
+  aspect-ratio: auto;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 auto;
+}
+
+.app-shell-desktop-v2--document .editor-area,
+.app-shell-mobile--document .editor-area {
+  grid-template-rows: 1fr;
+}
+
+.doc-mode {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  width: 100%;
+  background: var(--viewer-bg, var(--bg));
+}
+
+.doc-stage {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.doc-stage-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+.doc-stage-title {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  min-width: 0;
+}
+.doc-stage-name {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+.doc-kind-badge {
+  font-size: 0.6rem;
+  font-weight: 700;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  background: rgba(0, 194, 255, 0.15);
+  color: #00C2FF;
+}
+.doc-stage-meta { font-size: 0.72rem; color: var(--text-muted); }
+
+.doc-canvas-area {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 1rem;
+}
+
+.doc-placeholder {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 0.5rem; height: 100%; color: var(--text-muted); font-size: 0.85rem;
+}
+.doc-placeholder.doc-error { color: #ff6b6b; }
+
+/* Text view */
+.doc-text-view { display: flex; flex-direction: column; gap: 0.6rem; height: 100%; }
+.doc-text-controls {
+  display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;
+  padding: 0.1rem 0.1rem 0.2rem;
+}
+.doc-ab-switch { flex: 0 0 auto; }
+.doc-toggle { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.78rem; cursor: pointer; }
+.doc-hint { font-size: 0.72rem; color: var(--text-muted); flex: 1; min-width: 0; }
+
+/* Segmented blackout/token toggle that lives beside the orig/anon switch. */
+.doc-effect-seg {
+  display: inline-flex;
+  margin-left: auto;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+.doc-seg-btn {
+  border: none;
+  background: var(--button-bg);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  padding: 0.3rem 0.6rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.08s, color 0.08s;
+}
+.doc-seg-btn + .doc-seg-btn { border-left: 1px solid var(--border); }
+.doc-seg-btn:hover:not(.active) { color: var(--text); }
+.doc-seg-btn.active { background: var(--accent); color: #0a1a0d; font-weight: 600; }
+
+/* Consistent sizing for the document sidebar controls (no more cramped, mixed
+   button heights). All actions share the same min height + full width. */
+.doc-effect-row .btn { flex: 1 1 auto; justify-content: center; min-height: 32px; }
+.doc-export .btn { min-height: 38px; }
+@media (max-width: 860px) {
+  .doc-text-controls { gap: 0.6rem; }
+  .doc-effect-row { gap: 0.4rem; }
+}
+.doc-text-body {
+  flex: 1;
+  margin: 0;
+  /* +4px of breathing room below the text so the last line isn't flush to the edge. */
+  padding: 1rem 1.1rem 1.25rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 0.82rem;
+  line-height: 1.6;
+  background: rgba(0, 0, 0, 0.18);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: auto;
+}
+.doc-text-redacted { color: var(--text); }
+
+.doc-mark {
+  background: color-mix(in srgb, var(--pii) 30%, transparent);
+  border-bottom: 2px solid var(--pii);
+  border-radius: 3px;
+  padding: 0 1px;
+  cursor: pointer;
+  color: inherit;
+}
+.doc-mark--off {
+  background: transparent;
+  border-bottom: 2px dashed color-mix(in srgb, var(--pii) 60%, transparent);
+  opacity: 0.6;
+  text-decoration: line-through;
+}
+.doc-mark--active { outline: 2px solid var(--pii); outline-offset: 1px; }
+
+/* PDF view */
+.doc-pdf-view { display: flex; flex-direction: column; align-items: center; gap: 1rem; }
+.doc-page {
+  position: relative;
+  width: 100%;
+  max-width: 900px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.25);
+  user-select: none;
+  cursor: crosshair;
+}
+.doc-page-img { display: block; width: 100%; height: auto; pointer-events: none; }
+.doc-page-num {
+  position: absolute; bottom: 4px; right: 6px;
+  font-size: 0.62rem; color: var(--text-muted);
+  background: rgba(0, 0, 0, 0.5); padding: 0 4px; border-radius: 3px;
+}
+.doc-box {
+  position: absolute;
+  box-sizing: border-box;
+  cursor: pointer;
+  border: 1.5px solid var(--pii);
+  background: color-mix(in srgb, var(--pii) 22%, transparent);
+}
+.doc-box--off {
+  border-style: dashed;
+  background: transparent;
+  opacity: 0.7;
+}
+.doc-box--blackout { background: rgba(0, 0, 0, 0.92); }
+.doc-box--active { outline: 2px solid #fff; }
+.doc-box--draft { border: 1.5px dashed #fff; background: rgba(255, 255, 255, 0.12); pointer-events: none; }
+
+/* Sidebar */
+.doc-sidebar {
+  flex: 0 0 320px;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+  background: var(--panel, var(--bg));
+  overflow-y: auto;
+}
+.doc-sidebar-section {
+  padding: 0.75rem 0.9rem;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.doc-detections { flex: 1; min-height: 0; }
+.doc-section-head {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 0.74rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+.doc-section-actions { display: flex; gap: 0.5rem; }
+.doc-link-btn {
+  background: none; border: none; color: var(--accent, #00C2FF); cursor: pointer;
+  font-size: 0.72rem; padding: 0;
+}
+.doc-effect-row { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.doc-effect-row .btn.active,
+.doc-seg-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #0a1a0d;
+  font-weight: 600;
+}
+
+.doc-type-legend { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+/* Single-row, horizontally scrollable chip strip (no wrapping to many lines). */
+.doc-type-legend--scroll {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  padding-bottom: 2px;
+}
+.doc-type-legend--scroll::-webkit-scrollbar { display: none; }
+.doc-type-chip {
+  display: inline-flex; align-items: center; gap: 0.3rem;
+  font-size: 0.68rem; color: var(--text-muted);
+  padding: 0.1rem 0.4rem; border: 1px solid var(--border); border-radius: 999px;
+  white-space: nowrap; flex: 0 0 auto;
+}
+.doc-type-dot { width: 8px; height: 8px; border-radius: 50%; }
+
+.doc-detection-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.2rem; }
+.doc-detection-empty { font-size: 0.76rem; color: var(--text-muted); }
+.doc-detection-row {
+  display: flex; align-items: center; gap: 0.45rem;
+  padding: 0.3rem 0.4rem; border-radius: 6px; font-size: 0.76rem;
+}
+.doc-detection-row:hover, .doc-detection-row.active { background: rgba(255, 255, 255, 0.06); }
+.doc-detection-row.off { opacity: 0.5; }
+.doc-detection-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+.doc-detection-type { font-weight: 600; flex: 0 0 auto; }
+.doc-detection-text {
+  color: var(--text);
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  font-family: ui-monospace, monospace;
+  font-size: 0.72rem;
+}
+.doc-detection-remove {
+  background: none; border: none; color: var(--text-muted); cursor: pointer;
+  display: inline-flex; padding: 2px; border-radius: 4px; flex: 0 0 auto;
+}
+.doc-detection-remove:hover { color: #ff6b6b; }
+
+.doc-export { gap: 0.4rem; }
+.doc-export .btn { width: 100%; justify-content: center; }
+/* Text mode: Copy + Save share the bottom row 50/50. */
+.doc-export-row { display: flex; gap: 0.4rem; }
+.doc-export-row .btn { flex: 1 1 0; width: auto; min-height: 38px; }
+
+/* "Review detected" should match the export action buttons rather than the
+   short btn-sm look it had before. */
+.doc-review-btn { width: 100%; justify-content: center; min-height: 38px; }
+
+/* Unified document-mode buttons: concise UPPERCASE labels and the rounder
+   corners the primary buttons use elsewhere (audio download / mobile apply). */
+.doc-mode .btn,
+.doc-seg-btn {
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.doc-export .btn,
+.doc-export-row .btn,
+.doc-review-btn {
+  border-radius: 10px;
+  font-weight: 600;
+}
+.doc-privacy-note { font-size: 0.66rem; color: var(--text-muted); margin: 0 0 0.2rem; line-height: 1.4; }
+
+/* Editable text (paste / type) workspace. */
+.doc-text-editor {
+  resize: none;
+  color: var(--text);
+  outline: none;
+  min-height: 280px;
+}
+.doc-text-editor:focus { border-color: var(--accent, #00C2FF); }
+
+/* ── Shared A/B toggle switch (Original ⟷ Anonymized) ──────────────
+   Used by the audio voice mode and the document text view so both modes
+   share one slider control: original reads red, anonymized reads green. */
+.ab-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel-bg, rgba(255, 255, 255, 0.04));
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+}
+.ab-switch:disabled { opacity: 0.5; cursor: default; }
+.ab-switch-label { transition: color 0.15s ease; white-space: nowrap; }
+.ab-switch.is-orig .ab-switch-label--orig { color: #ff4d4f; }
+.ab-switch.is-anon .ab-switch-label--anon { color: #00FF78; }
+.ab-switch-track {
+  position: relative;
+  width: 34px;
+  height: 18px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  flex: 0 0 auto;
+  transition: background 0.15s ease;
+}
+.ab-switch.is-orig .ab-switch-track { background: rgba(255, 77, 79, 0.4); }
+.ab-switch.is-anon .ab-switch-track { background: rgba(0, 255, 120, 0.4); }
+.ab-switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.18s ease;
+}
+.ab-switch.is-anon .ab-switch-thumb { transform: translateX(16px); }
+
+/* Detected-data review dialog (opened from the sidebar button). */
+.app-shell-mobile .detecting-overlay {
+  z-index: 200;
+  top: calc(8px + env(safe-area-inset-top, 0));
+}
+
+.detecting-overlay--portal {
+  position: fixed;
+  top: calc(8px + env(safe-area-inset-top, 0));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 200;
+}
+
+.vectorize-panel-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-top: 0.4rem;
+  width: 100%;
+}
+
+.vectorize-download-btn {
+  width: 100%;
+  justify-content: center;
+  background: #000;
+  color: #fff;
+  border: 1px solid #fff;
+}
+
+.vectorize-download-btn:hover:not(:disabled) {
+  background: #111;
+  color: #fff;
+}
+
+.vectorize-apply-btn {
+  width: 100%;
+  justify-content: center;
+}
+
+.doc-detect-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(2px);
+}
+.doc-detect-sheet {
+  display: flex;
+  flex-direction: column;
+  width: min(560px, 100%);
+  max-height: min(80vh, 720px);
+  background: var(--panel, #14181d);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+.doc-detect-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.7rem 0.9rem;
+  border-bottom: 1px solid var(--border);
+}
+.doc-detect-header h2 { font-size: 0.86rem; font-weight: 600; margin: 0; }
+.doc-detect-header-actions { display: flex; align-items: center; gap: 0.35rem; }
+.doc-detect-close {
+  background: none; border: none; color: var(--text-muted); cursor: pointer;
+  display: inline-flex; padding: 4px; border-radius: 6px;
+}
+.doc-detect-close:hover { color: var(--text); background: rgba(255, 255, 255, 0.08); }
+.doc-detect-body { overflow-y: auto; padding: 0.5rem 0.9rem 0.9rem; }
+.doc-detect-group { margin-top: 0.7rem; }
+.doc-detect-group:first-child { margin-top: 0.2rem; }
+.doc-detect-group-head {
+  display: flex; align-items: center; gap: 0.4rem;
+  font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--text-muted); padding: 0.2rem 0.2rem 0.35rem;
+  position: sticky; top: 0; background: var(--panel, #14181d);
+}
+.doc-detect-group-count {
+  margin-left: auto; font-weight: 600;
+  background: rgba(255, 255, 255, 0.08); border-radius: 999px; padding: 0 0.4rem;
+}
+
+@media (max-width: 860px) {
+  .doc-mode { flex-direction: column; }
+  .doc-sidebar {
+    flex: 0 0 auto;
+    border-left: none;
+    border-top: 1px solid var(--border);
+    max-height: 45%;
+  }
+}
+
+/* ── Voice Mask (live mic) ─────────────────────────────── */
+.voice-mask-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+.voice-mask-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.voice-mask-title {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+.voice-mask-badge {
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  background: rgba(0, 255, 120, 0.16);
+  color: #00FF78;
+}
+.voice-mask-error {
+  display: flex; align-items: center; gap: 0.35rem;
+  font-size: 0.74rem; color: #ff6b6b; margin: 0;
+}
+.voice-mask-meter {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+.voice-mask-meter-bar {
+  display: block; height: 100%; width: 100%;
+  transform-origin: left center; transform: scaleX(0);
+  background: linear-gradient(90deg, #00FF78, #ffd34f);
+  transition: transform 70ms linear;
+}
+.voice-mask-presets { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.voice-mask-desc { font-size: 0.7rem; color: var(--text-muted); margin: 0; }
+.voice-mask-enable {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 0.2rem 0.2rem;
+  text-align: center;
+}
+.voice-mask-enable-btn {
+  width: 100%;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.7rem 1rem;
+  font-size: 0.92rem;
+}
+.voice-mask-enable-hint {
+  margin: 0;
+  font-size: 0.68rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+.voice-mask-toggle {
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  font-size: 0.78rem; cursor: pointer;
+}
+.voice-mask-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+.voice-mask-recording { color: #ff5a5a; border-color: rgba(255, 90, 90, 0.5); }
+.voice-mask-playback { width: 100%; height: 34px; }
+.voice-mask-privacy { font-size: 0.64rem; color: var(--text-muted); margin: 0; line-height: 1.4; }
+
+/* Legacy floating voice button — replaced by the mic toggle in the capture row. */
+.mobile-live-voice-btn { display: none; }
+.mobile-live-voice-sheet {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  z-index: 130;
+  max-height: 70%;
+  overflow-y: auto;
+  padding: 1rem 1.1rem calc(1.2rem + env(safe-area-inset-bottom, 0px));
+  background: var(--panel, #111);
+  border-top-left-radius: 16px;
+  border-top-right-radius: 16px;
+  border-top: 1px solid var(--border);
+  box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.45);
+}
+.mobile-live-voice-close {
+  position: absolute;
+  top: 8px; right: 10px;
+  background: none; border: none; color: var(--text-muted); cursor: pointer;
+  display: inline-flex; padding: 4px;
+}
+
+/* ── Background asset prefetch loader (decent corner pill) ──────── */
+.bg-asset-loader {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  max-width: min(78vw, 320px);
+  padding: 0.5rem 0.7rem;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel, #14181d) 88%, transparent);
+  border: 1px solid var(--border, rgba(255,255,255,0.1));
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.32);
+  backdrop-filter: blur(8px);
+  font-size: 0.74rem;
+  color: var(--text, #e8eaed);
+  animation: bg-asset-loader-in 0.28s ease;
+}
+@keyframes bg-asset-loader-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.bg-asset-loader--done { opacity: 0.96; transition: opacity 0.5s ease; }
+.bg-asset-loader-spinner {
+  width: 14px; height: 14px; flex: 0 0 auto;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--accent, #00FF78) 35%, transparent);
+  border-top-color: var(--accent, #00FF78);
+  animation: bg-asset-loader-spin 0.8s linear infinite;
+}
+@keyframes bg-asset-loader-spin { to { transform: rotate(360deg); } }
+.bg-asset-loader-check {
+  width: 14px; height: 14px; flex: 0 0 auto;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--accent, #00FF78); font-weight: 700;
+}
+.bg-asset-loader-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1 1 auto; }
+.bg-asset-loader-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bg-asset-loader-bar {
+  display: block; height: 3px; border-radius: 999px;
+  background: color-mix(in srgb, var(--text, #fff) 16%, transparent);
+  overflow: hidden;
+}
+.bg-asset-loader-fill {
+  display: block; height: 100%; border-radius: 999px;
+  background: var(--accent, #00FF78);
+  transition: width 0.2s ease;
+}
+.bg-asset-loader-fill--indeterminate {
+  width: 40%;
+  animation: bg-asset-loader-indet 1.2s ease-in-out infinite;
+}
+@keyframes bg-asset-loader-indet {
+  0% { margin-left: -40%; }
+  100% { margin-left: 100%; }
+}
+.bg-asset-loader-pct { font-variant-numeric: tabular-nums; opacity: 0.7; flex: 0 0 auto; }
+@media (prefers-reduced-motion: reduce) {
+  .bg-asset-loader, .bg-asset-loader-spinner, .bg-asset-loader-fill--indeterminate { animation: none; }
+}
+
+/* ── Detection: primary target toggle rows (faces / person / plate / docs / vehicles) ── */
+.target-toggles {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.target-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 46px;
+  padding: 6px 2px;
+  cursor: pointer;
+}
+.target-toggle-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.6));
+}
+.target-toggle-row.on .target-toggle-main { color: var(--accent, #00FF78); }
+.target-toggle-label {
+  color: var(--text, #fff);
+  font-size: 0.82rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.target-toggles--compact .target-toggle-label { font-size: 0.78rem; }
+.target-toggle-status {
+  flex: 0 0 auto;
+  font-size: 0.58rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted, rgba(255, 255, 255, 0.45));
+  padding: 2px 7px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.14));
+  border-radius: 999px;
+}
+
+/* ── Info "ⓘ" hint trigger + popover (slider captions tucked away) ── */
+.info-hint { position: relative; display: inline-flex; align-items: center; justify-content: center; }
+.info-hint-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted, rgba(255, 255, 255, 0.5));
+  cursor: pointer;
+  border-radius: 8px;
+}
+.info-hint-btn:hover, .info-hint-btn.active { color: var(--accent, #00FF78); }
+.info-hint-backdrop { position: fixed; inset: 0; z-index: 60; }
+.info-hint-pop {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: 61;
+  width: max-content;
+  max-width: 240px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--panel, #1b1b1d);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+  color: var(--text, #fff);
+  font-size: 0.7rem;
+  line-height: 1.45;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+}
+
+/* Slider rows that carry an info icon get a trailing auto column for it. */
+.tool-slider-row.tool-slider-row--with-hint {
+  grid-template-columns: 72px minmax(0, 1fr) auto;
+}
+.mobile-slider-row-v2.mobile-slider-row-v2--with-hint {
+  grid-template-columns: 78px minmax(0, 1fr) auto;
+}
+

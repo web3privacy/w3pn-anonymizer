@@ -1,5 +1,5 @@
-import { expandNormBox } from './face-offset'
 import { detectFaces } from './detector'
+import { expandNormBox } from './face-offset'
 import { applyColorAdjustments, applyEffectRect, pickRandomEmoji } from './effects'
 import type { EffectRenderOptions } from '../types'
 import { applyDistortPipeline, distortPipelineKey } from './distort-effects'

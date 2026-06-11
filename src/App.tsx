@@ -19,6 +19,17 @@ import { EditorBatchPanel } from './desktop/EditorBatchPanel'
 import { EditorSidebar } from './desktop/EditorSidebar'
 import { EditorToolStrip } from './desktop/EditorToolStrip'
 import { EffectPickerDialog } from './components/EffectPickerDialog'
+import { AudioModeViewer } from './components/AudioModeViewer'
+import { decodeAudioBlob, getAudioContext } from './lib/audio/audioUtils'
+import { renderProcessedAudioBuffer } from './lib/audio/audioPipeline'
+import {
+  encodeAudioBuffer,
+  supportedAudioExportFormats,
+  anonymizedAudioFilename,
+  type AudioExportFormatId,
+} from './lib/audio/audioExport'
+import { VideoTrackModeSelect } from './components/VideoTrackModeSelect'
+import { DocumentMode } from './components/document/DocumentMode'
 import { FeedbackModal } from './components/FeedbackModal'
 import { PickerChoiceDialog } from './components/PickerChoiceDialog'
 import { useUndoStack } from './hooks/useUndoStack'
@@ -60,15 +71,28 @@ import { createId, pickCustomImageAssetId, brushStampSeed } from './lib/ids'
 import type { MobileMode, MobilePanel, MobileToolCategory } from './mobile/types'
 import { CROP_TOOLS, EFFECT_TOOL_ORDER, FACE_TOOLS, panelForCategory, ZONE_TOOLS } from './mobile/toolRotation'
 import type { AdjustToolId, CropToolId, EffectToolId, FaceToolId, ZoneToolId } from './mobile/toolRotation'
-import { detectFaces, initializeDetector, resetDetectorStatus, getDetectorStatus, setDetectionProgressCallback } from './lib/detector'
+import { usePrivacyDetectionConfig } from './hooks/usePrivacyDetectionConfig'
+import { probeAllYoloModels } from './lib/privacyDetectionPipeline'
+import { privacyDetectionsToZones } from './lib/detections/adapters'
+import { detectFaces } from './lib/detector'
+import { formatDetectionSummary, usesExtendedPrivacyDetection, applyFaceConfidenceToConfig } from './lib/detections/run-image-detection'
+import { faceBoxToPrivacyDetection } from './lib/detections/adapters'
+import { getCategoryConfig } from './lib/detection-config'
+import { dedupeOverlappingDetections } from './lib/detectors/detectorUtils'
+import { detectPiiViaOcr, isPiiTextEnabled } from './lib/detectors/ocrPiiDetector'
+import { runPrivacyDetectionOnSource } from './lib/privacyDetectionPipeline'
+import type { PrivacyDetection } from './types'
+import { initializeDetector, resetDetectorStatus, setDetectionProgressCallback } from './lib/detector'
 import { ModelLoadStatus } from './components/ModelLoadStatus'
-import { expandPixelBox, faceOffsetPads, zonesWithFaceOffset } from './lib/face-offset'
+import { BackgroundAssetLoader } from './components/BackgroundAssetLoader'
+import { startAssetPrefetch, prefetchGroupsForConfig } from './lib/asset-prefetch'
+import { faceOffsetPads, zonesWithFaceOffset } from './lib/face-offset'
 import {
   applyDistortPipeline,
   DEFAULT_DISTORT_STRENGTHS,
   type DistortEffectId,
 } from './lib/distort-effects'
-import { applyColorAdjustments, applyEffectRect, applyGlitchEffect, isColorAdjNoop, pickEmojiFromSeed, pickRandomEmoji, pickUniqueEmojis } from './lib/effects'
+import { applyColorAdjustments, applyEffectRect, applyGlitchEffect, isColorAdjNoop, pickEmojiFromSeed, pickRandomEmoji, pickUniqueEmojis, setAsciiCharsetDefault } from './lib/effects'
 import { selectBaseDrawSource, shouldShowZoneOverlays, viewerBackgroundColor } from './lib/canvas-render'
 import {
   DEFAULT_ADJ_TRANSFORM_PARAMS,
@@ -85,12 +109,12 @@ import {
 } from './lib/normalize'
 import type {
   AnonymizeEffectId,
+  AsciiCharset,
   BatchTaskId,
   ColorAdjustments,
   ColorPresetId,
   CustomImageAsset,
   CustomImageSource,
-  DetectionTarget,
   EffectRenderOptions,
   NormalizedRect,
   NormalizeCropMode,
@@ -101,6 +125,7 @@ import type {
   SourceType,
   ToolMode,
   Zone,
+  ModelAvailabilityStatus,
 } from './types'
 import { COLOR_PRESETS, DEFAULT_COLOR_ADJUSTMENTS } from './types'
 
@@ -118,11 +143,18 @@ function App() {
   const selectedEffectRef = useRef<AnonymizeEffectId>('pixelate')
   const [lastZoneTool, setLastZoneTool] = useState<'brush' | 'rectangle'>('brush')
   const [customImageSource, setCustomImageSource] = useState<CustomImageSource>('custom')
+  // ASCII glyph pool (all / numbers / a-z / exotic). Mirrored to a module-level
+  // default in effects.ts so live/video/batch render paths pick it up too.
+  const [asciiCharset, setAsciiCharsetState] = useState<AsciiCharset>('all')
+  const setAsciiCharset = useCallback((charset: AsciiCharset) => {
+    setAsciiCharsetDefault(charset)
+    setAsciiCharsetState(charset)
+  }, [])
   const [customImageAssets, setCustomImageAssets] = useState<CustomImageAsset[]>([])
   const [customImagePresetLoading, setCustomImagePresetLoading] = useState(false)
   const customImageAssetsRef = useRef<CustomImageAsset[]>([])
   // Emoji / custom-image picker dialog + chosen-vs-random selection.
-  const [effectPickerOpen, setEffectPickerOpen] = useState<'emoji' | 'custom-image' | null>(null)
+  const [effectPickerOpen, setEffectPickerOpen] = useState<'emoji' | 'custom-image' | 'ascii' | null>(null)
   const [emojiRandom, setEmojiRandom] = useState(true)
   const [selectedEmoji, setSelectedEmoji] = useState<string | null>(null)
   const [customImageRandom, setCustomImageRandom] = useState(true)
@@ -158,18 +190,49 @@ function App() {
   const { detector, setDetector, detectorLoading, modelLoadProgress, refreshDetector } = useDetector()
   const [autoDetect, setAutoDetect] = useState(true)   // auto-detect faces on photo open
   const [showBoxes, setShowBoxes] = useState(true)     // show/hide zone outlines
-  // Editable detection settings (exposed via the detection settings drawer).
-  const [detectTarget, setDetectTarget] = useState<DetectionTarget>('faces')
-  const [detectSensitivity, setDetectSensitivity] = useState(1) // 0..100 — low default reduces false positives
-  const [detectThorough, setDetectThorough] = useState(false)
+  const {
+    detectionConfig,
+    setCategoryEnabled,
+    setCategoryThreshold,
+    showDetectionLabels,
+    setShowDetectionLabels,
+    lastDetectionCounts,
+    setLastDetectionCounts,
+    modelStatus,
+    setModelStatus,
+    audioSettings,
+    setAudioSettings,
+    enabledClasses,
+    setEnabledClasses,
+    toggleDetectionClass,
+  } = usePrivacyDetectionConfig()
+
+  useEffect(() => {
+    void probeAllYoloModels().then((yolo) => {
+      setModelStatus((prev) => ({ ...prev, ...yolo }))
+    })
+  }, [setModelStatus])
+
+  useEffect(() => {
+    const yunetStatus: ModelAvailabilityStatus =
+      detector.mode === 'yunet-wasm'
+        ? 'ready'
+        : detectorLoading
+          ? 'loading'
+          : 'missing'
+    setModelStatus((prev) => ({ ...prev, 'yunet-face': yunetStatus }))
+  }, [detector.mode, detectorLoading, setModelStatus])
+
+  const [detectSensitivity, setDetectSensitivity] = useState(10) // 0..100 — small default headroom catches a few more faces
+  const [videoAudioPanelOpen, setVideoAudioPanelOpen] = useState(false) // collapsible audio tools in the video editor
   // How far the anonymization box is grown around the detected face. The slider
   // reads 0–100 % but maps to a 0…0.5 padding fraction (see faceOffsetPads), so
   // "100 %" = +50 % of the face per side. Default covers the full head.
   const [detectFaceOffset, setDetectFaceOffset] = useState(40) // 0..100 (display)
   // Sensitivity → YuNet confidence threshold (higher sensitivity ⇒ lower bar).
   const detectConfidence = 0.7 - (detectSensitivity / 100) * 0.4
-  const detectSettingsRef = useRef({ confidence: detectConfidence, thorough: detectThorough, faceOffset: detectFaceOffset })
-  detectSettingsRef.current = { confidence: detectConfidence, thorough: detectThorough, faceOffset: detectFaceOffset }
+  const detectSettingsRef = useRef({ confidence: detectConfidence, thorough: false, faceOffset: detectFaceOffset, detectionConfig, modelStatus, enabledClasses })
+  detectSettingsRef.current = { confidence: detectConfidence, thorough: false, faceOffset: detectFaceOffset, detectionConfig, modelStatus, enabledClasses }
   const faceOffsetFrac = faceOffsetPads(detectFaceOffset).padX
   const [exportFormat, setExportFormat] = useState<NormalizeFormat>('image/jpeg')
   const [exportQuality, setExportQuality] = useState(92)
@@ -219,6 +282,7 @@ function App() {
   const [sidebarView, setSidebarView] = useState<'grid' | 'list'>('grid')
   const [photoListLimit, setPhotoListLimit] = useState(240)
   const [batchPanelOpen, setBatchPanelOpen] = useState(false)   // replaces normPanelOpen
+  const batchPanelOpenRef = useRef(false)
   const [aboutOpen, setAboutOpen] = useState(false)
   const [feedbackOpen, setFeedbackOpen] = useState(false)
   const [pickerChoiceOpen, setPickerChoiceOpen] = useState(false)
@@ -438,8 +502,19 @@ function App() {
     () => normalizePreviewIds.map((id) => photos.find((p) => p.id === id)).filter(Boolean) as PhotoItem[],
     [normalizePreviewIds, photos],
   )
-  const displayedPhotos = useMemo(() => photos.slice(0, photoListLimit), [photoListLimit, photos])
-  const hasMorePhotosToRender = displayedPhotos.length < photos.length
+  // When a subfolder is selected in the desktop folder tree, scope the visible
+  // library to just that folder's contents (recursively). Root-level files and
+  // an empty prefix show everything.
+  const folderFilteredPhotos = useMemo(() => {
+    if (!currentFolderPrefix) return photos
+    const prefix = currentFolderPrefix + '/'
+    return photos.filter((p) => p.name.startsWith(prefix))
+  }, [photos, currentFolderPrefix])
+  const displayedPhotos = useMemo(
+    () => folderFilteredPhotos.slice(0, photoListLimit),
+    [photoListLimit, folderFilteredPhotos],
+  )
+  const hasMorePhotosToRender = displayedPhotos.length < folderFilteredPhotos.length
 
   const normalizeProgressPercent = normalizeProgress.total > 0
     ? Math.round((normalizeProgress.done / normalizeProgress.total) * 100) : 0
@@ -448,6 +523,68 @@ function App() {
     ? getCropRectNormalized(activeImageSize.width, activeImageSize.height, normalizeSettings) : null
   const isApplied = activePhotoId ? (appliedByPhoto[activePhotoId] ?? false) : false
   void isApplied  // kept for future use
+
+  // Library items that already carry anonymization: processed media (edited) or
+  // images with applied masks. Drives the green "anonymized" outline in the gallery.
+  const anonymizedPhotoIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const p of photos) {
+      if (p.edited || appliedByPhoto[p.id]) ids.add(p.id)
+    }
+    return ids
+  }, [photos, appliedByPhoto])
+
+  // Persist an anonymized audio/document result back into its library item so the
+  // gallery (green outline) and full-library export reflect the latest state.
+  const commitAnonymizedToLibrary = useCallback((photoId: string, blob: Blob, mimeType?: string) => {
+    setPhotos((cur) => cur.map((p) => (
+      p.id === photoId ? { ...p, blob, edited: true, mimeType: mimeType ?? blob.type ?? p.mimeType } : p
+    )))
+  }, [setPhotos])
+
+  // Audio download (desktop action toolbar — unified with the photo editor's
+  // Download button + format selector). Standalone audio always renders the
+  // distorted voice, so the export bakes the current voice-mask settings.
+  const [audioExportFormatId, setAudioExportFormatId] = useState<AudioExportFormatId>('wav')
+  const [audioExporting, setAudioExporting] = useState(false)
+  const audioExportFormats = useMemo(() => supportedAudioExportFormats(), [])
+  const exportActiveAudio = useCallback(async (formatId?: AudioExportFormatId) => {
+    if (!activePhoto?.isAudio) return
+    if (formatId && formatId !== audioExportFormatId) setAudioExportFormatId(formatId)
+    setAudioExporting(true)
+    try {
+      const id = formatId ?? audioExportFormatId
+      const format = audioExportFormats.find((f) => f.id === id) ?? audioExportFormats[0]
+      const sourceBlob = originalBlobByPhoto[activePhoto.id] ?? activePhoto.blob
+      const buffer = await decodeAudioBlob(sourceBlob)
+      const distort = audioSettings.mode !== 'remove_audio' && audioSettings.mode !== 'keep_original'
+      const out = distort
+        ? await renderProcessedAudioBuffer(getAudioContext(), buffer, audioSettings)
+        : buffer
+      const blob = await encodeAudioBuffer(out, format)
+      saveAs(blob, anonymizedAudioFilename(activePhoto.name, format.ext))
+      if (distort) commitAnonymizedToLibrary(activePhoto.id, blob, blob.type || 'audio/wav')
+    } catch {
+      setNotice('Audio export failed.')
+    } finally {
+      setAudioExporting(false)
+    }
+  }, [activePhoto, audioExportFormatId, audioExportFormats, audioSettings, commitAnonymizedToLibrary, originalBlobByPhoto, setNotice])
+
+  // Which tracks of the active video to keep/edit (Video+audio / Audio only / Video only).
+  const videoTrackMode: 'both' | 'video' | 'audio' = activePhoto?.isVideo
+    ? (activePhoto.trackMode ?? 'both')
+    : 'both'
+  const setVideoTrackMode = useCallback((mode: 'both' | 'video' | 'audio') => {
+    const id = activePhotoId
+    if (!id) return
+    setPhotos((cur) => cur.map((p) => (p.id === id ? { ...p, trackMode: mode } : p)))
+    // Keep the export's audio handling in sync with the chosen tracks.
+    if (mode === 'video') setAudioSettings((s) => ({ ...s, mode: 'remove_audio' }))
+    // Both / Audio-only must leave the removed state so the audio is editable
+    // again (audio-only switches to the full audio editor for the track).
+    else setAudioSettings((s) => (s.mode === 'remove_audio' ? { ...s, mode: 'keep_original' } : s))
+  }, [activePhotoId, setPhotos, setAudioSettings])
 
   const setActiveZones = useCallback((updater: (zones: Zone[]) => Zone[]) => {
     if (!activePhotoId) return
@@ -477,7 +614,8 @@ function App() {
     customImageAssetId: customImageAssetId ?? zone?.customImageAssetId,
     zoneId: zone?.id,
     seed: seed ?? zone?.id ?? activePhotoId ?? 'custom-image',
-  }), [activePhotoId, customImageAssets, customImageSource])
+    asciiCharset,
+  }), [activePhotoId, customImageAssets, customImageSource, asciiCharset])
 
   const resolveBrushStamp = useCallback((pointer: PointerMap): BrushStamp => {
     const photoId = activePhotoIdRef.current ?? 'photo'
@@ -813,8 +951,8 @@ function App() {
       showBoxes, toolMode, adjFlyoutOpen, transformPanelOpen, hasDistortPreview,
       colorPanelOpen, isColorNoop, mobileGestureActive,
     })) {
-      effectiveZones.forEach((zone) => drawZoneInView(ctx, zone, drawWidth, drawHeight, zone.id === selectedZoneId))
-      if (draftZone) drawZoneInView(ctx, draftZone, drawWidth, drawHeight, true)
+      effectiveZones.forEach((zone) => drawZoneInView(ctx, zone, drawWidth, drawHeight, zone.id === selectedZoneId, { showLabel: showDetectionLabels }))
+      if (draftZone) drawZoneInView(ctx, draftZone, drawWidth, drawHeight, true, { showLabel: showDetectionLabels })
     }
 
     if (batchPanelOpen) {
@@ -834,7 +972,7 @@ function App() {
   }, [
     activePhoto, activeNormalizeCrop, effectiveZones, adjFlyoutOpen, adjTransform, batchPanelOpen,
     colorAdj, colorPanelOpen, draftZone, enabledDistorts, exportFormat, getActiveDistorts, isMobile, isNormalizeCropPicking, transformPanelOpen,
-    normalizeCropDraft, normalizeSettings.cropMode, selectedZoneId, showBoxes, toolMode, effectiveTheme, mobileViewZoom, mobileViewPan, mobileViewRotation, mobileGestureActive, mobileExportDraft,
+    normalizeCropDraft, normalizeSettings.cropMode, selectedZoneId, showBoxes, showDetectionLabels, toolMode, effectiveTheme, mobileViewZoom, mobileViewPan, mobileViewRotation, mobileGestureActive, mobileExportDraft,
     syncOverlayLayout,
     applyMobilePreviewTransform,
   ])
@@ -894,8 +1032,12 @@ function App() {
     adjPixelShiftType,
     detectSensitivity,
     detectFaceOffset,
+    detectionConfig,
+    modelStatus,
+    enabledClasses,
     autoDetect,
     detector,
+    audioSettings,
     resolveEmoji,
     resolveCustomImageAssetId,
     customEffectOptions,
@@ -1162,7 +1304,7 @@ function App() {
       // Use modern file picker
       try {
         const picker = (window as Window & { showOpenFilePicker?: (o: object) => Promise<FileSystemFileHandle[]> }).showOpenFilePicker!
-        const handles = await picker({ multiple: true, types: [{ description: 'Images & Videos', accept: { 'image/*': ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tiff', '.avif'], 'video/*': ['.mp4', '.webm', '.mov', '.avi', '.mkv', '.m4v', '.ogv'] } }] })
+        const handles = await picker({ multiple: true, types: [{ description: 'Media & documents', accept: { 'image/*': ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tiff', '.avif'], 'video/*': ['.mp4', '.webm', '.mov', '.avi', '.mkv', '.m4v', '.ogv'], 'audio/*': ['.wav', '.mp3', '.m4a', '.aac', '.ogg', '.flac', '.weba', '.webm'], 'application/pdf': ['.pdf'], 'text/plain': ['.txt'], 'text/markdown': ['.md', '.markdown'] } }] })
         const records: InputRecord[] = []
         for (const handle of handles) {
           const f = await handle.getFile()
@@ -1222,60 +1364,102 @@ function App() {
     setIsDetecting(true)
     setLocalProcessingMs(null)
     setDetectionStep('Preparing…')
-    setNotice(robust ? 'Running thorough detection…' : 'Detecting faces…')
+    setNotice(robust ? 'Running thorough detection…' : 'Detecting…')
     setDetectionProgressCallback((step) => setDetectionStep(step))
     const t0 = performance.now()
     try {
-      const { confidence, thorough } = detectSettingsRef.current
-      const boxes = await detectFaces(workCanvas, robust || thorough, confidence)
-      if (generation !== detectGenerationRef.current || activePhotoIdRef.current !== photoId) return
+      const { confidence, thorough, faceOffset, detectionConfig: detectConfig, enabledClasses: detectClasses } = detectSettingsRef.current
+      const runRobust = robust ?? thorough
+      const effectiveConfig = applyFaceConfidenceToConfig(detectConfig, confidence)
+      const W = workCanvas.width
+      const H = workCanvas.height
+
+      const detectionsToZones = (detections: PrivacyDetection[]): Zone[] => {
+        const emojis = pickUniqueEmojis(detections.length)
+        return privacyDetectionsToZones(detections, {
+          config: detectConfig,
+          globalEffect: selectedEffect,
+          emojis,
+          faceOffsetPercent: faceOffset,
+          imageW: W,
+          imageH: H,
+          createZoneId: createId,
+        }).map((zone) => ({
+          ...zone,
+          emoji: emojiRandomRef.current ? zone.emoji : (selectedEmojiRef.current ?? zone.emoji),
+          customImageAssetId: selectedEffect === 'custom-image'
+            ? resolveCustomImageAssetId(zone.id)
+            : undefined,
+        }))
+      }
+
+      const applyDetections = (detections: PrivacyDetection[]) => {
+        if (generation !== detectGenerationRef.current || activePhotoIdRef.current !== photoId) return
+        const zones = detectionsToZones(detections)
+        setZonesByPhoto((cur) => ({ ...cur, [photoId]: zones }))
+        setZonesAnonymized(false)
+        previewBakedRef.current = false
+        if (activePhotoId === photoId) setSelectedZoneId(zones[0]?.id ?? null)
+        renderCanvas()
+      }
+
+      let detections: PrivacyDetection[] = []
+      let usedPipeline = false
+
+      // Phase 1 — YuNet faces first so boxes appear while YOLO/OCR still run.
+      const faceEnabled = getCategoryConfig(effectiveConfig, 'face')?.enabled ?? true
+      if (faceEnabled) {
+        setDetectionStep('Detecting faces…')
+        const boxes = await detectFaces(workCanvas, runRobust, confidence)
+        if (generation !== detectGenerationRef.current || activePhotoIdRef.current !== photoId) return
+        detections = boxes.map((b) => faceBoxToPrivacyDetection(b, W, H))
+        if (detections.length > 0) applyDetections(detections)
+      }
+
+      // Phase 2 — optional YOLO targets + OCR (skip re-running YuNet).
+      const configNoFace = effectiveConfig.map((c) =>
+        c.type === 'face' ? { ...c, enabled: false } : c,
+      )
+      const needsYolo = usesExtendedPrivacyDetection(configNoFace, modelStatus, detectClasses)
+      const needsOcr = isPiiTextEnabled(effectiveConfig)
+
+      if (needsYolo || needsOcr) {
+        setDetectionStep(needsOcr ? 'Scanning objects & sensitive text…' : 'Scanning objects…')
+        if (needsYolo) {
+          const result = await runPrivacyDetectionOnSource(
+            workCanvas, configNoFace, undefined, runRobust, detectClasses,
+          )
+          if (generation !== detectGenerationRef.current || activePhotoIdRef.current !== photoId) return
+          detections = dedupeOverlappingDetections([...detections, ...result.detections], 0.55)
+          usedPipeline = true
+        }
+        if (needsOcr) {
+          const piiThreshold = getCategoryConfig(effectiveConfig, 'pii_text')?.confidenceThreshold ?? 0.5
+          const piiDetections = await detectPiiViaOcr(workCanvas, piiThreshold)
+          if (generation !== detectGenerationRef.current || activePhotoIdRef.current !== photoId) return
+          if (piiDetections.length > 0) {
+            detections = dedupeOverlappingDetections([...detections, ...piiDetections], 0.55)
+            usedPipeline = true
+          }
+        }
+      }
+
       const elapsed = Math.round(performance.now() - t0)
       setLocalProcessingMs(elapsed)
-      if (boxes.length === 0) {
+      const counts: Partial<Record<string, number>> = {}
+      for (const d of detections) counts[d.type] = (counts[d.type] ?? 0) + 1
+      setLastDetectionCounts(counts)
+
+      if (detections.length === 0) {
         setLastDetectFailed(false)
         setZonesByPhoto((cur) => ({ ...cur, [photoId]: [] }))
         setSelectedZoneId(null)
-        setNotice(`No faces detected. (${elapsed} ms locally)`)
+        setNotice(formatDetectionSummary(counts, elapsed, usedPipeline))
         return
       }
       setLastDetectFailed(false)
-      const emojis = pickUniqueEmojis(boxes.length)
-      const W = workCanvas.width
-      const H = workCanvas.height
-      const offsetPct = detectSettingsRef.current.faceOffset
-      const zones: Zone[] = boxes.map((b, i) => {
-        const detectX = b.x / W
-        const detectY = b.y / H
-        const detectWidth = b.width / W
-        const detectHeight = b.height / H
-        const expanded = expandPixelBox(b.x, b.y, b.width, b.height, W, H, offsetPct)
-        return {
-          id: createId(),
-          ...expanded,
-          detectX,
-          detectY,
-          detectWidth,
-          detectHeight,
-          effect: selectedEffect,
-          emoji: emojiRandomRef.current ? emojis[i] : (selectedEmojiRef.current ?? emojis[i]),
-        }
-      }).map((zone) => ({
-        ...zone,
-        customImageAssetId: selectedEffect === 'custom-image'
-          ? resolveCustomImageAssetId(zone.id)
-          : undefined,
-      }))
-      setZonesByPhoto((cur) => ({ ...cur, [photoId]: zones }))
-      setZonesAnonymized(false)
-      previewBakedRef.current = false
-      if (activePhotoId === photoId) {
-        setSelectedZoneId(zones[0]?.id ?? null)
-      }
-      const src = getDetectorStatus()
-      const detSrc = src?.mode === 'yunet-wasm'
-        ? 'via local YuNet'
-        : src?.mode ?? ''
-      setNotice(`Detected ${zones.length} face${zones.length === 1 ? '' : 's'} ${detSrc} — ${elapsed} ms locally.`)
+      applyDetections(detections)
+      setNotice(formatDetectionSummary(counts, elapsed, usedPipeline))
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       setNotice(`Detection error: ${msg}`)
@@ -1288,7 +1472,7 @@ function App() {
       setDetectionProgressCallback(null)
       renderCanvas()
     }
-  }, [activePhoto, activePhotoId, customImageAssets, renderCanvas, selectedEffect])
+  }, [activePhoto, activePhotoId, customImageAssets, modelStatus, renderCanvas, selectedEffect, setLastDetectionCounts])
 
   const cancelDetection = useCallback(() => {
     detectingRef.current = false
@@ -1460,6 +1644,7 @@ function App() {
   const {
     vectorizePanelOpen,
     setVectorizePanelOpen,
+    vectorizePreviewActive,
     vectorizeParams,
     setVectorizeParams,
     svgPreview,
@@ -1469,7 +1654,34 @@ function App() {
     runVectorizePreview,
     updateVectorizeParam,
     exportAsSvg,
+    applyVectorizePreview,
+    clearVectorizePreview,
   } = useVectorize({ workCanvasRef, activePhoto, setIsBusy, setNotice })
+
+  const commitVectorizePreview = useCallback(async () => {
+    pushUndo()
+    const applied = await applyVectorizePreview()
+    if (!applied) return
+    setActiveDirty(true)
+    if (activePhotoId) setAppliedByPhoto((cur) => ({ ...cur, [activePhotoId]: true }))
+    setVectorizePanelOpen(false)
+    renderCanvas()
+    setNotice('Vectorize applied.')
+  }, [
+    activePhotoId,
+    applyVectorizePreview,
+    pushUndo,
+    renderCanvas,
+    setActiveDirty,
+    setVectorizePanelOpen,
+    setNotice,
+  ])
+
+  const handleResetPhotoToOriginal = useCallback(async () => {
+    clearVectorizePreview()
+    setVectorizePanelOpen(false)
+    await resetPhotoToOriginal()
+  }, [clearVectorizePreview, resetPhotoToOriginal, setVectorizePanelOpen])
 
   const exportZip = useCallback(async () => {
     if (photos.length === 0) return
@@ -1691,6 +1903,8 @@ function App() {
    
   }, [activePhoto, exportFormat, exportQuality, exportPngDepth, mobileExportDraft])
 
+  useEffect(() => { batchPanelOpenRef.current = batchPanelOpen }, [batchPanelOpen])
+
   // Batch live preview: when batch panel open, apply enabled tasks to a preview canvas
   const computeBatchPreview = useCallback(async () => {
     const wc = workCanvasRef.current
@@ -1703,7 +1917,22 @@ function App() {
     bc.width = wc.width; bc.height = wc.height
     const bCtx = bc.getContext('2d', { willReadFrequently: true })
     if (!bCtx) return
-    bCtx.drawImage(wc, 0, 0)
+    // Batch preview always starts from the un-anonymized original so opening the
+    // batch panel never shows zone effects baked onto the work canvas.
+    const orig = originalBlobByPhotoRef.current[activePhoto.id]
+    if (orig) {
+      try {
+        const bmp = await createImageBitmap(orig)
+        if (activePhotoIdRef.current !== activePhoto.id) { bmp.close(); return }
+        bCtx.clearRect(0, 0, bc.width, bc.height)
+        bCtx.drawImage(bmp, 0, 0)
+        bmp.close()
+      } catch {
+        bCtx.drawImage(wc, 0, 0)
+      }
+    } else {
+      bCtx.drawImage(wc, 0, 0)
+    }
     // Apply color adjustments if enabled — use live colorAdj for immediate preview
     if (activeBatchTasks.has('colors')) {
       applyColorAdjustments(bCtx, colorAdj, bc)
@@ -1911,6 +2140,7 @@ function App() {
   // refs so the callback identity stays stable (no debounce-reset / stale-offset
   // loops). Returns true when it actually re-baked.
   const reapplyZoneEffectsPreview = useCallback(async (zonesOverride?: Zone[]): Promise<boolean> => {
+    if (batchPanelOpenRef.current) return false
     const photo = activePhotoRef.current
     if (!photo || photo.isVideo) return false
     const baseZones = zonesOverride ?? (zonesByPhotoRef.current[photo.id] ?? [])
@@ -2079,6 +2309,7 @@ function App() {
   const zonePreviewDebounceRef = useRef<ReturnType<typeof setTimeout>>()
   useEffect(() => {
     if (!activePhoto || activePhoto.isVideo || activeZones.length === 0) return
+    if (batchPanelOpen) return
     if (!previewBakedRef.current && !zonesAnonymized) return
     if (!originalBlobByPhoto[activePhoto.id]) return
     if (zonePreviewDebounceRef.current) clearTimeout(zonePreviewDebounceRef.current)
@@ -2089,7 +2320,7 @@ function App() {
     }, isMobile && mobilePanel === 'tool-effects' ? 0 : isMobile ? 120 : 90)
     return () => { if (zonePreviewDebounceRef.current) clearTimeout(zonePreviewDebounceRef.current) }
    
-  }, [brushStrength, detectFaceOffset, zoneBakeSignature, activePhoto?.id, zonesAnonymized, isMobile, mobilePanel])
+  }, [brushStrength, detectFaceOffset, zoneBakeSignature, activePhoto?.id, zonesAnonymized, isMobile, mobilePanel, asciiCharset, batchPanelOpen])
 
   // Sync brushSizeRef when slider changes
   useEffect(() => { brushSizeRef.current = brushSize }, [brushSize])
@@ -2213,7 +2444,7 @@ function App() {
     // Videos are handled by the <video> player, not the work canvas.
     // Attempting createImageBitmap on a video blob throws and spuriously
     // surfaces a "Failed to load photo" error, so skip it here.
-    if (activePhoto.isVideo) {
+    if (activePhoto.isVideo || activePhoto.isAudio || activePhoto.isDocument) {
       const wc = workCanvasRef.current
       if (wc) { wc.width = 0; wc.height = 0 }
       setActiveImageSize(null)
@@ -2262,13 +2493,48 @@ function App() {
       if (!wc || wc.width === 0) return
       const alreadyHasZones = (zonesByPhoto[activePhoto.id] ?? []).length > 0
       if (!alreadyHasZones) {
-        detectFacesOnActiveImage(true)
+        detectFacesOnActiveImage(false)
       }
     }, 300)
 
     return () => { cancelled = true; clearTimeout(timer) }
    
   }, [autoDetect, detector.mode, activePhoto?.id])
+
+  // Live re-detection: changing a detection setting (sensitivity, an enabled
+  // target/class, or a model finishing loading) immediately re-runs detection so
+  // the preview always reflects the current settings — no manual "detect" button.
+  const detectSignature = useMemo(() => {
+    const cats = detectionConfig
+      .filter((c) => c.enabled)
+      .map((c) => `${c.type}:${c.confidenceThreshold.toFixed(2)}`)
+      .join(',')
+    const classes = [...enabledClasses].sort().join(',')
+    const ready = Object.entries(modelStatus)
+      .filter(([, s]) => s === 'ready')
+      .map(([id]) => id)
+      .sort()
+      .join(',')
+    return `${detectSensitivity}|${cats}|${classes}|${ready}`
+  }, [detectSensitivity, detectionConfig, enabledClasses, modelStatus])
+
+  const prevDetectSigRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!autoDetect || !activePhoto || activePhoto.isVideo || activePhoto.edited) {
+      prevDetectSigRef.current = detectSignature
+      return
+    }
+    if (detector.mode === 'unavailable') return
+    // The first observation for a freshly opened photo is covered by the
+    // auto-detect-on-open effect; only react to genuine later changes.
+    if (prevDetectSigRef.current === null || prevDetectSigRef.current === detectSignature) {
+      prevDetectSigRef.current = detectSignature
+      return
+    }
+    prevDetectSigRef.current = detectSignature
+    const t = setTimeout(() => { void detectFacesOnActiveImage(false) }, 280)
+    return () => clearTimeout(t)
+  }, [detectSignature, autoDetect, activePhoto, detector.mode, detectFacesOnActiveImage])
 
   useEffect(() => {
     const viewport = viewportRef.current
@@ -2416,7 +2682,7 @@ function App() {
       case 'detect':
         setAutoDetect(true)
         setShowBoxes(true)
-        detectFacesOnActiveImage(true)
+        detectFacesOnActiveImage(false)
         break
       case 'show-boxes':
         setShowBoxes((v) => !v)
@@ -2428,7 +2694,7 @@ function App() {
         clearZones()
         break
       case 'threshold':
-        detectFacesOnActiveImage(true)
+        detectFacesOnActiveImage(false)
         break
     }
   }, [clearZones, detectFacesOnActiveImage, removeSelectedZone, setCategoryIndex])
@@ -2559,7 +2825,7 @@ function App() {
         requestAnimationFrame(() => {
           renderCanvasRef.current?.()
           if (autoDetect) {
-            const runDetect = () => { void detectFacesOnActiveImage(true) }
+            const runDetect = () => { void detectFacesOnActiveImage(false) }
             if (typeof window.requestIdleCallback === 'function') {
               window.requestIdleCallback(runDetect, { timeout: 600 })
             } else {
@@ -2639,6 +2905,32 @@ function App() {
     [initializeDetector, setDetector],
   )
 
+  // Warm the HTTP cache for heavy optional models while the user is idle on the
+  // home / hypno screen — but only for the targets that are actually enabled.
+  // A default session (faces + plates + sensitive text) warms just the plate
+  // model + OCR engine; broader COCO / custom models stream in only once the
+  // user opts into those extra targets. Re-runs when the enabled set changes.
+  const enabledTargetsKey = useMemo(
+    () => detectionConfig.filter((c) => c.enabled).map((c) => c.type).sort().join(','),
+    [detectionConfig],
+  )
+  const detectionConfigRef = useRef(detectionConfig)
+  detectionConfigRef.current = detectionConfig
+  useEffect(() => {
+    const groups = prefetchGroupsForConfig(detectionConfigRef.current)
+    if (groups.length === 0) return
+    const w = window as Window & {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number
+    }
+    const trigger = () => startAssetPrefetch(groups)
+    if (typeof w.requestIdleCallback === 'function') {
+      const id = w.requestIdleCallback(trigger, { timeout: 4000 })
+      return () => (w as unknown as { cancelIdleCallback?: (h: number) => void }).cancelIdleCallback?.(id)
+    }
+    const t = setTimeout(trigger, 2500)
+    return () => clearTimeout(t)
+  }, [enabledTargetsKey])
+
   const mobileStepMobileViewZoom = useCallback((dir: 1 | -1) => {
     const factor = dir === 1 ? 1.2 : 1 / 1.2
     const next = Math.min(3, Math.max(0.5, mobileViewZoom * factor))
@@ -2684,6 +2976,7 @@ function App() {
     activeZones,
     videoPreviewFaceCount: videoPreviewFaceZones.length,
     displayedPhotos,
+    anonymizedPhotoIds,
     sidebarView,
     selectedForBatch,
     setSelectedForBatch,
@@ -2701,7 +2994,7 @@ function App() {
     openVideoPicker,
     selectPhoto,
     deletePhoto,
-    resetPhotoToOriginal,
+    resetPhotoToOriginal: handleResetPhotoToOriginal,
     undo,
     undoCount,
     applyZones,
@@ -2755,12 +3048,14 @@ function App() {
     commitMobileExportEdit,
     vectorizePanelOpen,
     setVectorizePanelOpen,
+    vectorizePreviewActive,
     vectorizeParams,
     setVectorizeParams: mobileSetVectorizeParams,
     updateVectorizeParam,
     vectorizing,
     svgPreviewSize,
     exportAsSvg,
+    applyVectorizePreview: commitVectorizePreview,
     brushSize,
     setBrushSize: handleBrushSizeChange,
     brushStrength,
@@ -2774,6 +3069,8 @@ function App() {
     setSelectedEffect,
     customImageSource,
     setCustomImageSource,
+    asciiCharset,
+    setAsciiCharset,
     customImageAssets,
     customImagePresetLoading,
     openCustomImagePicker,
@@ -2796,8 +3093,18 @@ function App() {
     setDetectFaceOffset,
     detectSensitivity,
     setDetectSensitivity,
-    detectThorough,
-    setDetectThorough,
+    detectionConfig,
+    setCategoryEnabled,
+    setCategoryThreshold,
+    modelStatus,
+    enabledClasses,
+    setEnabledClasses,
+    toggleDetectionClass,
+    lastDetectionCounts,
+    showDetectionLabels,
+    setShowDetectionLabels,
+    audioSettings,
+    setAudioSettings,
     eraserActive,
     autoDetect,
     setAutoDetect,
@@ -2885,7 +3192,7 @@ function App() {
   }), [
     mobileBatch,
     theme, isBusy, isDragOver, photos, activePhoto, activePhotoId, activeZones,
-    videoPreviewFaceZones, displayedPhotos, sidebarView, selectedForBatch,
+    videoPreviewFaceZones, displayedPhotos, anonymizedPhotoIds, sidebarView, selectedForBatch,
     mobileMode, mobilePanel, mobilePanelReturnTo, mobileEditorReturnTo, galleryBatchSelect,
     videoProcessing, videoProgress, videoExportFormat, videoExportOptions,
     videoMaskDrawActive, videoMaskShape, imageMaskDrawActive, videoMaskRangeSec,
@@ -2896,7 +3203,8 @@ function App() {
     svgPreviewSize, brushSize, brushStrength, toolMode, cropDraft, selectedEffect,
     customImageSource, customImageAssets, customImagePresetLoading, emojiRandom, selectedEmoji,
     customImageRandom, selectedCustomImageId, faceOffsetFrac, detectFaceOffset,
-    detectSensitivity, detectThorough, eraserActive, autoDetect, showBoxes, selectedZoneId,
+    detectSensitivity, detectionConfig, modelStatus, lastDetectionCounts,
+    showDetectionLabels, audioSettings, eraserActive, autoDetect, showBoxes, selectedZoneId,
     categoryIndices, zoneToolCustomized, effectToolCustomized, activeCategory, mobileViewPan,
     mobileViewRotation, mobileViewTransformDirty, isNormalizeCropPicking, activeNormalizeCrop,
     liveDetectEnabled, mobileViewZoom, lastDetectFailed, isDetecting, detector, detectorLoading,
@@ -2904,7 +3212,7 @@ function App() {
     adjPixelShiftType, enabledDistorts, distortStrengthByEffect, undoCount, zonesAnonymized,
     setTheme, setAboutOpen, loadDemoPhotos, setSelectedForBatch, setMobileMode, setMobilePanel,
     setMobilePanelReturnTo, returnToLiveFromEditor, setGalleryBatchSelect, openUnifiedPicker,
-    openVideoPicker, selectPhoto, deletePhoto, resetPhotoToOriginal, undo, applyZones,
+    openVideoPicker, selectPhoto, deletePhoto, handleResetPhotoToOriginal, undo, applyZones,
     exportActivePhoto, exportActiveVideo, exportAllLibraryZip, exportAllLibraryIndividual,
     cancelVideoProcessing, processActiveVideo, setVideoExportFormat, setVideoMaskDrawActive,
     setVideoMaskShape, setImageMaskDrawActive, setVideoMaskRangeSec, stepActiveVideoFrame,
@@ -2913,10 +3221,12 @@ function App() {
     setResEditW, setResEditH, resizeWorkCanvas, beginMobileExportEdit, updateMobileExportDraft,
     cancelMobileExportEdit, commitMobileExportEdit, setVectorizePanelOpen, mobileSetVectorizeParams,
     updateVectorizeParam, exportAsSvg, handleBrushSizeChange, setBrushStrength, setToolMode,
-    cropToSelection, cancelCropMode, setSelectedEffect, setCustomImageSource, openCustomImagePicker,
+    cropToSelection, cancelCropMode, setSelectedEffect, setCustomImageSource, asciiCharset, setAsciiCharset, openCustomImagePicker,
     loadCustomImagePreset, setEffectPickerOpen, handleToggleEmojiRandom, handlePickEmoji,
     captureEffectPickerSnapshot, restoreEffectPickerSnapshot, handleToggleCustomRandom,
-    handlePickCustomImage, setDetectFaceOffset, setDetectSensitivity, setDetectThorough,
+    handlePickCustomImage, setDetectFaceOffset, setDetectSensitivity,
+    setCategoryEnabled, setCategoryThreshold, setShowDetectionLabels, setAudioSettings,
+    enabledClasses, setEnabledClasses, toggleDetectionClass,
     setAutoDetect, setShowBoxes, detectFacesOnActiveImage, mobileOpenDetectSettings,
     removeZoneById, removeSelectedZone, clearZones, setEffectToolCustomized, setCategoryIndex,
     setActiveCategory, rotateCategoryTool, selectToolCategory, applyFaceTool, applyZoneTool,
@@ -2935,7 +3245,10 @@ function App() {
   const showMobileEmbed = isMobile && photos.length > 0 && mobileMode !== 'live'
 
   useLockMobileViewport(isMobile)
-  const hideWorkspace = isMobile && (photos.length === 0 || mobileMode === 'live')
+  const hideWorkspace = isMobile && (photos.length === 0 || mobileMode === 'live' || mobileMode === 'document' || mobileMode === 'audio')
+  // The home default screen (no media loaded) renders its own inline model
+  // preloader, so the global dialog/toast loaders are suppressed there.
+  const onHomeDefaultScreen = (isMobile && photos.length === 0 && mobileMode !== 'live') || (!isMobile && photos.length === 0)
 
   useEffect(() => {
     mobileViewZoomRef.current = mobileViewZoom
@@ -3062,7 +3375,7 @@ function App() {
       const photo = activePhotoRef.current
       if (autoDetect && photo && !photo.isVideo && !photo.edited) {
         window.setTimeout(() => {
-          if (!mobilePinchActiveRef.current) void detectFacesOnActiveImage(true)
+          if (!mobilePinchActiveRef.current) void detectFacesOnActiveImage(false)
         }, 180)
       } else if (photo?.isVideo && !photo.edited && autoDetect) {
         const gen = ++videoFaceDetectGenRef.current
@@ -3076,7 +3389,7 @@ function App() {
   return (
     <MobileBindingsProvider value={mobileBindings}>
     <div
-      className={`app-shell${isMobile ? ' app-shell-mobile' : ' app-shell-desktop-v2'}${isMobile && mobileMode === 'live' ? ' app-shell-mobile--live' : ''}${isMobile && mobileMode === 'video' ? ' app-shell-mobile--video' : ''}${isMobile && mobileMode === 'editor' ? ' app-shell-mobile--image' : ''}${!isMobile && activePhoto?.isVideo ? ' app-shell-desktop-v2--video' : ''}`}
+      className={`app-shell${isMobile ? ' app-shell-mobile' : ' app-shell-desktop-v2'}${isMobile && mobileMode === 'live' ? ' app-shell-mobile--live' : ''}${isMobile && mobileMode === 'video' ? ' app-shell-mobile--video' : ''}${isMobile && mobileMode === 'audio' ? ' app-shell-mobile--audio' : ''}${isMobile && mobileMode === 'editor' ? ' app-shell-mobile--image' : ''}${!isMobile && activePhoto?.isVideo ? ' app-shell-desktop-v2--video' : ''}${!isMobile && activePhoto?.isAudio ? ' app-shell-desktop-v2--audio' : ''}${!isMobile && activePhoto?.isDocument ? ' app-shell-desktop-v2--document' : ''}${isMobile && activePhoto?.isDocument ? ' app-shell-mobile--document' : ''}`}
       translate="no"
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
@@ -3097,7 +3410,7 @@ function App() {
       )}
 
       {/* hidden file inputs */}
-      <input ref={uploadInputRef} type="file" accept="image/*,video/*" multiple onChange={handleUploadInput} hidden />
+      <input ref={uploadInputRef} type="file" accept="image/*,video/*,audio/*,.pdf,.txt,.md,.markdown,application/pdf,text/plain,text/markdown" multiple onChange={handleUploadInput} hidden />
       <input ref={folderInputRef} type="file" multiple onChange={handleFolderInput} hidden
         // @ts-expect-error webkitdirectory is not in React's type defs
         webkitdirectory="" directory="" />
@@ -3121,6 +3434,22 @@ function App() {
           toggleBatchSelect={toggleBatchSelect}
           batchProcessCount={batchProcessCount}
           embedEditor={showMobileEmbed}
+          documentViewer={activePhoto?.isDocument ? (
+            <DocumentMode
+              activePhoto={activePhoto}
+              onCommitAnonymized={(blob, mimeType) => commitAnonymizedToLibrary(activePhoto.id, blob, mimeType)}
+            />
+          ) : null}
+          audioViewer={activePhoto?.isAudio ? (
+            <AudioModeViewer
+              activePhoto={activePhoto}
+              settings={audioSettings}
+              onChangeSettings={setAudioSettings}
+              originalBlob={originalBlobByPhoto[activePhoto.id]}
+              onCommitAnonymized={(blob, mimeType) => commitAnonymizedToLibrary(activePhoto.id, blob, mimeType)}
+              isMobileLayout
+            />
+          ) : null}
         />
       )}
 
@@ -3159,6 +3488,7 @@ function App() {
             displayedPhotos={displayedPhotos}
             activePhotoId={activePhotoId}
             dirtyByPhoto={dirtyByPhoto}
+            anonymizedPhotoIds={anonymizedPhotoIds}
             sidebarWidth={sidebarWidth}
             sidebarView={sidebarView}
             setSidebarView={setSidebarView}
@@ -3199,6 +3529,8 @@ function App() {
           onPointerUp={handleResizerPointerUp}
         />
 
+        {!activePhoto?.isAudio && !activePhoto?.isDocument
+          && !(activePhoto?.isVideo && videoTrackMode === 'audio') && (
         <EditorToolStrip
           detector={detector}
           faceFlyoutBtnRef={faceFlyoutBtnRef}
@@ -3222,18 +3554,19 @@ function App() {
           activePhoto={activePhoto}
           setToolMode={setToolMode}
           setZonesAnonymized={setZonesAnonymized}
-          detectTarget={detectTarget}
-          setDetectTarget={setDetectTarget}
+          detectionConfig={detectionConfig}
+          modelStatus={modelStatus}
+          enabledClasses={enabledClasses}
+          setEnabledClasses={setEnabledClasses}
+          toggleDetectionClass={toggleDetectionClass}
+          setCategoryEnabled={setCategoryEnabled}
           detectSensitivity={detectSensitivity}
           setDetectSensitivity={setDetectSensitivity}
           detectFaceOffset={detectFaceOffset}
           setDetectFaceOffset={setDetectFaceOffset}
-          detectThorough={detectThorough}
-          setDetectThorough={setDetectThorough}
           setAutoDetect={setAutoDetect}
           showBoxes={showBoxes}
           setShowBoxes={setShowBoxes}
-          detectFacesOnActiveImage={(robust) => { void detectFacesOnActiveImage(robust) }}
           adjFlyoutOpen={adjFlyoutOpen}
           adjFlyoutAnchor={adjFlyoutAnchor}
           adjFlyoutBtnRef={adjFlyoutBtnRef}
@@ -3266,6 +3599,7 @@ function App() {
           brushStrength={brushStrength}
           setBrushStrength={setBrushStrength}
         />
+        )}
 
         <EditorBatchPanel
           batchPanelOpen={batchPanelOpen}
@@ -3308,6 +3642,7 @@ function App() {
         <div className="editor-area">
 
           {/* ── Action toolbar — Tools Bar ──────────────────── */}
+          {!activePhoto?.isDocument && (
           <EditorActionToolbar
             activePhoto={activePhoto}
             photosCount={photos.length}
@@ -3338,8 +3673,66 @@ function App() {
             onExportVideo={exportActiveVideo}
             onExportSvg={exportAsSvg}
             onExportPhoto={exportActivePhoto}
+            audioExportFormats={audioExportFormats}
+            audioExportFormatId={audioExportFormatId}
+            setAudioExportFormatId={(id) => setAudioExportFormatId(id as AudioExportFormatId)}
+            onExportAudio={(id) => { void exportActiveAudio(id as AudioExportFormatId | undefined) }}
+            audioExporting={audioExporting}
           />
+          )}
 
+          {activePhoto?.isVideo && (
+            <div className="video-audio-panel">
+              <VideoTrackModeSelect mode={videoTrackMode} onChange={setVideoTrackMode} />
+              {videoTrackMode === 'both' && (
+                <>
+                  <button
+                    type="button"
+                    className={`video-audio-toggle${videoAudioPanelOpen ? ' open' : ''}`}
+                    onClick={() => setVideoAudioPanelOpen((o) => !o)}
+                    aria-expanded={videoAudioPanelOpen}
+                  >
+                    <span>{videoAudioPanelOpen ? 'Hide audio tools' : 'Audio tools'}</span>
+                    <span className="video-audio-toggle-chevron" aria-hidden="true">
+                      {videoAudioPanelOpen ? '×' : '▾'}
+                    </span>
+                  </button>
+                  {videoAudioPanelOpen && (
+                    <AudioModeViewer
+                      activePhoto={activePhoto}
+                      settings={audioSettings}
+                      onChangeSettings={setAudioSettings}
+                      originalBlob={originalBlobByPhoto[activePhoto.id]}
+                      isVideo
+                    />
+                  )}
+                </>
+              )}
+            </div>
+          )}
+
+          {activePhoto?.isDocument && !isMobile ? (
+            <DocumentMode
+              activePhoto={activePhoto}
+              onCommitAnonymized={(blob, mimeType) => commitAnonymizedToLibrary(activePhoto.id, blob, mimeType)}
+            />
+          ) : activePhoto?.isAudio && !isMobile ? (
+            <AudioModeViewer
+              activePhoto={activePhoto}
+              settings={audioSettings}
+              onChangeSettings={setAudioSettings}
+              originalBlob={originalBlobByPhoto[activePhoto.id]}
+              onCommitAnonymized={(blob, mimeType) => commitAnonymizedToLibrary(activePhoto.id, blob, mimeType)}
+              hideInlineExport
+            />
+          ) : activePhoto?.isVideo && videoTrackMode === 'audio' ? (
+            <AudioModeViewer
+              activePhoto={activePhoto}
+              settings={audioSettings}
+              onChangeSettings={setAudioSettings}
+              originalBlob={originalBlobByPhoto[activePhoto.id]}
+            />
+          ) : (
           <CanvasViewer
             showMobileEmbed={showMobileEmbed}
             toolMode={toolMode}
@@ -3358,6 +3751,7 @@ function App() {
             autoDetect={autoDetect}
             mobileGestureActive={mobileGestureActive}
             vectorizePanelOpen={vectorizePanelOpen}
+            vectorizePreviewActive={vectorizePreviewActive}
             vectorizing={vectorizing}
             zonesAnonymized={zonesAnonymized}
             undoCount={undoCount}
@@ -3423,14 +3817,16 @@ function App() {
             onRunVectorizePreview={runVectorizePreview}
             onUpdateVectorizeParam={updateVectorizeParam}
             onExportAsSvg={exportAsSvg}
+            onApplyVectorizePreview={() => { void commitVectorizePreview() }}
             onSaveSnapshot={() => { void saveSnapshot() }}
             onUndo={undo}
-            onResetPhotoToOriginal={() => { void resetPhotoToOriginal() }}
+            onResetPhotoToOriginal={() => { void handleResetPhotoToOriginal() }}
             onCropToSelection={cropToSelection}
             onApplyZones={() => { void applyZones() }}
           />
+          )}
 
-          {showMobileEmbed && activePhoto && !activePhoto.isVideo && (
+          {showMobileEmbed && activePhoto && !activePhoto.isVideo && !activePhoto.isAudio && !activePhoto.isDocument && (
             <MobileImageCanvasControls />
           )}
 
@@ -3447,7 +3843,7 @@ function App() {
       )}
 
       <EffectPickerDialog
-        open={effectPickerOpen != null && !((isMobile || desktopLiveOpen) && (effectPickerOpen === 'emoji' || effectPickerOpen === 'custom-image'))}
+        open={effectPickerOpen != null && !((isMobile || desktopLiveOpen) && (effectPickerOpen === 'emoji' || effectPickerOpen === 'custom-image' || effectPickerOpen === 'ascii'))}
         kind={effectPickerOpen}
         onClose={() => setEffectPickerOpen(null)}
         emojiRandom={emojiRandom}
@@ -3463,17 +3859,25 @@ function App() {
         onChangeCustomSource={(source) => { void loadCustomImagePreset(source) }}
         onPickCustomImage={handlePickCustomImage}
         onUploadCustomImages={openCustomImagePicker}
+        asciiCharset={asciiCharset}
+        onChangeAsciiCharset={setAsciiCharset}
       />
 
-      <ModelLoadStatus
-        active={detectorLoading}
-        progress={modelLoadProgress}
-        variant={
-          (isMobile && photos.length === 0 && mobileMode !== 'live') || (!isMobile && photos.length === 0)
-            ? 'overlay'
-            : 'toast'
-        }
-      />
+      {/* The home default screen has its own integrated, inline preloader, so we
+          skip the dialog overlay + corner pill there (they only show while a
+          session is active / media is loaded). */}
+      {!onHomeDefaultScreen && (
+        <ModelLoadStatus
+          active={detectorLoading}
+          progress={modelLoadProgress}
+          variant="toast"
+        />
+      )}
+
+      {!onHomeDefaultScreen && <BackgroundAssetLoader />}
+
+      {/* Headless test seam: surfaces the latest detection counts for e2e checks. */}
+      <div data-testid="detection-counts" data-counts={JSON.stringify(lastDetectionCounts ?? {})} hidden />
 
       {!isMobile && desktopLiveOpen && (
         <div className="desktop-live-overlay">

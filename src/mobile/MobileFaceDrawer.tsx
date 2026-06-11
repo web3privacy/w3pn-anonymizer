@@ -1,4 +1,6 @@
 import { Icon } from '../components/Icon'
+import { InfoHint } from '../components/InfoHint'
+import { PrimaryTargetsToggles } from '../components/tool-panels/PrimaryTargetsToggles'
 import type { AppMobileBindings } from './bindings'
 import { MobileRangeWithThumb } from './MobileRangeWithThumb'
 import { MobileToolDrawer } from './MobileToolDrawer'
@@ -8,14 +10,16 @@ interface MobileFaceDrawerProps {
   liveMode?: boolean
 }
 
+const SENSITIVITY_HINT = 'Higher catches more targets (incl. small / turned faces) but may add false positives.'
+const FACE_OFFSET_HINT = 'Grows the anonymized area around each face. Raise it if hair, ears or chin stay visible.'
+
 export function MobileFaceDrawer({ b, liveMode = false }: MobileFaceDrawerProps) {
   const open = b.mobilePanel === 'tool-face'
   const close = () => b.setMobilePanel(null)
-  const isVideo = Boolean(b.activePhoto?.isVideo)
   const detectorReady = b.detector.mode === 'yunet-wasm'
-  const enabled = liveMode ? b.liveDetectEnabled : b.autoDetect
+  const facesEnabled = liveMode ? b.liveDetectEnabled : b.autoDetect
 
-  const setEnabled = (v: boolean) => {
+  const setFacesEnabled = (v: boolean) => {
     if (liveMode) {
       b.setLiveDetectEnabled(v)
     } else {
@@ -24,27 +28,47 @@ export function MobileFaceDrawer({ b, liveMode = false }: MobileFaceDrawerProps)
     }
   }
 
+  const setClasses = (names: string[], enabled: boolean) => {
+    b.setEnabledClasses((cur) => {
+      if (enabled) return Array.from(new Set([...cur, ...names]))
+      const remove = new Set(names)
+      return cur.filter((c) => !remove.has(c))
+    })
+  }
+
   return (
-    <MobileToolDrawer open={open} onClose={close} title="FACE DETECTION" variant="tool">
+    <MobileToolDrawer open={open} onClose={close} title="DETECTION" variant="tool">
       <div className="mobile-face-drawer">
-        <label className="mobile-face-master-toggle">
-          <span className="mobile-face-master-text">
-            <Icon name="face_retouching_natural" filled={enabled} size={20} />
-            <span>Face detection</span>
+        <PrimaryTargetsToggles
+          detectionConfig={b.detectionConfig}
+          modelStatus={b.modelStatus}
+          facesEnabled={facesEnabled}
+          onFacesToggle={setFacesEnabled}
+          onToggleCategory={b.setCategoryEnabled}
+          enabledClasses={b.enabledClasses}
+          onSetClasses={setClasses}
+          compact
+        />
+
+        <button
+          type="button"
+          className="mobile-face-more-classes"
+          onClick={() => b.setMobilePanel('tool-detect-classes')}
+        >
+          <span className="mobile-face-more-classes-text">
+            <Icon name="category" size={18} />
+            <span>All classes</span>
           </span>
-          <span className={`mobile-switch${enabled ? ' on' : ''}`}>
-            <input
-              type="checkbox"
-              checked={enabled}
-              onChange={(e) => setEnabled(e.target.checked)}
-            />
-            <span className="mobile-switch-track" />
-            <span className="mobile-switch-knob" />
+          <span className="mobile-face-more-classes-right">
+            {b.enabledClasses.length > 0 && (
+              <span className="mobile-face-more-classes-count">{b.enabledClasses.length}</span>
+            )}
+            <Icon name="chevron_right" size={18} />
           </span>
-        </label>
+        </button>
 
         <div className="mobile-face-settings">
-          <div className="mobile-slider-row-v2">
+          <div className="mobile-slider-row-v2 mobile-slider-row-v2--with-hint">
             <span className="mobile-slider-row-v2-label">Sensitivity</span>
             <MobileRangeWithThumb
               min={0}
@@ -54,10 +78,10 @@ export function MobileFaceDrawer({ b, liveMode = false }: MobileFaceDrawerProps)
               format={(v) => `${v}%`}
               ariaLabel="Sensitivity"
             />
+            <InfoHint text={SENSITIVITY_HINT} label="Sensitivity — info" />
           </div>
-          <p className="mobile-face-hint">Higher catches more faces (incl. small / turned) but may add false positives.</p>
 
-          <div className="mobile-slider-row-v2">
+          <div className="mobile-slider-row-v2 mobile-slider-row-v2--with-hint">
             <span className="mobile-slider-row-v2-label">Face offset</span>
             <MobileRangeWithThumb
               min={0}
@@ -67,22 +91,8 @@ export function MobileFaceDrawer({ b, liveMode = false }: MobileFaceDrawerProps)
               format={(v) => `+${v}%`}
               ariaLabel="Face offset"
             />
+            <InfoHint text={FACE_OFFSET_HINT} label="Face offset — info" />
           </div>
-          <p className="mobile-face-hint">Grows the anonymized area around each face. Raise it if hair, ears or chin stay visible.</p>
-
-          {!liveMode && (
-            <label className="mobile-face-check-row">
-              <input
-                type="checkbox"
-                checked={b.detectThorough}
-                onChange={(e) => b.setDetectThorough(e.target.checked)}
-              />
-              <span className="mobile-face-check-text">
-                <span>Thorough scan</span>
-                <span className="mobile-face-check-hint">Multi-pass tiling for distant / tiny faces (slower)</span>
-              </span>
-            </label>
-          )}
 
           {!liveMode && (
             <label className="mobile-face-check-row">
@@ -96,52 +106,7 @@ export function MobileFaceDrawer({ b, liveMode = false }: MobileFaceDrawerProps)
               </span>
             </label>
           )}
-
-          {isVideo && (
-            <p className="mobile-face-hint">
-              Scans the current frame immediately, then re-analyses at +30%, +40% and +50% sensitivity each second you stay on the same frame.
-            </p>
-          )}
         </div>
-
-        {!liveMode && !isVideo && (
-          <div className="mobile-face-actions">
-            <button
-              type="button"
-              className="mobile-face-action-btn mobile-face-action-btn--primary"
-              onClick={() => { b.detectFacesOnActiveImage(false); close() }}
-              disabled={!detectorReady}
-            >
-              <Icon name="search" size={16} /> Detect now
-            </button>
-            <button
-              type="button"
-              className="mobile-face-action-btn"
-              onClick={() => { b.detectFacesOnActiveImage(true); close() }}
-              disabled={!detectorReady}
-            >
-              <Icon name="tune" size={16} /> Robust re-detect
-            </button>
-            <div className="mobile-face-actions-row">
-              <button
-                type="button"
-                className="mobile-face-action-btn mobile-face-action-btn--half"
-                onClick={() => b.removeSelectedZone()}
-                disabled={!b.selectedZoneId}
-              >
-                <Icon name="delete" size={16} /> Remove
-              </button>
-              <button
-                type="button"
-                className="mobile-face-action-btn mobile-face-action-btn--half"
-                onClick={() => b.clearZones()}
-                disabled={b.activeZones.length === 0}
-              >
-                <Icon name="clear_all" size={16} /> Clear all
-              </button>
-            </div>
-          </div>
-        )}
 
         {!detectorReady && (
           <p className="mobile-face-hint mobile-face-hint--warn">

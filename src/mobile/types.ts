@@ -3,6 +3,7 @@ export type MobilePanel =
   | 'gallery'
   | 'batch'
   | 'tool-face'
+  | 'tool-detect-classes'
   | 'tool-zone'
   | 'tool-crop'
   | 'tool-adjust'
@@ -12,7 +13,7 @@ export type MobilePanel =
   | 'export'
   | 'video-timeline'
 
-export type MobileMode = 'home' | 'editor' | 'live' | 'video'
+export type MobileMode = 'home' | 'editor' | 'live' | 'video' | 'audio' | 'document'
 
 /** Where the photo editor should navigate back to (e.g. after live capture). */
 export type MobileEditorReturnTo = 'live' | null

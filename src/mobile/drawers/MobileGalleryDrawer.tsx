@@ -8,6 +8,7 @@ interface MobileGalleryDrawerProps {
   onClose: () => void
   photos: PhotoItem[]
   displayedPhotos: PhotoItem[]
+  anonymizedPhotoIds: Set<string>
   activePhotoId: string | null
   sidebarView: 'grid' | 'list'
   setSidebarView: (v: 'grid' | 'list') => void
@@ -27,9 +28,14 @@ interface MobileGalleryDrawerProps {
 
 function mediaCounts(photos: PhotoItem[]) {
   const videos = photos.filter((p) => p.isVideo).length
-  const images = photos.length - videos
-  if (videos > 0 && images > 0) return `${photos.length} FILES`
+  const audio = photos.filter((p) => p.isAudio).length
+  const docs = photos.filter((p) => p.isDocument).length
+  const images = photos.length - videos - audio - docs
+  const kinds = [videos, audio, docs].filter((n) => n > 0).length + (images > 0 ? 1 : 0)
+  if (kinds > 1) return `${photos.length} FILES`
   if (videos > 0) return `${videos} VIDEO${videos !== 1 ? 'S' : ''}`
+  if (audio > 0) return `${audio} AUDIO`
+  if (docs > 0) return `${docs} DOC${docs !== 1 ? 'S' : ''}`
   return `${images} PHOTO${images !== 1 ? 'S' : ''}`
 }
 
@@ -38,6 +44,7 @@ export function MobileGalleryDrawer({
   onClose,
   photos,
   displayedPhotos,
+  anonymizedPhotoIds,
   activePhotoId,
   sidebarView,
   setSidebarView,
@@ -83,10 +90,10 @@ export function MobileGalleryDrawer({
     onClose()
   }
 
-  const imageCount = photos.filter((p) => !p.isVideo).length
+  const imageCount = photos.length
   const selectedCount = batchSelectMode ? selectedForBatch.size : 0
   const selectedImageIds = batchSelectMode
-    ? photos.filter((p) => selectedForBatch.has(p.id) && !p.isVideo).map((p) => p.id)
+    ? photos.filter((p) => selectedForBatch.has(p.id)).map((p) => p.id)
     : []
   const selectedImageCount = batchSelectMode
     ? selectedImageIds.length
@@ -174,10 +181,11 @@ export function MobileGalleryDrawer({
             <div className="mobile-gallery-grid">
               {displayedPhotos.map((p) => {
                 const selected = batchSelectMode ? selectedForBatch.has(p.id) : p.id === activePhotoId
+                const anonymized = anonymizedPhotoIds.has(p.id)
                 return (
                   <div
                     key={p.id}
-                    className={`mobile-gallery-item-shell${selected ? ' selected' : ''}${batchSelectMode ? ' selecting' : ''}`}
+                    className={`mobile-gallery-item-shell${selected ? ' selected' : ''}${batchSelectMode ? ' selecting' : ''}${anonymized ? ' anonymized' : ''}`}
                   >
                     <button
                       type="button"
@@ -187,6 +195,8 @@ export function MobileGalleryDrawer({
                       <div className="mobile-gallery-item-thumb">
                         <img src={p.previewUrl} alt="" loading="lazy" />
                         {p.isVideo && <span className="mobile-gallery-video-badge">VIDEO</span>}
+                        {p.isAudio && <span className="mobile-gallery-video-badge">AUDIO</span>}
+                        {p.isDocument && <span className="mobile-gallery-video-badge">{(p.documentKind ?? 'DOC').toUpperCase()}</span>}
                         {batchSelectMode && (
                           <span className={`mobile-gallery-check${selected ? ' checked' : ''}`} aria-hidden="true">
                             {selected ? <Icon name="check" size={14} /> : null}
@@ -211,10 +221,11 @@ export function MobileGalleryDrawer({
             <div className="mobile-gallery-list">
               {displayedPhotos.map((p) => {
                 const selected = batchSelectMode ? selectedForBatch.has(p.id) : p.id === activePhotoId
+                const anonymized = anonymizedPhotoIds.has(p.id)
                 return (
                   <div
                     key={p.id}
-                    className={`mobile-gallery-list-shell${selected ? ' selected' : ''}${batchSelectMode ? ' selecting' : ''}`}
+                    className={`mobile-gallery-list-shell${selected ? ' selected' : ''}${batchSelectMode ? ' selecting' : ''}${anonymized ? ' anonymized' : ''}`}
                   >
                     <button
                       type="button"
@@ -256,7 +267,7 @@ export function MobileGalleryDrawer({
       >
         <div className="mobile-gallery-download-options">
           <p className="mobile-gallery-download-hint">
-            Choose how to save {selectedCount > 0 ? selectedImageCount : imageCount} photo{(selectedCount > 0 ? selectedImageCount : imageCount) !== 1 ? 's' : ''}.
+            Choose how to save {selectedCount > 0 ? selectedImageCount : imageCount} item{(selectedCount > 0 ? selectedImageCount : imageCount) !== 1 ? 's' : ''}.
           </p>
           {onDownloadAllZip && (
             <button

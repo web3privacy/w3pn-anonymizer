@@ -13,6 +13,7 @@ export interface UseVectorizeParams {
 export interface VectorizeApi {
   vectorizePanelOpen: boolean
   setVectorizePanelOpen: Dispatch<SetStateAction<boolean>>
+  vectorizePreviewActive: boolean
   vectorizeParams: VectorizeParams
   setVectorizeParams: Dispatch<SetStateAction<VectorizeParams>>
   svgPreview: string | null
@@ -22,6 +23,8 @@ export interface VectorizeApi {
   runVectorizePreview: (params: VectorizeParams) => Promise<void>
   updateVectorizeParam: <K extends keyof VectorizeParams>(key: K, value: VectorizeParams[K]) => void
   exportAsSvg: () => Promise<void>
+  applyVectorizePreview: () => Promise<boolean>
+  clearVectorizePreview: () => void
 }
 
 /**
@@ -41,9 +44,25 @@ export function useVectorize({
   const [svgPreviewUrl, setSvgPreviewUrl] = useState<string | null>(null)
   const [svgPreviewSize, setSvgPreviewSize] = useState<number | null>(null)
   const [vectorizing, setVectorizing] = useState(false)
+  const [vectorizePreviewActive, setVectorizePreviewActive] = useState(false)
   const vectorizeDebounceRef = useRef<ReturnType<typeof setTimeout>>()
   const vectorizePreviewUrlRef = useRef<string | null>(null)
   const vectorizePreviewSeqRef = useRef(0)
+  const vectorizePanelWasOpenRef = useRef(false)
+
+  const clearVectorizePreview = useCallback(() => {
+    vectorizePreviewSeqRef.current += 1
+    if (vectorizeDebounceRef.current) clearTimeout(vectorizeDebounceRef.current)
+    if (vectorizePreviewUrlRef.current) {
+      URL.revokeObjectURL(vectorizePreviewUrlRef.current)
+      vectorizePreviewUrlRef.current = null
+    }
+    setSvgPreview(null)
+    setSvgPreviewUrl(null)
+    setSvgPreviewSize(null)
+    setVectorizing(false)
+    setVectorizePreviewActive(false)
+  }, [])
 
   const runVectorizePreview = useCallback(async (params: VectorizeParams) => {
     const wc = workCanvasRef.current
@@ -59,6 +78,7 @@ export function useVectorize({
       setSvgPreview(svg)
       setSvgPreviewUrl(nextUrl)
       setSvgPreviewSize(new Blob([svg]).size)
+      setVectorizePreviewActive(true)
     } catch (err) {
       console.warn('SVG vectorization preview failed:', err)
       if (seq !== vectorizePreviewSeqRef.current) return
@@ -69,6 +89,7 @@ export function useVectorize({
       setSvgPreview(null)
       setSvgPreviewUrl(null)
       setSvgPreviewSize(null)
+      setVectorizePreviewActive(false)
     } finally {
       if (seq === vectorizePreviewSeqRef.current) setVectorizing(false)
     }
@@ -83,30 +104,47 @@ export function useVectorize({
     })
   }, [runVectorizePreview])
 
-  // Trigger preview when panel opens or preset changes
+  // Trigger preview when panel opens or photo changes while panel is open.
   useEffect(() => {
     if (vectorizePanelOpen && activePhoto && !activePhoto.isVideo) {
       runVectorizePreview(vectorizeParams)
-      return
     }
-    if (!vectorizePanelOpen || activePhoto?.isVideo) {
-      vectorizePreviewSeqRef.current += 1
-      if (vectorizeDebounceRef.current) clearTimeout(vectorizeDebounceRef.current)
-      if (vectorizePreviewUrlRef.current) {
-        URL.revokeObjectURL(vectorizePreviewUrlRef.current)
-        vectorizePreviewUrlRef.current = null
-      }
-      setSvgPreview(null)
-      setSvgPreviewUrl(null)
-      setSvgPreviewSize(null)
-      setVectorizing(false)
+  }, [vectorizePanelOpen, activePhoto?.id, activePhoto?.isVideo, runVectorizePreview, vectorizeParams])
+
+  // Closing the panel without Apply drops the overlay — only Apply bakes to canvas.
+  useEffect(() => {
+    if (vectorizePanelWasOpenRef.current && !vectorizePanelOpen && vectorizePreviewActive) {
+      clearVectorizePreview()
     }
-  }, [vectorizePanelOpen, activePhoto?.id, activePhoto?.isVideo])
+    vectorizePanelWasOpenRef.current = vectorizePanelOpen
+  }, [vectorizePanelOpen, vectorizePreviewActive, clearVectorizePreview])
+
+  // Drop preview when switching away from a still image.
+  useEffect(() => {
+    if (!activePhoto || activePhoto.isVideo) clearVectorizePreview()
+  }, [activePhoto?.id, activePhoto?.isVideo, clearVectorizePreview])
 
   useEffect(() => () => {
     if (vectorizeDebounceRef.current) clearTimeout(vectorizeDebounceRef.current)
     if (vectorizePreviewUrlRef.current) URL.revokeObjectURL(vectorizePreviewUrlRef.current)
   }, [])
+
+  const applyVectorizePreview = useCallback(async () => {
+    const wc = workCanvasRef.current
+    if (!wc || wc.width === 0 || !svgPreviewUrl) return false
+    const img = new Image()
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve()
+      img.onerror = () => reject(new Error('SVG preview failed to load'))
+      img.src = svgPreviewUrl
+    })
+    const ctx = wc.getContext('2d', { willReadFrequently: true })
+    if (!ctx) return false
+    ctx.clearRect(0, 0, wc.width, wc.height)
+    ctx.drawImage(img, 0, 0, wc.width, wc.height)
+    clearVectorizePreview()
+    return true
+  }, [clearVectorizePreview, svgPreviewUrl, workCanvasRef])
 
   const exportAsSvg = useCallback(async () => {
     if (!activePhoto) return
@@ -128,6 +166,7 @@ export function useVectorize({
   return {
     vectorizePanelOpen,
     setVectorizePanelOpen,
+    vectorizePreviewActive,
     vectorizeParams,
     setVectorizeParams,
     svgPreview,
@@ -137,5 +176,7 @@ export function useVectorize({
     runVectorizePreview,
     updateVectorizeParam,
     exportAsSvg,
+    applyVectorizePreview,
+    clearVectorizePreview,
   }
 }

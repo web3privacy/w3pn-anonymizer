@@ -1,6 +1,8 @@
 import type { AppMobileBindings } from './bindings'
 import { AnonymizerLogoMotion } from '../components/AnonymizerLogoMotion'
+import { HomeModelPreloader } from '../components/HomeModelPreloader'
 import { useOpticalCalibration } from '../hooks/useOpticalCalibration'
+import { useModelPreload } from '../hooks/useModelPreload'
 
 interface MobileHomeDefaultProps {
   b: Pick<
@@ -18,10 +20,9 @@ interface MobileHomeDefaultProps {
 
 export function MobileHomeDefault({ b }: MobileHomeDefaultProps) {
   const { mode, activate, cancel, isCalibratingLayout, isSessionActive, isSettling } = useOpticalCalibration()
-  const homeBusy = b.isBusy || b.detectorLoading || isSessionActive
+  const preload = useModelPreload(b.detectorLoading)
 
   const enterLive = () => {
-    if (b.detectorLoading) return
     b.setMobileMode('live')
     b.setMobilePanel(null)
   }
@@ -56,7 +57,7 @@ export function MobileHomeDefault({ b }: MobileHomeDefaultProps) {
               onCancel={cancel}
             />
           </div>
-          {!isSessionActive && (
+          {!isSessionActive ? (
             <button
               type="button"
               className="mobile-home-v2-wordmark-btn"
@@ -70,8 +71,7 @@ export function MobileHomeDefault({ b }: MobileHomeDefaultProps) {
                 draggable={false}
               />
             </button>
-          )}
-          {isSessionActive && (
+          ) : (
             <div className="mobile-home-v2-wordmark-btn mobile-home-v2-cal-placeholder" aria-hidden="true">
               <img
                 src="/brand/anonymizer-wordmark.png"
@@ -84,14 +84,14 @@ export function MobileHomeDefault({ b }: MobileHomeDefaultProps) {
         </div>
 
         <div className={`mobile-home-v2-cta${isSessionActive ? ' mobile-home-v2-cal-placeholder' : ''}`} aria-hidden={isSessionActive}>
-          {!isSessionActive ? (
+          {!isSessionActive && preload.ready && (
             <>
               <div className="mobile-home-v2-cta-row">
                 <button
                   type="button"
                   className="mobile-cta-primary"
                   onClick={enterLive}
-                  disabled={homeBusy}
+                  disabled={b.isBusy}
                 >
                   TURN ON CAMERA
                 </button>
@@ -99,7 +99,7 @@ export function MobileHomeDefault({ b }: MobileHomeDefaultProps) {
                   type="button"
                   className="mobile-cta-secondary"
                   onClick={b.openUnifiedPicker}
-                  disabled={homeBusy}
+                  disabled={b.isBusy}
                 >
                   SELECT MEDIA
                 </button>
@@ -108,12 +108,16 @@ export function MobileHomeDefault({ b }: MobileHomeDefaultProps) {
                 type="button"
                 className="mobile-cta-muted"
                 onClick={b.loadDemoPhotos}
-                disabled={homeBusy}
+                disabled={b.isBusy}
               >
                 LOAD DEMO
               </button>
             </>
-          ) : (
+          )}
+          {!isSessionActive && !preload.ready && (
+            <HomeModelPreloader status={preload} />
+          )}
+          {isSessionActive && (
             <>
               <div className="mobile-home-v2-cta-row">
                 <span className="mobile-cta-primary mobile-home-v2-cal-spacer" />

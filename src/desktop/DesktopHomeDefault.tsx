@@ -1,5 +1,7 @@
 import { AnonymizerLogoMotion } from '../components/AnonymizerLogoMotion'
+import { HomeModelPreloader } from '../components/HomeModelPreloader'
 import { useOpticalCalibration } from '../hooks/useOpticalCalibration'
+import { useModelPreload } from '../hooks/useModelPreload'
 
 interface DesktopHomeDefaultProps {
   isDragOver: boolean
@@ -20,8 +22,8 @@ export function DesktopHomeDefault({
   onLoadDemo,
   onLiveCamera,
 }: DesktopHomeDefaultProps) {
-  const homeBusy = isBusy || detectorLoading
   const { mode, activate, cancel, isCalibratingLayout, isSessionActive, isSettling } = useOpticalCalibration()
+  const preload = useModelPreload(detectorLoading)
   const pasteHint = navigator.platform.includes('Mac') ? '\u2318V' : 'Ctrl+V'
 
   return (
@@ -55,19 +57,25 @@ export function DesktopHomeDefault({
         </div>
 
         {!isSessionActive && (
-          <div className="desktop-home-v2-actions">
-            <div className="desktop-home-v2-actions-row">
-              <button type="button" className="desktop-home-v2-btn desktop-home-v2-btn--primary" onClick={onLiveCamera} disabled={homeBusy}>
-                TURN ON CAMERA
-              </button>
-              <button type="button" className="desktop-home-v2-btn desktop-home-v2-btn--secondary" onClick={onSelectMedia} disabled={homeBusy}>
-                SELECT MEDIA
+          preload.ready ? (
+            <div className="desktop-home-v2-actions">
+              <div className="desktop-home-v2-actions-row">
+                <button type="button" className="desktop-home-v2-btn desktop-home-v2-btn--primary" onClick={onLiveCamera} disabled={isBusy}>
+                  TURN ON CAMERA
+                </button>
+                <button type="button" className="desktop-home-v2-btn desktop-home-v2-btn--secondary" onClick={onSelectMedia} disabled={isBusy}>
+                  SELECT MEDIA
+                </button>
+              </div>
+              <button type="button" className="desktop-home-v2-btn desktop-home-v2-btn--ghost" onClick={onLoadDemo} disabled={isBusy}>
+                LOAD DEMO
               </button>
             </div>
-            <button type="button" className="desktop-home-v2-btn desktop-home-v2-btn--ghost" onClick={onLoadDemo} disabled={homeBusy}>
-              LOAD DEMO
-            </button>
-          </div>
+          ) : (
+            <div className="desktop-home-v2-actions">
+              <HomeModelPreloader status={preload} />
+            </div>
+          )
         )}
       </div>
 

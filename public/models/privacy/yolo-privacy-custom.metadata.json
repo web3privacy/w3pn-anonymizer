@@ -1,0 +1,17 @@
+{
+  "id": "yolo-privacy-custom",
+  "inputSize": 640,
+  "format": "yolov8",
+  "classes": {
+    "0": "screen",
+    "1": "tattoo",
+    "2": "sign",
+    "3": "document"
+  },
+  "mapToPrivacyTypes": {
+    "screen": "screen",
+    "tattoo": "tattoo",
+    "sign": "sign",
+    "document": "document"
+  }
+}

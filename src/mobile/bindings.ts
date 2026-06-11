@@ -1,5 +1,6 @@
 import type {
   AnonymizeEffectId,
+  AsciiCharset,
   BatchTaskId,
   ColorAdjustments,
   ColorPresetId,
@@ -63,6 +64,7 @@ export interface AppMobileBindings {
   /** Detected faces on the current video frame (preview only). */
   videoPreviewFaceCount: number
   displayedPhotos: PhotoItem[]
+  anonymizedPhotoIds: Set<string>
   sidebarView: 'grid' | 'list'
   selectedForBatch: Set<string>
   setSelectedForBatch: React.Dispatch<React.SetStateAction<Set<string>>>
@@ -147,12 +149,14 @@ export interface AppMobileBindings {
   commitMobileExportEdit: () => Promise<void>
   vectorizePanelOpen: boolean
   setVectorizePanelOpen: (v: boolean) => void
+  vectorizePreviewActive: boolean
   vectorizeParams: VectorizeParams
   setVectorizeParams: (params: VectorizeParams) => void
   updateVectorizeParam: <K extends keyof VectorizeParams>(key: K, value: VectorizeParams[K]) => void
   vectorizing: boolean
   svgPreviewSize: number | null
   exportAsSvg: () => Promise<void>
+  applyVectorizePreview: () => Promise<void>
 
   brushSize: number
   setBrushSize: (v: number) => void
@@ -167,11 +171,13 @@ export interface AppMobileBindings {
   setSelectedEffect: (e: AnonymizeEffectId) => void
   customImageSource: CustomImageSource
   setCustomImageSource: (s: CustomImageSource) => void
+  asciiCharset: AsciiCharset
+  setAsciiCharset: (c: AsciiCharset) => void
   customImageAssets: CustomImageAsset[]
   customImagePresetLoading: boolean
   openCustomImagePicker: () => void
   loadCustomImagePreset: (s: CustomImageSource) => Promise<void>
-  openEffectPicker: (kind: 'emoji' | 'custom-image') => void
+  openEffectPicker: (kind: 'emoji' | 'custom-image' | 'ascii') => void
   customImageRandom: boolean
   selectedCustomImageId: string | null
   onToggleCustomRandom: (random: boolean) => void
@@ -192,8 +198,18 @@ export interface AppMobileBindings {
   setDetectFaceOffset: (v: number) => void
   detectSensitivity: number
   setDetectSensitivity: (v: number) => void
-  detectThorough: boolean
-  setDetectThorough: (v: boolean) => void
+  detectionConfig: import('../types').DetectionCategoryConfig[]
+  setCategoryEnabled: (type: import('../types').PrivacyDetectionType, enabled: boolean) => void
+  setCategoryThreshold: (type: import('../types').PrivacyDetectionType, threshold: number) => void
+  modelStatus: import('../hooks/usePrivacyDetectionConfig').ModelStatusMap
+  enabledClasses: string[]
+  setEnabledClasses: (updater: string[] | ((cur: string[]) => string[])) => void
+  toggleDetectionClass: (className: string, enabled: boolean) => void
+  lastDetectionCounts: Partial<Record<import('../types').PrivacyDetectionType, number>>
+  showDetectionLabels: boolean
+  setShowDetectionLabels: React.Dispatch<React.SetStateAction<boolean>>
+  audioSettings: import('../lib/audio/audioTypes').AudioEffectSettings
+  setAudioSettings: (updater: import('../lib/audio/audioTypes').AudioEffectSettings | ((cur: import('../lib/audio/audioTypes').AudioEffectSettings) => import('../lib/audio/audioTypes').AudioEffectSettings)) => void
   eraserActive: boolean
   autoDetect: boolean
   setAutoDetect: (v: boolean) => void

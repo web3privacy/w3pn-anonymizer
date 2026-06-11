@@ -3,6 +3,7 @@ import type { AppMobileBindings } from './bindings'
 import { MobileDistortDrawer } from './MobileDistortDrawer'
 import { MobileEffectsDrawer } from './MobileEffectsDrawer'
 import { MobileFaceDrawer } from './MobileFaceDrawer'
+import { MobileDetectClassesDrawer } from './MobileDetectClassesDrawer'
 import { AdjustToolPanel } from '../components/tool-panels/AdjustToolPanel'
 import { MobileToolDrawer } from './MobileToolDrawer'
 import { DEFAULT_COLOR_ADJUSTMENTS } from '../types'
@@ -32,6 +33,8 @@ export function MobileToolDrawers({ b, liveMode = false }: MobileToolDrawersProp
   return (
     <>
       <MobileFaceDrawer b={b} liveMode={liveMode} />
+
+      <MobileDetectClassesDrawer b={b} />
 
       {!liveMode && drawer('tool-zone', 'Brush / Zone', (
         <div className="mobile-tool-drawer-list">

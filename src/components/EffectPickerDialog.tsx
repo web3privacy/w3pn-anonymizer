@@ -2,11 +2,12 @@ import { createPortal } from 'react-dom'
 import { Icon } from './Icon'
 import { CustomImagePickerPanel } from './CustomImagePickerPanel'
 import { EmojiPickerPanel } from './EmojiPickerPanel'
-import type { CustomImageAsset, CustomImageSource } from '../types'
+import { AsciiCharsetPicker } from './AsciiCharsetPicker'
+import type { AsciiCharset, CustomImageAsset, CustomImageSource } from '../types'
 
 export interface EffectPickerDialogProps {
   open: boolean
-  kind: 'emoji' | 'custom-image' | null
+  kind: 'emoji' | 'custom-image' | 'ascii' | null
   onClose: () => void
   // Emoji
   emojiRandom: boolean
@@ -23,6 +24,15 @@ export interface EffectPickerDialogProps {
   onChangeCustomSource: (source: CustomImageSource) => void
   onPickCustomImage: (assetId: string) => void
   onUploadCustomImages: () => void
+  // ASCII
+  asciiCharset: AsciiCharset
+  onChangeAsciiCharset: (charset: AsciiCharset) => void
+}
+
+const TITLES: Record<'emoji' | 'custom-image' | 'ascii', string> = {
+  emoji: 'EMOJI',
+  'custom-image': 'CUSTOM IMAGE',
+  ascii: 'ASCII CHARACTERS',
 }
 
 export function EffectPickerDialog(props: EffectPickerDialogProps) {
@@ -30,17 +40,18 @@ export function EffectPickerDialog(props: EffectPickerDialogProps) {
   if (!open || !kind) return null
 
   const isEmoji = kind === 'emoji'
+  const isAscii = kind === 'ascii'
 
   return createPortal(
     <div className="effect-picker-dock">
       <div
         className="effect-picker-dialog"
         role="dialog"
-        aria-label={isEmoji ? 'Choose emoji' : 'Choose image'}
+        aria-label={isEmoji ? 'Choose emoji' : isAscii ? 'Choose ASCII characters' : 'Choose image'}
         onMouseDown={(e) => e.stopPropagation()}
       >
         <header className="effect-picker-head">
-          <span className="effect-picker-title">{isEmoji ? 'EMOJI' : 'CUSTOM IMAGE'}</span>
+          <span className="effect-picker-title">{TITLES[kind]}</span>
           <button type="button" className="effect-picker-close" onClick={onClose} aria-label="Close">
             <Icon name="close" size={20} />
           </button>
@@ -53,6 +64,11 @@ export function EffectPickerDialog(props: EffectPickerDialogProps) {
             onToggleRandom={props.onToggleEmojiRandom}
             onPickEmoji={props.onPickEmoji}
             showHint={false}
+          />
+        ) : isAscii ? (
+          <AsciiCharsetPicker
+            charset={props.asciiCharset}
+            onChange={props.onChangeAsciiCharset}
           />
         ) : (
           <CustomImagePickerPanel

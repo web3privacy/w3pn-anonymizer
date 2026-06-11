@@ -2,7 +2,7 @@
 
 > **Privacy-first photo & video anonymization — local-first, zero third-party data collection.**
 
-A free, open-source tool by [Web3Privacy Now](https://www.web3privacy.info) for anonymizing faces and sensitive regions in images and videos. Rendering, export, and face detection run entirely in your browser via YuNet + ONNX Runtime Web — no uploads, no servers, no tracking.
+A free, open-source tool by [Web3Privacy Now](https://www.web3privacy.info) for anonymizing faces and sensitive data in **images, videos, audio, live camera/mic, and documents**. Detection, rendering, and export run entirely in your browser — faces via YuNet, optional objects via YOLO, and sensitive text via on-device OCR (Tesseract.js), all on [ONNX Runtime Web](https://github.com/microsoft/onnxruntime) / WebAssembly. No uploads, no servers, no tracking.
 
 **[Try it online](https://anonymizer.web3privacy.info)** · [Source on GitHub](https://github.com/web3privacy/w3pn-anonymizer) · [Roadmap](./ROADMAP.md) · [Custom image libraries](./docs/CUSTOM_IMAGE_LIBRARIES.md) · [Report a bug](https://github.com/web3privacy/w3pn-anonymizer/issues)
 
@@ -11,8 +11,14 @@ A free, open-source tool by [Web3Privacy Now](https://www.web3privacy.info) for 
 ## Features
 
 ### Anonymization
-- **14+ effects** — blur, heavy blur, pixelate, blackout, whiteout, emoji, silhouette, glitch, thermal, noise, swirl, contour, diamond, halftone
-- **Auto face detection** — YuNet runs locally in your browser (ONNX Runtime WebAssembly)
+- **12+ effects** — blur, zoom blur, pixelate, blackout, emoji, custom image, ASCII art, glitch, thermal, noise, contour, and more
+- **Modular privacy detection** — faces (YuNet, on by default) plus optional YOLO targets: people, license plates, screens, documents, signs, tattoos
+- **Sensitive text on photos** — on-device OCR (Tesseract.js, EN + CS) finds emails, phone numbers, payment cards, IBANs, national IDs, crypto addresses, secrets/keys, and more, then boxes and redacts them (on by default)
+- **Progressive detection** — face boxes appear immediately while YOLO/OCR scans continue in the background
+- **All YOLO classes** — an optional sheet exposes every raw class the object model supports for power users, beyond the featured targets
+- **Tiny detection labels** — each detected region gets a small caption of its type (faces stay label-free), toggleable in settings
+- **One effect per region** — cross-type de-duplication guarantees a single chosen effect is applied to any overlapping area
+- **Auto detection** — runs locally in your browser (ONNX Runtime WebAssembly); cloud APIs are never used
 - **Zone editing** — draw rectangles or paint with a brush over any region
 - **Brush tool** — variable-size brush with real-time preview
 
@@ -24,8 +30,30 @@ A free, open-source tool by [Web3Privacy Now](https://www.web3privacy.info) for 
 ### Video anonymization
 - **Frame-by-frame processing** — masking, rendering, and encoding happen locally using Canvas API + MediaRecorder
 - **Supported formats** — MP4, WebM, MOV, AVI, MKV, M4V, OGV
+- **Video audio** — keep original track, remove audio on export, or apply voice-distortion presets (preview; mux export best-effort)
 - **Manual frame fixes** — capture the current timeline frame, retouch it as an image, then bake it back into the next video render
 - **100% in-browser** — video detection, masking, and encoding never leave your device
+
+### Audio privacy
+- **Audio files** — open WAV/MP3/OGG/M4A in a dedicated audio mode with a full-width waveform/sound graph
+- **A/B comparison** — toggle between the original and the anonymized signal while scrubbing
+- **Presets** — Maximum Mask, Heavy Scramble, Broken Timing (voice-modulation focused; no noise bed)
+- **Advanced controls** — pitch, formant shift, ring modulation, bitcrush, tremolo/timing wobble, filters, and intensity
+- **Export** — WAV (offline render) plus WebM/OGG/MP4 where the browser's `MediaRecorder` supports them
+- **Limitations** — DSP-based disguise, not a guaranteed forensic defeat; no speech-to-text or speaker identification
+
+### Live mode (camera + microphone)
+- **Live camera** — real-time face/zone anonymization from the webcam, photo + video capture to library
+- **Voice Mask** — live microphone de-identification via AudioWorklets; presets mirror audio mode (Maximum Mask, Heavy Scramble, Broken Timing, **Off** for raw recording)
+- **Capture preview** — last photo/video thumbnail in the corner for quick open-in-editor
+- **Local only** — capture, DSP, and recording never leave the device
+
+### Document anonymization
+- **Formats** — PDF, TXT, and MD (DOCX import is on the [roadmap](./ROADMAP.md))
+- **Local PII detection** — regex + checksum recognizers (Luhn cards, IBAN mod-97, Czech rodné číslo mod-11, emails, phones, IPs, crypto, secrets/keys)
+- **Review UI** — colored highlights over text and PDF page renders; toggle individual detections, draw manual redaction boxes
+- **Redaction styles** — blackout/blur/pixelate on PDFs; blackout/token replace on plain text
+- **Safe export** — flattened PDF, ZIP of page images, or token-replaced TXT; Copy/Save for text documents
 
 ### Export & batch
 - **6 image formats** — JPEG, PNG, WebP, BMP, GIF, TIFF
@@ -34,11 +62,16 @@ A free, open-source tool by [Web3Privacy Now](https://www.web3privacy.info) for 
 - **ZIP export** — download all processed photos at once
 
 ### Privacy & security
-- **100% local** — images and videos never leave your device
+- **100% local** — images, videos, audio, mic, and documents never leave your device
 - **No analytics, no cookies, no tracking** — zero third-party network requests at runtime
-- **Self-hosted fonts and models** — Material Symbols, YuNet ONNX, and ORT WASM served from the same origin (no CDN)
+- **Self-hosted fonts and models** — Material Symbols, YuNet ONNX, optional YOLO ONNX, ORT WASM, and the Tesseract OCR engine + language data are all served from the same origin (no CDN)
 - **CPU timing proof** — shows processing time to verify local execution
 - **CSP + cross-origin isolation** — Content-Security-Policy and COOP/COEP/CORP headers in production
+
+### Performance / loading
+- **Lean first load** — only face detection (YuNet) and live mode load on boot
+- **Background prefetch** — heavier optional assets (YOLO models, OCR engine + language data) warm the browser cache while the user is idle on the home / hypno screen, behind an unobtrusive progress pill; respects Save-Data and slow connections
+- **Hypnotic home screen** — a high-detail, dotted multi-layer GPU spiral illusion (WebGL fragment shader, pixel-by-pixel, high FPS) that reacts to pointer/touch and morphs from the logo, with a `prefers-reduced-motion` / no-WebGL SVG fallback
 
 ### Desktop shell
 - Electron support is kept in the codebase for future desktop releases
@@ -106,35 +139,37 @@ Local macOS builds created without an Apple Developer ID are unsigned and not no
 ```
 w3pn-anonymizer/
 ├── src/
-│   ├── App.tsx              # Main React application
-│   ├── App.css              # Component styles
-│   ├── index.css            # CSS variables (dark + light themes)
-│   ├── main.tsx             # React entry point
-│   ├── types.ts             # Shared TypeScript types
+│   ├── App.tsx                # Main React application
+│   ├── App.css / index.css    # Styles + CSS variables (dark + light themes)
+│   ├── main.tsx               # React entry point
+│   ├── types.ts               # Shared TypeScript types
+│   ├── components/            # UI (incl. document/ viewers, tool-panels/, batch/)
+│   ├── desktop/ · mobile/     # Desktop and mobile shells / layouts
+│   ├── hooks/                 # React hooks (detector, voice, library, prefetch…)
 │   └── lib/
-│       ├── detector.ts      # Face detection (YuNet WASM + backend)
-│       ├── effects.ts       # Image effects engine (blur, pixelate, glitch…)
-│       ├── normalize.ts     # Batch processing engine
-│       ├── video.ts         # Video frame-by-frame processing
-│       ├── vectorize.ts     # SVG vectorization (imagetracer.js)
-│       └── image-encoders.ts # BMP, GIF, TIFF encoders
-├── server/
-│   ├── main.py              # FastAPI backend (OpenCV YuNet, localhost only)
-│   ├── requirements.txt
-│   └── models/              # Auto-downloaded ONNX models
-├── electron/
-│   └── main.cjs             # Electron main process
+│       ├── detector.ts        # YuNet face detection orchestrator (WASM)
+│       ├── detectors/         # YuNet + YOLO + OCR-PII detector implementations
+│       ├── detections/        # Detection config, adapters, availability, image run
+│       ├── effects.ts         # Image effects engine (blur, pixelate, glitch…)
+│       ├── video.ts           # Video frame-by-frame processing
+│       ├── audio/             # Audio pipeline, presets, and live voice-mask DSP
+│       ├── document/          # PDF/TXT parsing, PII recognizers, redaction/export
+│       ├── gl/                # WebGL renderers (hypno spiral)
+│       ├── asset-prefetch.ts  # Background model/OCR cache warming
+│       └── vectorize.ts       # SVG vectorization (imagetracer.js)
+├── server/                    # Optional FastAPI backend (OpenCV YuNet, localhost only)
+├── electron/                  # Electron main process
 ├── public/
-│   ├── models/              # Browser-side YuNet ONNX model
-│   ├── onnx/                # ONNX Runtime WebAssembly assets
-│   ├── fonts/               # Self-hosted Material Symbols
-│   ├── vendor/              # Browser image compression lib
-│   └── demo/                # Demo images
-├── index.html
-├── package.json
-├── vite.config.ts
-├── tsconfig.json
-└── start.sh                 # One-command start script
+│   ├── models/                # YuNet + optional privacy YOLO ONNX (see public/models/privacy/README.md)
+│   ├── onnx/                  # ONNX Runtime WebAssembly assets
+│   ├── tesseract/             # Self-hosted OCR engine (LSTM core) + eng/ces language data
+│   ├── worklets/              # AudioWorklet processors (level meter, noise gate, voice mask)
+│   ├── fonts/                 # Self-hosted Material Symbols
+│   ├── vendor/                # Browser image compression + imagetracer libs
+│   └── demo/                  # Demo images, audio, video, and a sample document
+├── scripts/                   # Build/release tooling + Playwright e2e smokes
+├── index.html · package.json · vite.config.ts · tsconfig.json
+└── start.sh                   # One-command start script
 ```
 
 ---
@@ -174,13 +209,12 @@ The YuNet ONNX model is downloaded automatically from [OpenCV Zoo](https://githu
 
 ---
 
-## Face detection (in-browser)
+## Detection (in-browser)
 
-- The browser loads `public/models/face_detection_yunet_2023mar.onnx`.
-- ONNX Runtime Web executes YuNet inside WebAssembly.
-- Large images are scanned with full-frame inference plus 640 px tiles.
-- Video detection samples are downscaled to 1280 px on the long edge before YuNet runs.
-- No image or video pixels leave the browser.
+- **Faces (YuNet)** — the browser loads `public/models/face_detection_yunet_2023mar.onnx` and runs it via ONNX Runtime Web (WebAssembly). Large images are scanned full-frame plus 640 px tiles; video samples are downscaled to 1280 px on the long edge first.
+- **Objects (YOLO, optional)** — when a non-face target or a raw class is enabled, the matching YOLO ONNX model in `public/models/privacy/` lazy-loads through ORT. Outputs are filtered, NMS'd, and cross-type de-duplicated so each region yields a single effect.
+- **Sensitive text (OCR)** — when the *Sensitive text* target is on, Tesseract.js (self-hosted under `public/tesseract/`, EN + CS) recognizes words with bounding boxes; the document PII recognizers then locate matches and box them for redaction. Runs on still images only.
+- No image, video, audio, or document pixels/text leave the browser.
 
 ## Anonymization flow
 
@@ -206,8 +240,10 @@ The YuNet ONNX model is downloaded automatically from [OpenCV Zoo](https://githu
 - The app stores loaded media, original backups, snapshots, zone masks, and temporary video overrides only in memory for the active session.
 - Preview `ObjectURL`s are revoked when media is replaced or removed, and remaining previews are revoked when the app unloads.
 - The app persists only UI preferences in `localStorage`:
-  - `anonymizer-theme`
-  - `anonymizer-enable-optical-mode`
+  - `anonymizer-theme` — theme preference
+  - `anonymizer-enable-optical-mode` — home logo / hypno animation toggle
+  - `anonymizer-privacy-settings` — privacy target toggles, thresholds, label toggle, enabled raw classes, audio effect prefs (no media)
+  - `anonymizer-voice-mask` — live voice-mask preset/strength prefs (no audio)
 - `sessionStorage` may hold lightweight live-capture metadata (`anonymizer-live-meta`) — never image blobs.
 
 ---
@@ -217,6 +253,8 @@ The YuNet ONNX model is downloaded automatically from [OpenCV Zoo](https://githu
 - Browser queue: up to 2,000 media items per session.
 - Images: up to 50 MB per file in the browser queue.
 - Videos: up to 500 MB per file in the browser queue.
+- Audio: up to 100 MB per file in the browser queue.
+- OCR languages: English + Czech (self-hosted `tessdata_fast`, ~8 MB total).
 - Video detection: sampled frames are analyzed at up to 1280 px on the long edge.
 - Video export: 6 Mbps video bitrate + 128 kbps audio bitrate.
 - FPS handling: defaults to 30 fps when unavailable and normalizes detected rates into the 10-60 fps range.
@@ -239,7 +277,7 @@ The YuNet ONNX model is downloaded automatically from [OpenCV Zoo](https://githu
 
 - **No data leaves the device.** All detection, rendering, and export run locally in the browser.
 - **No sessions, cookies, or tracking.** Pure SPA with no analytics and no third-party API calls at runtime.
-- **Self-hosted assets.** Fonts, ONNX model, and WASM binaries are served from the same origin.
+- **Self-hosted assets.** Fonts, ONNX models, WASM binaries, and the Tesseract OCR engine + language data are served from the same origin.
 - **CSP + isolation headers.** Content-Security-Policy and COOP/COEP/CORP configured for production (see `vercel.json`).
 - **Processing proof.** The app displays CPU timing after each detection to verify local execution.
 
@@ -259,13 +297,13 @@ Requirements:
 
 - Production domain and metadata must remain `https://anonymizer.web3privacy.info`
 - Serve `.mjs` as `application/javascript`
-- Ensure `public/models/` and `public/onnx/` assets are included in the deployment
+- Ensure `public/models/`, `public/onnx/`, `public/tesseract/`, and `public/worklets/` assets are included in the deployment
 - Headers (configured in `vercel.json`):
   - `Cross-Origin-Opener-Policy: same-origin`
   - `Cross-Origin-Embedder-Policy: require-corp`
   - `Cross-Origin-Resource-Policy: same-origin`
   - `Content-Security-Policy` (see `vercel.json`)
-- Apply the same headers to ONNX and WASM assets under `/onnx/` and `/models/`
+- Apply the same headers to model/WASM/OCR assets under `/onnx/`, `/models/`, and `/tesseract/`
 - Treat tracked `dist/` files as release artifacts, not source of truth. If `npm run release:audit`
   warns about ignored untracked `dist/assets/*` references, either include the matching build
   artifacts intentionally or deploy from the fresh source build output.
@@ -281,12 +319,16 @@ See [docs/RUNTIME_AND_PRIVACY.md](./docs/RUNTIME_AND_PRIVACY.md) for a fuller ru
 | [React 18](https://react.dev) | MIT | UI framework |
 | [Vite 5](https://vitejs.dev) | MIT | Build tool |
 | [TypeScript](https://typescriptlang.org) | Apache 2.0 | Type safety |
-| [ONNX Runtime Web](https://github.com/microsoft/onnxruntime) | MIT | Browser-side YuNet inference (WebAssembly) |
-| [OpenCV YuNet](https://github.com/opencv/opencv) | Apache 2.0 | Server face detection |
+| [ONNX Runtime Web](https://github.com/microsoft/onnxruntime) | MIT | Browser-side YuNet + YOLO inference (WebAssembly) |
+| [Tesseract.js](https://github.com/naptha/tesseract.js) | Apache 2.0 | On-device OCR for sensitive-text detection (self-hosted) |
+| [pdf.js (`pdfjs-dist`)](https://github.com/mozilla/pdf.js) | Apache 2.0 | PDF parsing + page rendering for document mode |
+| [jsPDF](https://github.com/parallax/jsPDF) | MIT | Flattened (redacted) PDF export |
+| [OpenCV YuNet](https://github.com/opencv/opencv) | Apache 2.0 | Server face detection (optional backend) |
 | [imagetracer.js](https://github.com/nicholasgasior/imagetracerjs) | MIT | Raster → SVG vectorization |
 | [nodeca/pica](https://github.com/nodeca/pica) | MIT | High-quality image resizing |
 | [smartcrop.js](https://github.com/jwagner/smartcrop.js) | MIT | Content-aware crop |
 | [img-halftone](https://github.com/9am/img-halftone) | MIT | Halftone canvas effect |
+| [mp4-muxer / webm-muxer](https://github.com/Vanilagy) | MIT | In-browser video (re)muxing on export |
 | [JSZip](https://github.com/Stuk/jszip) | MIT/GPL | ZIP archive creation |
 | [FileSaver.js](https://github.com/eligrey/FileSaver.js) | MIT | File download trigger |
 | [Electron](https://electronjs.org) | MIT | Desktop app shell |

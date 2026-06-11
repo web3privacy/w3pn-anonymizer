@@ -36,6 +36,11 @@ interface EditorActionToolbarProps {
   onExportVideo: () => void
   onExportSvg: () => void
   onExportPhoto: () => void
+  audioExportFormats: { id: string; label: string }[]
+  audioExportFormatId: string
+  setAudioExportFormatId: (id: string) => void
+  onExportAudio: (formatId?: string) => void
+  audioExporting: boolean
 }
 
 const SVG_FORMAT = 'image/svg+xml' as NormalizeFormat
@@ -48,10 +53,20 @@ export function EditorActionToolbar(props: EditorActionToolbarProps) {
     previewFileSizeKb, vectorizePanelOpen, onToggleVectorize, hasSourceVideo, onApplyFrameToVideo, onOpenSourceVideo,
     busy, videoProcessing, videoExportFormat, videoExportOptions, setVideoExportFormat,
     onExportVideo, onExportSvg, onExportPhoto,
+    audioExportFormats, audioExportFormatId, onExportAudio, audioExporting,
   } = props
 
   const filenameTipRef = useRef<HTMLSpanElement>(null)
   const [filenameTipPos, setFilenameTipPos] = useState<{ top: number; left: number } | null>(null)
+  const audioBtnRef = useRef<HTMLButtonElement>(null)
+  // The action toolbar clips overflow, so the download submenu is rendered into a
+  // body portal positioned beneath the button (same pattern as the filename tip).
+  const [audioMenuPos, setAudioMenuPos] = useState<{ top: number; right: number } | null>(null)
+  const toggleAudioMenu = () => {
+    if (audioMenuPos) { setAudioMenuPos(null); return }
+    const r = audioBtnRef.current?.getBoundingClientRect()
+    if (r) setAudioMenuPos({ top: r.bottom + 6, right: Math.max(8, window.innerWidth - r.right) })
+  }
 
   return (
     <div className="action-toolbar">
@@ -83,6 +98,52 @@ export function EditorActionToolbar(props: EditorActionToolbarProps) {
             document.body
           )}
 
+          {activePhoto.isAudio ? (
+            <>
+              <span className="tb-filesize">Voice mask · anonymized download</span>
+              {/* Download is a submenu: the button opens a flyout of codecs and the
+                  chosen format is encoded + saved on click. */}
+              <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.3rem', flexShrink: 0, alignItems: 'center' }}>
+                <button
+                  ref={audioBtnRef}
+                  className="tb-btn"
+                  style={{ background: '#3b5bdb', borderColor: '#3b5bdb', color: '#fff', fontWeight: 600 }}
+                  type="button"
+                  onClick={toggleAudioMenu}
+                  disabled={audioExporting}
+                  title="Download anonymized audio"
+                >
+                  <Icon name="download" size={15} /> {audioExporting ? 'Exporting…' : 'Download'}
+                  <Icon name="expand_more" size={14} />
+                </button>
+                {audioMenuPos && createPortal(
+                  <>
+                    <div className="tb-download-backdrop" onClick={() => setAudioMenuPos(null)} aria-hidden="true" />
+                    <div
+                      className="tb-download-menu"
+                      role="menu"
+                      style={{ position: 'fixed', top: audioMenuPos.top, right: audioMenuPos.right }}
+                    >
+                      <p className="tb-download-menu-title">Download as</p>
+                      {audioExportFormats.map((f) => (
+                        <button
+                          key={f.id}
+                          type="button"
+                          role="menuitem"
+                          className={`tb-download-item${f.id === audioExportFormatId ? ' active' : ''}`}
+                          onClick={() => { setAudioMenuPos(null); onExportAudio(f.id) }}
+                        >
+                          {f.label}
+                        </button>
+                      ))}
+                    </div>
+                  </>,
+                  document.body,
+                )}
+              </div>
+            </>
+          ) : (
+          <>
           <div className="tb-sep" />
 
           {/* Resolution — always-editable inline inputs, resize on blur/Enter */}
@@ -247,6 +308,8 @@ export function EditorActionToolbar(props: EditorActionToolbarProps) {
               <Icon name="download" size={15} /> Download
             </button>
           </div>
+          </>
+          )}
         </>
       ) : (
         <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>

@@ -1,12 +1,16 @@
 import { detectFaces } from './detector'
+import { isLikelyDetection } from './detection-config'
+import { normalizedBoxToPixel, privacyDetectionToZone } from './detections/adapters'
+import { detectImagePrivacyDetections, usesExtendedPrivacyDetection } from './detections/run-image-detection'
 import {
   applyDistortPipeline,
   type DistortEffectId,
   type DistortParams,
 } from './distort-effects'
 import { applyColorAdjustments, applyEffectRect, isColorAdjNoop, pickRandomEmoji, type PixelShiftType } from './effects'
+import type { AudioPrivacyMode } from './audio/audioTypes'
 import type { EffectRenderOptions } from '../types'
-import type { AnonymizeEffectId, ColorAdjustments, CustomImageAsset, CustomImageSource, Zone } from '../types'
+import type { AnonymizeEffectId, ColorAdjustments, CustomImageAsset, CustomImageSource, DetectionCategoryConfig, ModelAvailabilityStatus, Zone } from '../types'
 import { getFrameZonesAtTime, type VideoTrackKeyframe } from './video-timeline-core'
 import { expandTimelineFramesAsync, isVideoTimelineWorkerAvailable } from './video-timeline-client'
 import fixWebmDuration from 'webm-duration-fix'
@@ -33,10 +37,17 @@ export interface VideoProcessingOptions {
   outputFormat?: VideoExportFormatId
   frameOverrides?: VideoFrameOverride[]
   timedZones?: VideoTimedZone[]
+  /** Audio handling during export. Default keep_original. */
+  audioPrivacyMode?: AudioPrivacyMode
   /** Global color adjustments applied after anonymization on non-override frames. */
   colorAdj?: ColorAdjustments
   /** Global distort filter applied after color adjustments on non-override frames. */
   distort?: VideoDistortOptions
+  /** Optional multi-target detection (YOLO). Face-only when omitted or no extended targets enabled. */
+  detectionConfig?: DetectionCategoryConfig[]
+  modelStatus?: Record<string, ModelAvailabilityStatus>
+  detectConfidence?: number
+  enabledClasses?: string[]
   onProgress?: (current: number, total: number) => void
   onPhase?: (phase: VideoProcessingPhase) => void
   onRenderFrame?: (info: { frameIndex: number; totalFrames: number; canvas: HTMLCanvasElement; mediaTime: number }) => void
@@ -118,8 +129,6 @@ const TRACK_KEEPALIVE_SEC = 0.4
 const TRACK_SMOOTHING = 0.34
 const VIDEO_ZONE_PADDING = 0.46
 const VIDEO_DETECTION_PREROLL_SEC = 0.16
-const VIDEO_MIN_FACE_SCORE = 0.58
-const VIDEO_MAX_FACE_REL_AREA = 0.14
 const VIDEO_TRACK_CONFIRM_HITS = 2
 const VIDEO_MIN_BLUR_STRENGTH = 0.55
 
@@ -482,7 +491,9 @@ async function encodeVideoTrackFrameByFrame(
     framerate: fps,
   })
 
-  const audioPromise = encodeAudioTrackFromSource(sourceUrl, sink, options.abortSignal)
+  const audioPromise = options.audioPrivacyMode === 'remove_audio'
+    ? Promise.resolve()
+    : encodeAudioTrackFromSource(sourceUrl, sink, options.abortSignal)
 
   let prevTimestampUs = -1
   try {
@@ -589,7 +600,9 @@ async function encodeViaRecorderReplay(
   const capture = createCanvasStream(canvas, fps)
   const composedStream = new MediaStream()
   composedStream.addTrack(capture.videoTrack)
-  getCaptureStream(audioVideo)?.getAudioTracks().forEach((track) => composedStream.addTrack(track))
+  if (options.audioPrivacyMode !== 'remove_audio') {
+    getCaptureStream(audioVideo)?.getAudioTracks().forEach((track) => composedStream.addTrack(track))
+  }
 
   const recorder = new MediaRecorder(composedStream, {
     mimeType: recorderFormat.mimeType,
@@ -663,7 +676,7 @@ export function videoZoneStrength(zone: Zone, strength: number): number {
   if (zone.effect === 'blur' || zone.effect === 'zoom-blur') {
     return Math.min(1, Math.max(base, VIDEO_MIN_BLUR_STRENGTH) * (1.35 + foregroundBoost * 1.7))
   }
-  if (zone.effect === 'pixelate' || zone.effect === 'noise' || zone.effect === 'static') {
+  if (zone.effect === 'pixelate' || zone.effect === 'noise') {
     return Math.min(1, base * (1.05 + foregroundBoost * 0.35))
   }
   return Math.min(1, base)
@@ -768,18 +781,6 @@ function faceToZone(
   }
 }
 
-function isLikelyVideoFace(face: { width: number; height: number; score?: number }, w: number, h: number): boolean {
-  const score = face.score ?? 1
-  const aspect = face.width / Math.max(1, face.height)
-  const relativeArea = (face.width * face.height) / Math.max(1, w * h)
-  return (
-    score >= VIDEO_MIN_FACE_SCORE &&
-    aspect >= 0.55 &&
-    aspect <= 1.55 &&
-    relativeArea >= 0.00008 &&
-    relativeArea <= VIDEO_MAX_FACE_REL_AREA
-  )
-}
 
 function filterVideoDetections(
   detections: Zone[],
@@ -1383,31 +1384,93 @@ export async function processVideo(
     const totalWork = sampleTimes.length + totalFrames
 
     options.onPhase?.('analyzing')
+    const useExtended = options.detectionConfig && options.modelStatus
+      && usesExtendedPrivacyDetection(options.detectionConfig, options.modelStatus, options.enabledClasses)
+
     for (let i = 0; i < sampleTimes.length; i++) {
       if (options.abortSignal?.aborted) throw new DOMException('Aborted', 'AbortError')
       const sampleTime = sampleTimes[i]
       await waitForSeek(video, sampleTime)
       detectCtx.clearRect(0, 0, detectW, detectH)
       detectCtx.drawImage(video, 0, 0, detectW, detectH)
-      const faces = await detectFaces(detectCanvas, true)
-      const rawDetections = faces.filter((face) => isLikelyVideoFace(face, detectW, detectH)).map((face) => faceToZone(
-        {
-          x: face.x / detectScale,
-          y: face.y / detectScale,
-          width: face.width / detectScale,
-          height: face.height / detectScale,
-        },
-        w,
-        h,
-        options.effect,
-        options.emoji,
-      ))
-      const detections = filterVideoDetections(rawDetections, tracks)
-      tracks = stabilizeTracks(tracks, detections, sampleTime, nextTrackId, nextTrackEmoji)
-      const zones = predictTrackZones(
-        tracks.filter((track) => track.confirmed && track.missed === 0),
-        sampleTime,
-      ).map(cloneZone)
+
+      let trackedFaceZones: Zone[] = []
+      let staticZones: Zone[] = []
+
+      if (useExtended) {
+        const { detections } = await detectImagePrivacyDetections(detectCanvas, {
+          detectionConfig: options.detectionConfig!,
+          modelStatus: options.modelStatus!,
+          confidence: options.detectConfidence ?? 0.65,
+          thorough: true,
+          robust: true,
+          enabledClasses: options.enabledClasses,
+        })
+        const faceBoxes = detections
+          .filter((d) => d.type === 'face')
+          .map((d) => {
+            const px = normalizedBoxToPixel(d.bbox, detectW, detectH)
+            return { ...px, score: d.confidence }
+          })
+          .filter((face) => isLikelyDetection(face, 'face', detectW, detectH))
+        const rawFaceZones = faceBoxes.map((face) => faceToZone(
+          {
+            x: face.x / detectScale,
+            y: face.y / detectScale,
+            width: face.width / detectScale,
+            height: face.height / detectScale,
+          },
+          w,
+          h,
+          options.effect,
+          options.fixedEmoji ?? options.emoji,
+        ))
+        const faceZones = filterVideoDetections(rawFaceZones, tracks)
+        tracks = stabilizeTracks(tracks, faceZones, sampleTime, nextTrackId, nextTrackEmoji)
+        trackedFaceZones = predictTrackZones(
+          tracks.filter((track) => track.confirmed && track.missed === 0),
+          sampleTime,
+        ).map(cloneZone)
+
+        staticZones = detections
+          .filter((d) => d.type !== 'face')
+          .filter((d) => {
+            const px = normalizedBoxToPixel(d.bbox, detectW, detectH)
+            return isLikelyDetection({ ...px, score: d.confidence }, d.type, detectW, detectH)
+          })
+          .map((det) => privacyDetectionToZone(det, {
+            config: options.detectionConfig!,
+            globalEffect: options.effect,
+            emoji: nextTrackEmoji(),
+            faceOffsetPercent: 0,
+            imageW: w,
+            imageH: h,
+          }))
+      } else {
+        const faces = await detectFaces(detectCanvas, true)
+        const rawDetections = faces
+          .filter((face) => isLikelyDetection(face, 'face', detectW, detectH))
+          .map((face) => faceToZone(
+            {
+              x: face.x / detectScale,
+              y: face.y / detectScale,
+              width: face.width / detectScale,
+              height: face.height / detectScale,
+            },
+            w,
+            h,
+            options.effect,
+            options.fixedEmoji ?? options.emoji,
+          ))
+        const detections = filterVideoDetections(rawDetections, tracks)
+        tracks = stabilizeTracks(tracks, detections, sampleTime, nextTrackId, nextTrackEmoji)
+        trackedFaceZones = predictTrackZones(
+          tracks.filter((track) => track.confirmed && track.missed === 0),
+          sampleTime,
+        ).map(cloneZone)
+      }
+
+      const zones = [...trackedFaceZones, ...staticZones]
       const lastTime = timeline[timeline.length - 1]?.timeSec ?? -1
       const preRollTime = Math.max(0, sampleTime - VIDEO_DETECTION_PREROLL_SEC)
       if (zones.length > 0 && preRollTime > lastTime + 0.001 && preRollTime < sampleTime - 0.001) {
@@ -1573,7 +1636,7 @@ export function isVideoFile(file: File): boolean {
 }
 
 /** Stabilizes video editor preview detections (same filters as export pipeline). */
-export class VideoFaceTrackStabilizer {
+export class VideoDetectionTrackStabilizer {
   private tracks: VideoTrackState[] = []
   private trackSeq = 0
 
@@ -1591,7 +1654,7 @@ export class VideoFaceTrackStabilizer {
     emojiForTrack: () => string,
   ): Zone[] {
     const rawDetections = faces
-      .filter((face) => isLikelyVideoFace(face, frameW, frameH))
+      .filter((face) => isLikelyDetection(face, 'face', frameW, frameH))
       .map((face) => faceToZone(
         { x: face.x, y: face.y, width: face.width, height: face.height },
         frameW,
@@ -1613,3 +1676,6 @@ export class VideoFaceTrackStabilizer {
     ).map(cloneZone)
   }
 }
+
+/** @deprecated Use VideoDetectionTrackStabilizer */
+export const VideoFaceTrackStabilizer = VideoDetectionTrackStabilizer

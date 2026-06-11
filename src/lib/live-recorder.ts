@@ -3,18 +3,34 @@ export class LiveRecorder {
   private chunks: Blob[] = []
   private stream: MediaStream | null = null
 
-  start(canvas: HTMLCanvasElement, fps = 24): boolean {
+  start(canvas: HTMLCanvasElement, fps = 24, audioTrack?: MediaStreamTrack | null): boolean {
     if (this.recorder?.state === 'recording') return true
     this.chunks = []
     try {
       this.stream = canvas.captureStream(fps)
-      const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
-        ? 'video/webm;codecs=vp9'
-        : MediaRecorder.isTypeSupported('video/webm')
-          ? 'video/webm'
-          : ''
+      // Mix the live microphone track in so the capture carries audio. The track
+      // is cloned so stopping the recorder never kills the live preview's mic.
+      const hasAudio = !!audioTrack && audioTrack.readyState === 'live'
+      if (hasAudio) this.stream.addTrack(audioTrack!.clone())
+      const mime = hasAudio
+        ? (MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')
+          ? 'video/webm;codecs=vp9,opus'
+          : MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus')
+            ? 'video/webm;codecs=vp8,opus'
+            : MediaRecorder.isTypeSupported('video/webm')
+              ? 'video/webm'
+              : '')
+        : (MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
+          ? 'video/webm;codecs=vp9'
+          : MediaRecorder.isTypeSupported('video/webm')
+            ? 'video/webm'
+            : '')
       this.recorder = mime
-        ? new MediaRecorder(this.stream, { mimeType: mime })
+        ? new MediaRecorder(this.stream, {
+          mimeType: mime,
+          audioBitsPerSecond: 128_000,
+          videoBitsPerSecond: 4_000_000,
+        })
         : new MediaRecorder(this.stream)
       this.recorder.ondataavailable = (e) => {
         if (e.data.size > 0) this.chunks.push(e.data)

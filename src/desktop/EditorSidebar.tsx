@@ -7,6 +7,7 @@ interface EditorSidebarProps {
   displayedPhotos: PhotoItem[]
   activePhotoId: string | null
   dirtyByPhoto: Record<string, boolean>
+  anonymizedPhotoIds: Set<string>
   sidebarWidth: number
   sidebarView: 'grid' | 'list'
   setSidebarView: (v: 'grid' | 'list') => void
@@ -39,7 +40,7 @@ interface EditorSidebarProps {
 /** Desktop left sidebar: add/batch controls, folder tree, photo list, batch process bar. */
 export function EditorSidebar(props: EditorSidebarProps) {
   const {
-    photos, displayedPhotos, activePhotoId, dirtyByPhoto, sidebarWidth, sidebarView, setSidebarView,
+    photos, displayedPhotos, activePhotoId, dirtyByPhoto, anonymizedPhotoIds, sidebarWidth, sidebarView, setSidebarView,
     batchPanelOpen, setBatchPanelOpen, busy, onAddFiles, folderTree, currentFolderPrefix, setCurrentFolderPrefix,
     folderTreeOpen, setFolderTreeOpen, selectedForBatch, setSelectedForBatch, selectPhoto, selectAllForBatch,
     deselectAllForBatch, toggleBatchSelect, rotatePhoto, deletePhoto, hasMorePhotosToRender, setPhotoListLimit,
@@ -121,17 +122,14 @@ export function EditorSidebar(props: EditorSidebarProps) {
                       key={fullPath}
                       className="folder-node"
                       type="button"
-                      title={hasSubFolders ? `Open ${seg}` : `Select ${ids.length} photos in ${seg}`}
+                      title={`Show ${ids.length} item${ids.length === 1 ? '' : 's'} in ${seg}`}
                       onClick={() => {
-                        if (hasSubFolders) {
-                          setCurrentFolderPrefix(fullPath)
-                        } else {
-                          if (batchPanelOpen) {
-                            setSelectedForBatch((cur) => { const next = new Set(cur); ids.forEach((id) => next.add(id)); return next })
-                          } else {
-                            if (ids[0]) selectPhoto(ids[0])
-                          }
+                        // Always scope the library to the picked folder; in batch
+                        // mode also add its items to the current selection.
+                        if (batchPanelOpen) {
+                          setSelectedForBatch((cur) => { const next = new Set(cur); ids.forEach((id) => next.add(id)); return next })
                         }
+                        setCurrentFolderPrefix(fullPath)
                       }}
                     >
                       <span className="fn-icon"><Icon name={hasSubFolders ? 'folder' : 'folder_open'} size={14} /></span>
@@ -167,10 +165,11 @@ export function EditorSidebar(props: EditorSidebarProps) {
       <div className={`photo-list ${sidebarView === 'grid' ? 'grid-mode' : ''}`}>
         {displayedPhotos.map((photo) => {
           const isEdited = photo.edited || dirtyByPhoto[photo.id]
+          const isAnonymized = anonymizedPhotoIds.has(photo.id)
           return (
             <div
               key={photo.id}
-              className={`photo-item ${photo.id === activePhotoId ? 'active' : ''} ${batchPanelOpen && selectedForBatch.has(photo.id) ? 'batch-selected' : ''}`}
+              className={`photo-item ${photo.id === activePhotoId ? 'active' : ''} ${batchPanelOpen && selectedForBatch.has(photo.id) ? 'batch-selected' : ''}${isAnonymized ? ' anonymized' : ''}`}
               onClick={() => selectPhoto(photo.id)}
               title={photo.name}
               role="button"
@@ -192,7 +191,14 @@ export function EditorSidebar(props: EditorSidebarProps) {
               {photo.isVideo && (
                 <div className="photo-video-badge" title="Video">▶</div>
               )}
-              {sidebarView === 'grid' ? (
+              {photo.isDocument && (
+                <div className="photo-video-badge" title="Document">{(photo.documentKind ?? 'doc').toUpperCase()}</div>
+              )}
+              {photo.isDocument || photo.isAudio ? (
+                <div className={`photo-item-media-placeholder${sidebarView === 'grid' ? '' : ' photo-item-thumb'}`}>
+                  <Icon name={photo.isDocument ? 'description' : 'graphic_eq'} size={sidebarView === 'grid' ? 30 : 20} />
+                </div>
+              ) : sidebarView === 'grid' ? (
                 <img src={photo.previewUrl} alt={photo.name} loading="lazy" />
               ) : (
                 <img
@@ -213,15 +219,17 @@ export function EditorSidebar(props: EditorSidebarProps) {
               </div>
               {/* Hover action buttons */}
               <div className="photo-item-actions" onClick={(e) => e.stopPropagation()}>
-                <button
-                  className="photo-item-action-btn"
-                  type="button"
-                  title="Rotate 90°"
-                  aria-label="Rotate 90°"
-                  onClick={(e) => { e.stopPropagation(); rotatePhoto(photo.id) }}
-                >
-                  <Icon name="rotate_90_degrees_cw" size={13} />
-                </button>
+                {!photo.isDocument && !photo.isAudio && (
+                  <button
+                    className="photo-item-action-btn"
+                    type="button"
+                    title="Rotate 90°"
+                    aria-label="Rotate 90°"
+                    onClick={(e) => { e.stopPropagation(); rotatePhoto(photo.id) }}
+                  >
+                    <Icon name="rotate_90_degrees_cw" size={13} />
+                  </button>
+                )}
                 <button
                   className="photo-item-action-btn photo-item-action-btn--danger"
                   type="button"

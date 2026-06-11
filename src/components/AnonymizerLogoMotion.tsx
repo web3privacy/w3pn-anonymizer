@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { OPTICAL, type OpticalMode } from '../lib/optical-calibration'
 import { loadSpiralLogoPaths, getSpiralLogoPathsCache, type SpiralLogoPaths } from '../lib/spiral-logo-paths'
 import { usePhoneCalibrationChrome } from '../hooks/usePhoneCalibrationChrome'
+import { CalibrationSpiralOverlay } from './CalibrationSpiralOverlay'
 import './anonymizer-logo-motion.css'
 
 const SIZE = 407
@@ -99,6 +100,10 @@ export function AnonymizerLogoMotion({ mode, onActivate, onCancel, className = '
   const [svgPaths, setSvgPaths] = useState<SpiralLogoPaths | null>(getSpiralLogoPathsCache())
   const [countdown, setCountdown] = useState(0)
   const [showComplete, setShowComplete] = useState(false)
+  // When the GPU spiral is available it owns the illusion; we then skip the
+  // heavy SVG fallback layers (clipped counter-spirals + per-frame blurred
+  // ghost rings) that caused the stutter, keeping only the center "eye".
+  const [glAvailable, setGlAvailable] = useState(false)
   const phoneChrome = usePhoneCalibrationChrome()
 
   const isActive = mode === 'spinUp' || mode === 'illusion' || mode === 'coolDown'
@@ -403,39 +408,43 @@ export function AnonymizerLogoMotion({ mode, onActivate, onCancel, className = '
 
           {isActive && svgPaths && (
             <g ref={activeWrapRef} className="logo-motion-active-wrap">
-              <g
-                ref={outerRef}
-                className="logo-motion-layer-outer"
-                style={{ transformOrigin: `${CX}px ${CY}px` }}
-                clipPath="url(#lm-clip-outer)"
-              >
-                {spiralOnly}
-              </g>
+              {!glAvailable && (
+                <>
+                  <g
+                    ref={outerRef}
+                    className="logo-motion-layer-outer"
+                    style={{ transformOrigin: `${CX}px ${CY}px` }}
+                    clipPath="url(#lm-clip-outer)"
+                  >
+                    {spiralOnly}
+                  </g>
 
-              <g
-                ref={innerRef}
-                className="logo-motion-layer-inner"
-                style={{ transformOrigin: `${CX}px ${CY}px` }}
-                clipPath="url(#lm-clip-inner)"
-              >
-                {spiralOnly}
-              </g>
+                  <g
+                    ref={innerRef}
+                    className="logo-motion-layer-inner"
+                    style={{ transformOrigin: `${CX}px ${CY}px` }}
+                    clipPath="url(#lm-clip-inner)"
+                  >
+                    {spiralOnly}
+                  </g>
 
-              <g className="logo-motion-ghost">
-                {Array.from({ length: OPTICAL.ghostRingCount }, (_, i) => (
-                  <circle
-                    key={i}
-                    ref={el => { ghostRefs.current[i] = el }}
-                    cx={CX}
-                    cy={CY}
-                    r={160 + i * 14}
-                    fill="none"
-                    stroke="white"
-                    strokeWidth="0.6"
-                    opacity="0"
-                  />
-                ))}
-              </g>
+                  <g className="logo-motion-ghost">
+                    {Array.from({ length: OPTICAL.ghostRingCount }, (_, i) => (
+                      <circle
+                        key={i}
+                        ref={el => { ghostRefs.current[i] = el }}
+                        cx={CX}
+                        cy={CY}
+                        r={160 + i * 14}
+                        fill="none"
+                        stroke="white"
+                        strokeWidth="0.6"
+                        opacity="0"
+                      />
+                    ))}
+                  </g>
+                </>
+              )}
 
               <g
                 ref={centerRef}
@@ -449,6 +458,7 @@ export function AnonymizerLogoMotion({ mode, onActivate, onCancel, className = '
         </svg>
       </div>
 
+      <CalibrationSpiralOverlay mode={mode} onCancel={onCancel} onAvailability={setGlAvailable} />
       {copyPortal}
       {completePortal}
     </>

@@ -11,10 +11,9 @@ export type AnonymizeEffectId =
   | 'emoji'
   | 'noise'
   | 'glitch'
-  | 'silhouette'
   | 'contour'
   | 'thermal'
-  | 'static'
+  | 'ascii'
   | 'zoom-blur'
   | 'custom-image'
 
@@ -34,12 +33,17 @@ export interface CustomImageAsset {
   imageBitmap?: ImageBitmap
 }
 
+/** Character pool the ASCII effect draws from. */
+export type AsciiCharset = 'all' | 'numbers' | 'letters' | 'other'
+
 export interface EffectRenderOptions {
   customImages?: CustomImageAsset[]
   customImageSource?: CustomImageSource
   customImageAssetId?: string
   zoneId?: string
   seed?: string | number
+  /** ASCII effect: which glyph pool to render from (default 'all'). */
+  asciiCharset?: AsciiCharset
 }
 
 export interface EffectParamMeta {
@@ -72,6 +76,87 @@ export interface FaceBox {
   score?: number
 }
 
+/** Privacy detection category (visual targets). */
+export type PrivacyDetectionType =
+  | 'face'
+  | 'person'
+  | 'license_plate'
+  | 'screen'
+  | 'tattoo'
+  | 'sign'
+  | 'document'
+  | 'pii_text'
+  | 'object'
+  | 'manual_zone'
+
+export type BoundingBox = {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export type PrivacyDetection = {
+  id: string
+  type: PrivacyDetectionType
+  bbox: BoundingBox
+  confidence: number
+  sourceModel: string
+  frameTime?: number
+  color?: string
+  /** Raw model class name for generic 'object' detections (e.g. "car", "dog"),
+   * or the PII subtype for 'pii_text' detections (e.g. "email", "credit_card"). */
+  objectClass?: string
+  /** Optional caption (overrides the derived short label) for the preview overlay. */
+  label?: string
+  locked?: boolean
+  hidden?: boolean
+}
+
+export type DetectionCategoryConfig = {
+  type: PrivacyDetectionType
+  label: string
+  enabled: boolean
+  confidenceThreshold: number
+  color: string
+  effectId?: AnonymizeEffectId
+}
+
+export type DetectorRuntime = 'browser' | 'localhost-backend'
+
+export type DetectorInput = {
+  imageBitmap?: ImageBitmap
+  canvas?: HTMLCanvasElement
+  imageData?: ImageData
+  width: number
+  height: number
+  frameTime?: number
+  /** Force multi-pass YuNet tiling (thorough scan). */
+  robust?: boolean
+  /** Raw YOLO class names to additionally emit as generic 'object' detections. */
+  enabledClasses?: string[]
+}
+
+export type DetectorOutput = {
+  detections: PrivacyDetection[]
+  timings?: Record<string, number>
+  warnings?: string[]
+}
+
+export interface PrivacyDetector {
+  id: string
+  runtime: DetectorRuntime
+  supportedTypes: PrivacyDetectionType[]
+  load(): Promise<void>
+  detect(
+    input: DetectorInput,
+    config: DetectionCategoryConfig[],
+  ): Promise<DetectorOutput>
+  dispose?(): void
+}
+
+export type ModelAvailabilityStatus = 'missing' | 'loading' | 'ready' | 'error'
+
 export interface Zone {
   id: string
   x: number
@@ -87,6 +172,15 @@ export interface Zone {
   detectY?: number
   detectWidth?: number
   detectHeight?: number
+  detectionType?: PrivacyDetectionType
+  /** Raw model class name for generic 'object' detections, or PII subtype for 'pii_text'. */
+  objectClass?: string
+  /** Tiny overlay caption shown on the preview (faces stay unlabeled). */
+  label?: string
+  confidence?: number
+  sourceModel?: string
+  locked?: boolean
+  hidden?: boolean
 }
 
 export interface PhotoItem {
@@ -105,6 +199,15 @@ export interface PhotoItem {
   videoFps?: number
   derivedFromVideoId?: string
   derivedFromVideoTime?: number
+  isAudio?: boolean
+  audioDuration?: number
+  isDocument?: boolean
+  documentKind?: 'pdf' | 'txt' | 'md' | 'docx'
+  /**
+   * For video items: which tracks to keep on export. 'both' keeps video+audio,
+   * 'video' drops the audio, 'audio' treats the clip as audio-only. Defaults to 'both'.
+   */
+  trackMode?: 'both' | 'video' | 'audio'
 }
 
 export interface DetectorStatus {

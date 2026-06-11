@@ -6,7 +6,10 @@ import {
   resolveNextActiveAfterDelete,
   photosNeedingSave,
   selectLibraryExportImages,
+  selectLibraryExportItems,
   buildAnonymizedExportName,
+  buildMediaExportName,
+  libraryItemKind,
   isRasterImageFormat,
   type InputRecord,
 } from './photo-library'
@@ -38,7 +41,7 @@ const photo = (id: string, overrides: Partial<PhotoItem> = {}): PhotoItem => ({
 
 describe('validateRecordsForAdd', () => {
   it('rejects when no records pass media validation', () => {
-    const result = validateRecordsForAdd([record('a.txt', '', 100)], 0)
+    const result = validateRecordsForAdd([record('a.exe', '', 100)], 0)
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.message).toContain('No supported media')
   })
@@ -144,6 +147,48 @@ describe('selectLibraryExportImages', () => {
     const { images, skippedVideos } = selectLibraryExportImages(library, ['img', 'vid'])
     expect(images.map((p) => p.id)).toEqual(['img'])
     expect(skippedVideos).toBe(1)
+  })
+})
+
+describe('selectLibraryExportItems', () => {
+  const library = [
+    photo('img', { name: 'a.jpg' }),
+    photo('vid', { name: 'b.mp4', isVideo: true }),
+    photo('aud', { name: 'c.wav', isAudio: true }),
+    photo('doc', { name: 'd.pdf', isDocument: true, documentKind: 'pdf' }),
+  ]
+
+  it('keeps every media type and counts kinds', () => {
+    const { items, counts } = selectLibraryExportItems(library)
+    expect(items.map((p) => p.id)).toEqual(['img', 'vid', 'aud', 'doc'])
+    expect(counts).toEqual({ image: 1, video: 1, audio: 1, document: 1 })
+  })
+
+  it('respects an optional id filter', () => {
+    const { items, counts } = selectLibraryExportItems(library, ['vid', 'doc'])
+    expect(items.map((p) => p.id)).toEqual(['vid', 'doc'])
+    expect(counts).toEqual({ image: 0, video: 1, audio: 0, document: 1 })
+  })
+})
+
+describe('libraryItemKind', () => {
+  it('classifies each media type', () => {
+    expect(libraryItemKind(photo('a'))).toBe('image')
+    expect(libraryItemKind(photo('b', { isVideo: true }))).toBe('video')
+    expect(libraryItemKind(photo('c', { isAudio: true }))).toBe('audio')
+    expect(libraryItemKind(photo('d', { isDocument: true }))).toBe('document')
+  })
+})
+
+describe('buildMediaExportName', () => {
+  it('preserves extension and tags anonymized outputs', () => {
+    expect(buildMediaExportName(photo('v', { name: 'clip.mp4', isVideo: true, edited: true }))).toBe('clip-anon.mp4')
+  })
+  it('omits the -anon suffix for untouched items and strips the path', () => {
+    expect(buildMediaExportName(photo('a', { name: 'folder/talk.wav', isAudio: true }))).toBe('talk.wav')
+  })
+  it('falls back to the mime type when the name has no extension', () => {
+    expect(buildMediaExportName(photo('v', { name: 'clip', isVideo: true, blob: new Blob([], { type: 'video/webm' }) }))).toBe('clip.webm')
   })
 })
 

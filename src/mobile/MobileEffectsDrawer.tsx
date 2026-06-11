@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Icon } from '../components/Icon'
 import { CustomImagePickerPanel } from '../components/CustomImagePickerPanel'
 import { EmojiPickerPanel } from '../components/EmojiPickerPanel'
+import { AsciiCharsetPicker } from '../components/AsciiCharsetPicker'
 import { EFFECTS } from '../lib/effects'
 import type { AppMobileBindings, EffectPickerSnapshot } from './bindings'
 import { MobileToolDrawer } from './MobileToolDrawer'
@@ -11,7 +12,7 @@ import type { CustomImageSource } from '../types'
 
 const EFFECTS_SLIDE_MS = 220
 
-type EffectsSubView = 'emoji' | 'custom-image' | 'vectorize'
+type EffectsSubView = 'emoji' | 'custom-image' | 'ascii' | 'vectorize'
 
 interface MobileEffectsDrawerProps {
   b: AppMobileBindings
@@ -25,6 +26,12 @@ export function MobileEffectsDrawer({ b, liveMode = false }: MobileEffectsDrawer
   const [slideToSub, setSlideToSub] = useState(false)
   const slideTimerRef = useRef<ReturnType<typeof setTimeout>>()
   const pickerSnapshotRef = useRef<EffectPickerSnapshot | null>(null)
+  // Remember which picker the drawer was last left in so reopening returns there
+  // (e.g. straight back to the Emoji/Custom-image grid instead of the effect
+  // list). Reset to null whenever the user backs out to the effect list or
+  // picks a non-picker effect.
+  const lastSubViewRef = useRef<EffectsSubView | null>(null)
+  const wasOpenRef = useRef(false)
 
   const [emojiDraft, setEmojiDraft] = useState({ emojiRandom: true, selectedEmoji: null as string | null })
   const [customImageDraft, setCustomImageDraft] = useState({
@@ -86,7 +93,7 @@ export function MobileEffectsDrawer({ b, liveMode = false }: MobileEffectsDrawer
   const previewPickerEffect = useCallback((effect: 'emoji' | 'custom-image') => {
     if (liveMode || videoEditor) {
       b.setSelectedEffect(effect)
-    } else if (b.activeZones.length > 0) {
+    } else {
       b.setEffectToolCustomized(true)
       b.updateSelectedZoneEffect(effect)
     }
@@ -99,6 +106,7 @@ export function MobileEffectsDrawer({ b, liveMode = false }: MobileEffectsDrawer
   }, [b])
 
   const openEmojiPicker = useCallback(() => {
+    lastSubViewRef.current = 'emoji'
     pickerSnapshotRef.current = buildPickerSnapshot()
     const draft = { emojiRandom: b.emojiRandom, selectedEmoji: b.selectedEmoji }
     setEmojiDraft(draft)
@@ -108,6 +116,7 @@ export function MobileEffectsDrawer({ b, liveMode = false }: MobileEffectsDrawer
   }, [b.emojiRandom, b.selectedEmoji, buildPickerSnapshot, openSubView, previewPickerEffect, syncEmojiPreview])
 
   const openCustomImagePicker = useCallback(() => {
+    lastSubViewRef.current = 'custom-image'
     pickerSnapshotRef.current = buildPickerSnapshot()
     const draft = {
       customImageRandom: b.customImageRandom,
@@ -128,8 +137,20 @@ export function MobileEffectsDrawer({ b, liveMode = false }: MobileEffectsDrawer
     syncCustomImagePreview,
   ])
 
+  const openAsciiPicker = useCallback(() => {
+    lastSubViewRef.current = 'ascii'
+    if (liveMode || videoEditor) {
+      b.setSelectedEffect('ascii')
+    } else {
+      b.setEffectToolCustomized(true)
+      b.updateSelectedZoneEffect('ascii')
+    }
+    openSubView('ascii')
+  }, [b, liveMode, videoEditor, openSubView])
+
   const backToEffects = useCallback(() => {
     clearSlideTimer()
+    lastSubViewRef.current = null
     if (subView === 'vectorize') {
       b.setVectorizePanelOpen(false)
     } else if (subView === 'emoji' || subView === 'custom-image') {
@@ -141,14 +162,21 @@ export function MobileEffectsDrawer({ b, liveMode = false }: MobileEffectsDrawer
   }, [b.setVectorizePanelOpen, clearSlideTimer, revertPickerDraft, subView])
 
   useEffect(() => {
-    if (!open) {
+    if (open && !wasOpenRef.current) {
+      // Drawer just opened: jump back to the picker the user last left it in.
+      const last = lastSubViewRef.current
+      if (last === 'emoji') openEmojiPicker()
+      else if (last === 'custom-image') openCustomImagePicker()
+      else if (last === 'ascii') openAsciiPicker()
+    } else if (!open && wasOpenRef.current) {
       clearSlideTimer()
       setSubView(null)
       setSlideToSub(false)
       pickerSnapshotRef.current = null
       b.setVectorizePanelOpen(false)
     }
-  }, [open, clearSlideTimer, b.setVectorizePanelOpen])
+    wasOpenRef.current = open
+  }, [open, clearSlideTimer, b, openEmojiPicker, openCustomImagePicker, openAsciiPicker])
 
   useEffect(() => () => clearSlideTimer(), [clearSlideTimer])
 
@@ -190,6 +218,13 @@ export function MobileEffectsDrawer({ b, liveMode = false }: MobileEffectsDrawer
       openCustomImagePicker()
       return
     }
+    if (efId === 'ascii') {
+      openAsciiPicker()
+      return
+    }
+    // A direct (non-picker) effect: the drawer's "home" is the effect grid, so
+    // forget any remembered picker.
+    lastSubViewRef.current = null
     if (liveMode || videoEditor) {
       b.setSelectedEffect(efId)
     } else {
@@ -204,9 +239,11 @@ export function MobileEffectsDrawer({ b, liveMode = false }: MobileEffectsDrawer
     ? 'EMOJI'
     : subView === 'custom-image'
       ? 'CUSTOM IMAGE'
-      : subView === 'vectorize'
-        ? 'VECTORIZE'
-        : (liveMode ? 'CHOOSE EFFECT' : 'Effects')
+      : subView === 'ascii'
+        ? 'ASCII CHARACTERS'
+        : subView === 'vectorize'
+          ? 'VECTORIZE'
+          : (liveMode ? 'CHOOSE EFFECT' : 'Effects')
 
   const showApplyFooter = subView === 'emoji' || subView === 'custom-image'
 
@@ -258,6 +295,7 @@ export function MobileEffectsDrawer({ b, liveMode = false }: MobileEffectsDrawer
                   type="button"
                   className={`ts-effect-tile${b.vectorizePanelOpen ? ' active' : ''}`}
                   onClick={() => {
+                    lastSubViewRef.current = null
                     b.setVectorizePanelOpen(true)
                     openSubView('vectorize')
                   }}
@@ -313,6 +351,8 @@ export function MobileEffectsDrawer({ b, liveMode = false }: MobileEffectsDrawer
                 onUpload={b.openCustomImagePicker}
                 sourceMenuVariant="sheet"
               />
+            ) : subView === 'ascii' ? (
+              <AsciiCharsetPicker charset={b.asciiCharset} onChange={b.setAsciiCharset} />
             ) : subView === 'vectorize' ? (
               <MobileVectorizePanel b={b} />
             ) : (

@@ -160,6 +160,9 @@ export function MobileDistortDrawer({ b, liveMode = false }: MobileDistortDrawer
   const [settingsView, setSettingsView] = useState<DistortEffectId | null>(null)
   const [slideToSettings, setSlideToSettings] = useState(false)
   const slideTimerRef = useRef<ReturnType<typeof setTimeout>>()
+  // Remember the settings sub-view so reopening the drawer returns to it.
+  const lastSettingsRef = useRef<DistortEffectId | null>(null)
+  const wasOpenRef = useRef(false)
 
   const clearSlideTimer = useCallback(() => {
     if (slideTimerRef.current) {
@@ -170,6 +173,7 @@ export function MobileDistortDrawer({ b, liveMode = false }: MobileDistortDrawer
 
   const openSettings = useCallback((id: DistortEffectId) => {
     clearSlideTimer()
+    lastSettingsRef.current = id
     setSettingsView(id)
     setSlideToSettings(false)
     requestAnimationFrame(() => {
@@ -179,17 +183,21 @@ export function MobileDistortDrawer({ b, liveMode = false }: MobileDistortDrawer
 
   const backToList = useCallback(() => {
     clearSlideTimer()
+    lastSettingsRef.current = null
     setSlideToSettings(false)
     slideTimerRef.current = setTimeout(() => setSettingsView(null), DISTORT_SLIDE_MS)
   }, [clearSlideTimer])
 
   useEffect(() => {
-    if (!open) {
+    if (open && !wasOpenRef.current) {
+      if (lastSettingsRef.current) openSettings(lastSettingsRef.current)
+    } else if (!open && wasOpenRef.current) {
       clearSlideTimer()
       setSettingsView(null)
       setSlideToSettings(false)
     }
-  }, [open, clearSlideTimer])
+    wasOpenRef.current = open
+  }, [open, clearSlideTimer, openSettings])
 
   useEffect(() => () => clearSlideTimer(), [clearSlideTimer])
 

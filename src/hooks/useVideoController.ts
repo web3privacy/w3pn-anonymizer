@@ -115,8 +115,12 @@ export interface UseVideoControllerOptions {
   adjPixelShiftType: 'wave' | 'shear' | 'ripple' | 'mirror'
   detectSensitivity: number
   detectFaceOffset: number
+  detectionConfig: import('../types').DetectionCategoryConfig[]
+  modelStatus: Record<string, import('../types').ModelAvailabilityStatus>
+  enabledClasses: string[]
   autoDetect: boolean
   detector: import('../types').DetectorStatus
+  audioSettings: import('../lib/audio/audioTypes').AudioEffectSettings
   resolveEmoji: () => string
   resolveCustomImageAssetId: (seed: string | number) => string | undefined
   customEffectOptions: (
@@ -254,8 +258,12 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
     adjPixelShiftType,
     detectSensitivity,
     detectFaceOffset,
+    detectionConfig,
+    modelStatus,
+    enabledClasses,
     autoDetect,
     detector,
+    audioSettings,
     resolveEmoji,
     resolveCustomImageAssetId,
     customEffectOptions,
@@ -298,6 +306,8 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
   const pendingVideoSeekRef = useRef<number | null>(null)
   const [videoPreviewFaceZones, setVideoPreviewFaceZones] = useState<Zone[]>([])
   const [videoPlaying, setVideoPlaying] = useState(false)
+  const videoPlayingRef = useRef(false)
+  const playbackFaceDetectLastRef = useRef(0)
   const [videoContentLayout, setVideoContentLayout] = useState<VideoContentLayout | null>(null)
   const [videoReadyTick, setVideoReadyTick] = useState(0)
   const [processedVideoEpoch, setProcessedVideoEpoch] = useState(0)
@@ -308,6 +318,7 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
   const videoProcessingRef = useRef(false)
 
   useEffect(() => { activeVideoTimeRef.current = activeVideoTime }, [activeVideoTime])
+  useEffect(() => { videoPlayingRef.current = videoPlaying }, [videoPlaying])
   videoPreviewFaceZonesRef.current = videoPreviewFaceZones
   videoContentLayoutRef.current = videoContentLayout
   videoProcessingRef.current = videoProcessing
@@ -565,6 +576,11 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
         timedZones,
         colorAdj: videoColorAdj,
         distort: videoDistort,
+        audioPrivacyMode: audioSettings.mode,
+        detectionConfig,
+        modelStatus,
+        enabledClasses,
+        detectConfidence: 0.7 - (detectSensitivity / 100) * 0.4,
         onPhase: (phase) => setVideoProgress((prev) => ({
           current: prev?.current ?? 0,
           total: prev?.total ?? 1,
@@ -1039,42 +1055,6 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
     autoDetect,
   ])
 
-  useEffect(() => {
-    const video = activeVideoRef.current
-    const photo = activePhoto
-    if (!video || !photo?.isVideo || photo.edited || videoProcessing || !videoPlaying) return
-
-    let cancelled = false
-    let callbackId = 0
-
-    const onFrame = (_now: number, metadata: VideoFrameCallbackMetadata) => {
-      if (cancelled || video.paused || video.ended) return
-      activeVideoTimeRef.current = metadata.mediaTime
-      void refreshVideoFramePreview()
-      if (typeof video.requestVideoFrameCallback === 'function') {
-        callbackId = video.requestVideoFrameCallback(onFrame)
-      }
-    }
-
-    if (typeof video.requestVideoFrameCallback === 'function') {
-      callbackId = video.requestVideoFrameCallback(onFrame)
-    }
-
-    return () => {
-      cancelled = true
-      if (callbackId && typeof video.cancelVideoFrameCallback === 'function') {
-        video.cancelVideoFrameCallback(callbackId)
-      }
-    }
-  }, [
-    videoPlaying,
-    activePhoto?.id,
-    activePhoto?.isVideo,
-    activePhoto?.edited,
-    videoProcessing,
-    refreshVideoFramePreview,
-  ])
-
   const runVideoFaceDetectPass = useCallback(async (passIndex: number, targetTime: number, gen: number) => {
     const video = activeVideoRef.current
     if (!video || video.videoWidth <= 0 || video.videoHeight <= 0) return
@@ -1086,13 +1066,21 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
         videoFaceDetectCanvasRef.current = document.createElement('canvas')
       }
       const capture = videoFaceDetectCanvasRef.current
-      capture.width = video.videoWidth
-      capture.height = video.videoHeight
+      const playbackMode = videoPlayingRef.current
+      const srcW = video.videoWidth
+      const srcH = video.videoHeight
+      const maxDim = playbackMode ? 640 : Math.max(srcW, srcH)
+      const scale = Math.min(1, maxDim / Math.max(srcW, srcH))
+      capture.width = Math.max(1, Math.round(srcW * scale))
+      capture.height = Math.max(1, Math.round(srcH * scale))
       const captureCtx = capture.getContext('2d')
       if (!captureCtx) return
       captureCtx.drawImage(video, 0, 0, capture.width, capture.height)
-      const { confidence, thorough } = getVideoDetectSettings(detectSensitivity, passIndex)
-      const boxes = await detectFaces(capture, thorough, confidence)
+      const { confidence, thorough } = getVideoDetectSettings(
+        detectSensitivity,
+        playbackMode ? 0 : passIndex,
+      )
+      const boxes = await detectFaces(capture, playbackMode ? false : thorough, confidence)
       if (gen !== videoFaceDetectGenRef.current) return
       if (Math.abs(video.currentTime - targetTime) > 0.12) return
       const W = capture.width
@@ -1140,6 +1128,49 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
   }, [activePhotoId, detectSensitivity, refreshVideoFramePreview, resolveCustomImageAssetId, selectedEffect, emojiRandomRef, selectedEmojiRef])
 
   useEffect(() => {
+    const video = activeVideoRef.current
+    const photo = activePhoto
+    if (!video || !photo?.isVideo || photo.edited || videoProcessing || !videoPlaying) return
+
+    let cancelled = false
+    let callbackId = 0
+
+    const onFrame = (_now: number, metadata: VideoFrameCallbackMetadata) => {
+      if (cancelled || video.paused || video.ended) return
+      activeVideoTimeRef.current = metadata.mediaTime
+      const now = performance.now()
+      if (now - playbackFaceDetectLastRef.current > 380) {
+        playbackFaceDetectLastRef.current = now
+        const gen = ++videoFaceDetectGenRef.current
+        void runVideoFaceDetectPass(0, metadata.mediaTime, gen)
+      }
+      void refreshVideoFramePreview()
+      if (typeof video.requestVideoFrameCallback === 'function') {
+        callbackId = video.requestVideoFrameCallback(onFrame)
+      }
+    }
+
+    if (typeof video.requestVideoFrameCallback === 'function') {
+      callbackId = video.requestVideoFrameCallback(onFrame)
+    }
+
+    return () => {
+      cancelled = true
+      if (callbackId && typeof video.cancelVideoFrameCallback === 'function') {
+        video.cancelVideoFrameCallback(callbackId)
+      }
+    }
+  }, [
+    videoPlaying,
+    activePhoto?.id,
+    activePhoto?.isVideo,
+    activePhoto?.edited,
+    videoProcessing,
+    refreshVideoFramePreview,
+    runVideoFaceDetectPass,
+  ])
+
+  useEffect(() => {
     videoFaceScanTimersRef.current.forEach(clearTimeout)
     videoFaceScanTimersRef.current = []
     if (videoFaceDetectDebounceRef.current) clearTimeout(videoFaceDetectDebounceRef.current)
@@ -1160,13 +1191,15 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
 
     void runVideoFaceDetectPass(0, targetTime, gen)
 
-    for (let passIndex = 1; passIndex <= VIDEO_FACE_SCAN_MAX_PASSES; passIndex += 1) {
-      const timer = setTimeout(() => {
-        if (gen !== videoFaceDetectGenRef.current) return
-        if (Math.round(activeVideoTimeRef.current * 1000) !== frameKey) return
-        void runVideoFaceDetectPass(passIndex, targetTime, gen)
-      }, passIndex * 1000)
-      videoFaceScanTimersRef.current.push(timer)
+    if (!videoPlayingRef.current) {
+      for (let passIndex = 1; passIndex <= VIDEO_FACE_SCAN_MAX_PASSES; passIndex += 1) {
+        const timer = setTimeout(() => {
+          if (gen !== videoFaceDetectGenRef.current) return
+          if (Math.round(activeVideoTimeRef.current * 1000) !== frameKey) return
+          void runVideoFaceDetectPass(passIndex, targetTime, gen)
+        }, passIndex * 1000)
+        videoFaceScanTimersRef.current.push(timer)
+      }
     }
 
     return () => {
@@ -1185,6 +1218,7 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
     processedVideoEpoch,
     runVideoFaceDetectPass,
     selectedEffect,
+    videoPlaying,
     videoReadyTick,
   ])
 

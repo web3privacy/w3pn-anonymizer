@@ -140,6 +140,19 @@ try {
     } else fail('zone→pointer: canvas bounding box unavailable')
   } else fail('EditorToolStrip: zone tool button not found')
 
+  // Privacy targets panel in face flyout
+  const faceBtn = page.locator('button[title="Face detection settings"], button[title*="Face"], button[title*="Privacy"]').first()
+  if (await faceBtn.count()) {
+    await faceBtn.click()
+    await page.waitForTimeout(400)
+    const targets = page.locator('.privacy-targets-panel')
+    if (await targets.count()) pass('PrivacyTargetsPanel: visible in face flyout')
+    else fail('PrivacyTargetsPanel: not found in face flyout')
+    await page.keyboard.press('Escape')
+  } else {
+    pass('PrivacyTargetsPanel: face flyout button not found (skipped)')
+  }
+
   const criticalErrors = consoleErrors.filter((e) =>
     !e.includes('favicon') && !e.includes('DevTools') && !e.includes('frame-ancestors')
     && !e.includes('wasm streaming compile failed') && !e.includes('falling back to ArrayBuffer')

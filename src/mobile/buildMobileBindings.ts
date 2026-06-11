@@ -15,6 +15,7 @@ export interface MobileBindingsSource {
   activeZones: AppMobileBindings['activeZones']
   videoPreviewFaceCount: number
   displayedPhotos: AppMobileBindings['displayedPhotos']
+  anonymizedPhotoIds: AppMobileBindings['anonymizedPhotoIds']
   sidebarView: AppMobileBindings['sidebarView']
   selectedForBatch: AppMobileBindings['selectedForBatch']
   setSelectedForBatch: AppMobileBindings['setSelectedForBatch']
@@ -88,12 +89,14 @@ export interface MobileBindingsSource {
   commitMobileExportEdit: AppMobileBindings['commitMobileExportEdit']
   vectorizePanelOpen: boolean
   setVectorizePanelOpen: AppMobileBindings['setVectorizePanelOpen']
+  vectorizePreviewActive: boolean
   vectorizeParams: VectorizeParams
   setVectorizeParams: AppMobileBindings['setVectorizeParams']
   updateVectorizeParam: AppMobileBindings['updateVectorizeParam']
   vectorizing: boolean
   svgPreviewSize: number | null
   exportAsSvg: AppMobileBindings['exportAsSvg']
+  applyVectorizePreview: AppMobileBindings['applyVectorizePreview']
   brushSize: number
   setBrushSize: AppMobileBindings['setBrushSize']
   brushStrength: number
@@ -107,6 +110,8 @@ export interface MobileBindingsSource {
   setSelectedEffect: AppMobileBindings['setSelectedEffect']
   customImageSource: AppMobileBindings['customImageSource']
   setCustomImageSource: AppMobileBindings['setCustomImageSource']
+  asciiCharset: AppMobileBindings['asciiCharset']
+  setAsciiCharset: AppMobileBindings['setAsciiCharset']
   customImageAssets: AppMobileBindings['customImageAssets']
   customImagePresetLoading: boolean
   openCustomImagePicker: AppMobileBindings['openCustomImagePicker']
@@ -129,8 +134,18 @@ export interface MobileBindingsSource {
   setDetectFaceOffset: AppMobileBindings['setDetectFaceOffset']
   detectSensitivity: number
   setDetectSensitivity: AppMobileBindings['setDetectSensitivity']
-  detectThorough: boolean
-  setDetectThorough: AppMobileBindings['setDetectThorough']
+  detectionConfig: AppMobileBindings['detectionConfig']
+  setCategoryEnabled: AppMobileBindings['setCategoryEnabled']
+  setCategoryThreshold: AppMobileBindings['setCategoryThreshold']
+  modelStatus: AppMobileBindings['modelStatus']
+  enabledClasses: AppMobileBindings['enabledClasses']
+  setEnabledClasses: AppMobileBindings['setEnabledClasses']
+  toggleDetectionClass: AppMobileBindings['toggleDetectionClass']
+  lastDetectionCounts: AppMobileBindings['lastDetectionCounts']
+  showDetectionLabels: boolean
+  setShowDetectionLabels: AppMobileBindings['setShowDetectionLabels']
+  audioSettings: AppMobileBindings['audioSettings']
+  setAudioSettings: AppMobileBindings['setAudioSettings']
   eraserActive: boolean
   autoDetect: boolean
   setAutoDetect: AppMobileBindings['setAutoDetect']

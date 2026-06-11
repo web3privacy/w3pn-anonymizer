@@ -9,21 +9,25 @@ interface MobileAboutProps {
 }
 
 const FEATURES = [
-  { icon: 'visibility_off' as const, title: 'Face anonymization', desc: 'Blur, pixelate, or emoji-cover faces' },
-  { icon: 'brush' as const, title: 'Brush & zones', desc: 'Paint or draw on sensitive areas' },
+  { icon: 'visibility_off' as const, title: 'Privacy detection', desc: 'Faces, people, plates, documents, PII text (YuNet + YOLO + OCR)' },
+  { icon: 'grid_on' as const, title: 'Anonymization effects', desc: 'Blur, pixelate, blackout, emoji, ASCII, custom image, glitch, thermal…' },
+  { icon: 'description' as const, title: 'Document mode', desc: 'PDF/TXT redaction — detect, review, export flattened PDF or tokenized text' },
+  { icon: 'graphic_eq' as const, title: 'Audio anonymization', desc: 'Waveform editor with voice-modulation presets and local export' },
+  { icon: 'photo_camera' as const, title: 'Live camera + mic', desc: 'Real-time face masking, video capture, and live voice mask presets' },
   { icon: 'auto_awesome' as const, title: 'Distort FX', desc: 'Halftone, glitch, pixel-shift, color-shift' },
-  { icon: 'tune' as const, title: 'Color grading', desc: 'Brightness, contrast, saturation' },
-  { icon: 'batch_prediction' as const, title: 'Batch export', desc: 'Resize, convert, and anonymize in bulk' },
-  { icon: 'videocam' as const, title: 'Video processing', desc: 'Frame-by-frame local MP4, WebM, MOV' },
+  { icon: 'tune' as const, title: 'Color grading', desc: 'Brightness, contrast, saturation + presets' },
+  { icon: 'batch_prediction' as const, title: 'Batch export', desc: 'Resize, convert, color-grade, and anonymize in bulk' },
+  { icon: 'videocam' as const, title: 'Video processing', desc: 'Frame-by-frame local MP4, WebM, MOV with optional audio masking' },
+  { icon: 'polyline' as const, title: 'SVG vectorize', desc: 'Trace photos to SVG with live preview presets' },
 ]
 
 const LOCAL_ITEMS = [
-  { title: '100% local', desc: 'all processing runs in your browser, no uploads' },
-  { title: 'YuNet WASM detection', desc: 'face detection via ONNX Runtime WebAssembly' },
+  { title: '100% local', desc: 'all processing runs in your browser — no uploads' },
+  { title: 'YuNet + YOLO + OCR', desc: 'face/object detection and sensitive-text OCR via ONNX Runtime WebAssembly + Tesseract.js' },
   { title: 'CPU timing proof', desc: 'shows processing time to verify local execution' },
   { title: 'No analytics, no cookies, no tracking', desc: 'zero third-party network requests' },
-  { title: 'Self-hosted fonts', desc: 'Material Symbols served locally, no Google CDN' },
-  { title: 'Content Security Policy', desc: 'blocks unintended outbound connections' },
+  { title: 'Self-hosted assets', desc: 'fonts, ONNX models, WASM, OCR data, and AudioWorklets served from the same origin' },
+  { title: 'Content Security Policy', desc: 'blocks unintended outbound connections in production' },
 ]
 
 export function MobileAbout({ open, onClose, onFeedback }: MobileAboutProps) {
@@ -62,7 +66,7 @@ export function MobileAbout({ open, onClose, onFeedback }: MobileAboutProps) {
               <a href="https://www.web3privacy.info" target="_blank" rel="noreferrer">Web3Privacy Now</a>.
             </p>
             <p className="mobile-about-desc">
-              Privacy-first image and video anonymization tool. All rendering, export, and face detection run entirely in your browser.
+              Privacy-first anonymization for photos, video, audio, documents, and live camera. Detection, rendering, and export run entirely in your browser.
             </p>
           </div>
 

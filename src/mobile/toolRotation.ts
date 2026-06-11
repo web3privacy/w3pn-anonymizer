@@ -13,7 +13,7 @@ export const CROP_TOOLS: CropToolId[] = ['crop', 'rotate-left', 'rotate-right']
 export const ADJUST_TOOLS: AdjustToolId[] = ['brightness', 'contrast', 'saturation']
 
 export const EFFECT_TOOL_ORDER: AnonymizeEffectId[] = [
-  'pixelate', 'blur', 'blackout', 'emoji', 'custom-image', 'glitch', 'noise', 'silhouette',
+  'pixelate', 'blur', 'blackout', 'emoji', 'custom-image', 'glitch', 'noise', 'ascii',
 ]
 
 export const CATEGORY_ICONS: Record<MobileToolCategory, string> = {

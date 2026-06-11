@@ -25,10 +25,9 @@ export const EFFECT_ICONS: Record<AnonymizeEffectId, string> = {
   emoji: 'mood',
   noise: 'grain',
   glitch: 'auto_fix_high',
-  silhouette: 'person',
   contour: 'pentagon',
   thermal: 'thermostat',
-  static: 'tv',
+  ascii: 'data_array',
   'custom-image': 'image',
 }
 
