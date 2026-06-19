@@ -669,12 +669,12 @@
 }
 
 .mobile-about-feedback {
-  background: none;
-  border: none;
-  color: #fff;
-  text-decoration: underline;
+  background: var(--mobile-accent);
+  border: 1px solid var(--mobile-accent);
+  color: #050805;
+  text-decoration: none;
   font-size: 0.58rem;
-  font-weight: 400;
+  font-weight: 700;
   cursor: pointer;
   margin-bottom: 12px;
 }
@@ -3418,14 +3418,37 @@
   padding: 0 13px;
   border: 1px solid var(--mobile-accent);
   border-radius: 999px;
-  background: transparent;
-  color: var(--mobile-accent);
+  background: var(--mobile-accent);
+  color: #050805;
   text-decoration: none;
   text-transform: uppercase;
   font-size: 0.58rem;
-  font-weight: 500;
+  font-weight: 700;
   letter-spacing: 0.055em;
   margin-bottom: 14px;
+  box-shadow: 0 0 18px rgba(129, 255, 107, 0.22);
+}
+
+.mobile-about-feedback:hover {
+  background: linear-gradient(rgba(0, 0, 0, 0.1), rgba(0, 0, 0, 0.1)), var(--mobile-accent, #00ff78);
+  border-color: var(--mobile-accent, #00ff78);
+  color: #050805;
+}
+
+.mobile-about-feedback,
+.app-shell-mobile .mobile-about-feedback,
+.app-shell-desktop-v2 .mobile-about-feedback {
+  background: var(--mobile-accent, #00ff78);
+  border-color: var(--mobile-accent, #00ff78);
+  color: #050805;
+}
+
+.mobile-about-feedback:hover,
+.app-shell-mobile .mobile-about-feedback:hover,
+.app-shell-desktop-v2 .mobile-about-feedback:hover {
+  background: linear-gradient(rgba(0, 0, 0, 0.1), rgba(0, 0, 0, 0.1)), var(--mobile-accent, #00ff78);
+  border-color: var(--mobile-accent, #00ff78);
+  color: #050805;
 }
 
 @media (max-width: 480px) {
@@ -3591,7 +3614,7 @@
 }
 
 .app-shell-desktop-v2 .mobile-about-hero-logo {
-  height: 42px;
+  height: 21px;
 }
 
 .app-shell-desktop-v2 .mobile-about-intro {

@@ -4004,7 +4004,10 @@ function App() {
         <MobileAbout
           open={aboutOpen}
           onClose={() => setAboutOpen(false)}
-          onFeedback={() => { setFeedbackOpen(true) }}
+          onFeedback={() => {
+            setAboutOpen(false)
+            setFeedbackOpen(true)
+          }}
         />
       )}
 
@@ -4072,7 +4075,7 @@ function App() {
             setFeedbackOpen(false)
             setFeedbackMsg('')
             setFeedbackSubject('')
-            setNotice('Opening mail client…')
+            setNotice('Feedback sent. Thank you.')
           }}
         />
       )}

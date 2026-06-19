@@ -2924,6 +2924,37 @@ input[type="number"].tb-quality-num {
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #0a1a0d;
+}
+
+.feedback-modal-send:hover:not(:disabled) {
+  background: linear-gradient(rgba(0, 0, 0, 0.1), rgba(0, 0, 0, 0.1)), var(--accent);
+  border-color: var(--accent);
+  color: #0a1a0d;
+}
+
+.feedback-modal-status {
+  margin: 0.55rem 0 0;
+  font-size: 0.74rem;
+  line-height: 1.35;
+}
+
+.feedback-modal-status--sent {
+  color: var(--success);
+}
+
+.feedback-modal-status--error {
+  color: var(--danger);
+}
+
+.feedback-modal-technical {
+  margin: 0.25rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.66rem;
+  line-height: 1.35;
+  word-break: break-word;
 }
 
 /* About modal links */
@@ -3896,6 +3927,11 @@ input[type="number"].tb-quality-num {
     border-color: #1f2329;
     color: #ffffff;
     background: #1f2329;
+  }
+  .feedback-modal-send:hover:not(:disabled) {
+    border-color: var(--accent);
+    color: #0a1a0d;
+    background: linear-gradient(rgba(0, 0, 0, 0.1), rgba(0, 0, 0, 0.1)), var(--accent);
   }
   .sidebar-batch-btn:hover:not(:disabled) {
     border-color: #1f2329;

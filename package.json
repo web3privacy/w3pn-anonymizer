@@ -22,6 +22,9 @@
     "desktop:mac": "npm run build && electron-builder --mac",
     "desktop:win": "npm run build && electron-builder --win",
     "desktop:linux": "npm run build && electron-builder --linux",
+    "ios:sync": "npm run build && node scripts/sync-ios-capacitor.mjs",
+    "ios:open": "open ios/App/App.xcodeproj",
+    "ios:run": "npm run ios:sync && open ios/App/App.xcodeproj",
     "icons:download": "node scripts/download-preset-icons.mjs --count=100",
     "icons:download:new": "node scripts/download-preset-icons.mjs --only=aavegotchi,celebrities --count=100",
     "icons:normalize": "node scripts/download-preset-icons.mjs --normalize-existing",
@@ -88,6 +91,8 @@
   },
   "dependencies": {
     "@9am/img-halftone": "^1.0.3",
+    "@capacitor/core": "^7.6.7",
+    "@capacitor/ios": "^7.6.7",
     "@fontsource-variable/archivo": "^5.2.8",
     "browser-image-compression": "^2.0.2",
     "file-saver": "^2.0.5",
@@ -109,6 +114,7 @@
     "protobufjs": "^7.6.2"
   },
   "devDependencies": {
+    "@capacitor/cli": "^7.6.7",
     "@resvg/resvg-js": "^2.6.2",
     "@types/file-saver": "^2.0.7",
     "@types/pica": "^9.0.5",
@@ -122,6 +128,7 @@
     "eslint": "^8.56.0",
     "eslint-plugin-react-hooks": "^4.6.0",
     "eslint-plugin-react-refresh": "^0.4.5",
+    "fs-extra": "^11.3.5",
     "playwright": "^1.60.0",
     "sharp": "^0.34.5",
     "typescript": "^5.2.2",
