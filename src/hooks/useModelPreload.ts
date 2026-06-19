@@ -1,22 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   getPrefetchState,
   subscribePrefetch,
-  startAssetPrefetch,
-  type PrefetchGroup,
   type PrefetchState,
 } from '../lib/asset-prefetch'
+import type { DetectorLoadProgress } from '../lib/detector'
 
 /**
- * Models that back the default privacy session (faces + license plates +
- * sensitive text). Faces (YuNet) load via the detector hook on boot; the rest
- * are warmed here so detection feels instant the moment a mode opens. Heavier
- * opt-in models (COCO / custom) keep streaming in lazily when enabled.
+ * Faces (YuNet) load via the detector hook on boot. Optional YOLO/OCR models
+ * are intentionally not warmed here; they lazy-load only when a user enables
+ * and runs the heavier detection path.
  */
-const DEFAULT_GROUPS: PrefetchGroup[] = ['yolo-license-plate', 'ocr']
-
-/** Hard ceiling so the home screen never feels stuck behind a slow download. */
-const MAX_WAIT_MS = 12_000
 /** If prefetch never leaves idle (nothing to fetch / already cached), settle. */
 const IDLE_SETTLE_MS = 1_400
 
@@ -27,43 +21,64 @@ export interface ModelPreloadStatus {
   pct: number | null
   /** Human-readable label for the current loading step. */
   label: string
+  detail?: string
+}
+
+function modelLoadPercent(progress: DetectorLoadProgress | null): number | null {
+  if (!progress || progress.total <= 0) return null
+  return Math.min(99, Math.max(0, Math.round((progress.loaded / progress.total) * 100)))
+}
+
+function modelLoadDetail(progress: DetectorLoadProgress | null): string | undefined {
+  if (!progress || progress.total <= 0) return undefined
+  return `${(progress.loaded / 1048576).toFixed(1)} / ${(progress.total / 1048576).toFixed(1)} MB`
 }
 
 /**
- * Drives the integrated home-screen preloader. Eagerly warms the default model
- * set on mount, folds in the face-detector boot state, and reports a single
- * readiness flag + progress so the home screen can gate its mode buttons behind
- * a visible, never-stuck loading indicator.
+ * Drives the integrated home-screen preloader. It waits only for the face
+ * detector boot state; optional object/OCR models are loaded later by the
+ * detection flow that actually requested them.
  */
-export function useModelPreload(detectorLoading: boolean): ModelPreloadStatus {
+export function useModelPreload(
+  detectorLoading: boolean,
+  modelLoadProgress: DetectorLoadProgress | null = null,
+): ModelPreloadStatus {
   const [state, setState] = useState<PrefetchState>(() => getPrefetchState())
   const [idleSettled, setIdleSettled] = useState(false)
-  const [timedOut, setTimedOut] = useState(false)
-  const startedRef = useRef(false)
 
   useEffect(() => subscribePrefetch(setState), [])
 
   useEffect(() => {
-    if (startedRef.current) return
-    startedRef.current = true
-    startAssetPrefetch(DEFAULT_GROUPS)
+    setIdleSettled(false)
     const settle = window.setTimeout(() => {
-      if (getPrefetchState().phase === 'idle') setIdleSettled(true)
+      const current = getPrefetchState().phase
+      if (current === 'idle' || current === 'done' || current === 'skipped') {
+        setIdleSettled(true)
+      }
     }, IDLE_SETTLE_MS)
-    const hard = window.setTimeout(() => setTimedOut(true), MAX_WAIT_MS)
-    return () => {
-      window.clearTimeout(settle)
-      window.clearTimeout(hard)
-    }
+    return () => window.clearTimeout(settle)
   }, [])
 
   return useMemo<ModelPreloadStatus>(() => {
-    const prefetchReady =
-      state.phase === 'done' || state.phase === 'skipped' || idleSettled
-    const ready = timedOut || (!detectorLoading && prefetchReady)
+    const prefetchReady = state.phase !== 'running' || idleSettled
+    const ready = !detectorLoading && prefetchReady
 
     if (ready) {
       return { ready: true, pct: 100, label: 'Privacy models ready' }
+    }
+
+    const facePct = modelLoadPercent(modelLoadProgress)
+    if (detectorLoading && modelLoadProgress?.phase === 'download' && facePct !== null) {
+      return {
+        ready: false,
+        pct: facePct,
+        label: 'Loading face model…',
+        detail: modelLoadDetail(modelLoadProgress),
+      }
+    }
+
+    if (detectorLoading && modelLoadProgress?.phase === 'ready') {
+      return { ready: false, pct: 99, label: 'Starting face detector…' }
     }
 
     // Prefer the concrete download percentage while models stream in.
@@ -73,9 +88,9 @@ export function useModelPreload(detectorLoading: boolean): ModelPreloadStatus {
     }
 
     if (detectorLoading) {
-      return { ready: false, pct: null, label: 'Starting privacy engine…' }
+      return { ready: false, pct: 8, label: 'Starting face detector…' }
     }
 
     return { ready: false, pct: null, label: state.label || 'Loading privacy models…' }
-  }, [state, idleSettled, timedOut, detectorLoading])
+  }, [state, idleSettled, detectorLoading, modelLoadProgress])
 }

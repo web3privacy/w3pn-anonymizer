@@ -1,13 +1,17 @@
-import type { Dispatch, MutableRefObject, SetStateAction } from 'react'
+import { useRef, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
 import { Icon } from '../components/Icon'
 import { EFFECTS } from '../lib/effects'
 import { fmtBytes } from '../lib/media-files'
+import { DEFAULT_CUSTOM_IMAGE_PRESET_ID } from '../lib/custom-image-presets'
 import {
   COLOR_PRESETS,
   DEFAULT_COLOR_ADJUSTMENTS,
+  type AnonymizeEffectId,
   type BatchTaskId,
   type ColorAdjustments,
   type ColorPresetId,
+  type CustomImageAsset,
+  type CustomImageSource,
   type GlitchSubEffect,
   type NormalizedRect,
   type NormalizeCodecEngine,
@@ -50,6 +54,13 @@ export interface EditorBatchPanelProps {
   normResultsCount: number
   exportNormalizeZip: () => void
   isExporting: boolean
+  runNormalizeBatch: () => void
+  cancelNormalizeBatch: () => void
+  batchProcessCount: number
+  setEffectPickerOpen: Dispatch<SetStateAction<'emoji' | 'custom-image' | 'ascii' | null>>
+  customImageAssets: CustomImageAsset[]
+  customImageSource: CustomImageSource
+  loadCustomImagePreset: (source: CustomImageSource) => void | Promise<void>
   normalizePreviewPhotos: PhotoItem[]
   selectPhoto: (id: string) => void
   activeBatchTasks: Set<BatchTaskId>
@@ -89,6 +100,13 @@ export function EditorBatchPanel(props: EditorBatchPanelProps) {
     normResultsCount,
     exportNormalizeZip,
     isExporting,
+    runNormalizeBatch,
+    cancelNormalizeBatch,
+    batchProcessCount,
+    setEffectPickerOpen,
+    customImageAssets,
+    customImageSource,
+    loadCustomImagePreset,
     normalizePreviewPhotos,
     selectPhoto,
     activeBatchTasks,
@@ -116,6 +134,15 @@ export function EditorBatchPanel(props: EditorBatchPanelProps) {
     applyColorAdjToActive,
   } = props
 
+  const batchEffect = normalizeSettings.batchAnonymizeEffect as AnonymizeEffectId
+  const batchEffectMeta = EFFECTS.find((effect) => effect.id === batchEffect)
+  const batchEffectStrengthLabel = batchEffectMeta?.strengthLabel ?? 'Intensity'
+  const batchEffectPickerKind =
+    batchEffect === 'emoji' || batchEffect === 'custom-image' || batchEffect === 'ascii'
+      ? batchEffect
+      : null
+  const batchPanelBodyRef = useRef<HTMLDivElement | null>(null)
+
   return (
     <div className="batch-panel" style={{ width: batchPanelOpen ? 280 : 0 }}>
       {batchPanelOpen && (
@@ -124,7 +151,7 @@ export function EditorBatchPanel(props: EditorBatchPanelProps) {
           <span>Batch tasks</span>
           <button className="icon-btn" type="button" onClick={() => setBatchPanelOpen(false)}><Icon name="close" size={14} /></button>
         </div>
-        <div className="norm-panel-body">
+        <div ref={batchPanelBodyRef} className="norm-panel-body batch-panel-body">
 
           {/* Summary card */}
           {normalizeSummary && !normalizeProgress.active && (
@@ -466,21 +493,52 @@ export function EditorBatchPanel(props: EditorBatchPanelProps) {
                   <div className="batch-task-body">
                     <div>
                       <label className="field-label">Effect</label>
-                      <select className="field-select" value={normalizeSettings.batchAnonymizeEffect} onChange={(e) => updateNormalizeSetting('batchAnonymizeEffect', e.target.value)} disabled={isNormalizing}>
+                      <select
+                        className="field-select"
+                        value={normalizeSettings.batchAnonymizeEffect}
+                        onChange={(e) => {
+                          const effect = e.target.value as AnonymizeEffectId
+                          updateNormalizeSetting('batchAnonymizeEffect', effect)
+                          if (effect === 'emoji' || effect === 'custom-image' || effect === 'ascii') {
+                            setEffectPickerOpen(effect)
+                            if (effect === 'custom-image' && customImageAssets.length === 0) {
+                              void loadCustomImagePreset(customImageSource === 'custom' ? DEFAULT_CUSTOM_IMAGE_PRESET_ID : customImageSource)
+                            }
+                          } else {
+                            setEffectPickerOpen(null)
+                          }
+                        }}
+                        disabled={isNormalizing}
+                      >
                         {EFFECTS.map((ef) => (
                           <option key={ef.id} value={ef.id}>{ef.label}</option>
                         ))}
                       </select>
                     </div>
+                    {batchEffectPickerKind && (
+                      <button
+                        className="btn btn-sm"
+                        type="button"
+                        onClick={() => {
+                          setEffectPickerOpen(batchEffectPickerKind)
+                          if (batchEffectPickerKind === 'custom-image' && customImageAssets.length === 0) {
+                            void loadCustomImagePreset(customImageSource === 'custom' ? DEFAULT_CUSTOM_IMAGE_PRESET_ID : customImageSource)
+                          }
+                        }}
+                        disabled={isNormalizing}
+                      >
+                        Configure {batchEffectMeta?.label ?? batchEffect}
+                      </button>
+                    )}
                     <div>
-                      <span className="field-label">Strength: {normalizeSettings.batchAnonymizeStrength}%</span>
+                      <span className="field-label">{batchEffectStrengthLabel}: {normalizeSettings.batchAnonymizeStrength}%</span>
                       <div className="tb-quality-wrap" style={{ marginTop: '0.25rem' }}>
-                        <input className="tb-quality-slider" type="range" min={10} max={100} value={normalizeSettings.batchAnonymizeStrength} onChange={(e) => updateNormalizeSetting('batchAnonymizeStrength', Number(e.target.value))} disabled={isNormalizing} />
-                        <input className="tb-quality-num" type="number" min={10} max={100} value={normalizeSettings.batchAnonymizeStrength} onChange={(e) => updateNormalizeSetting('batchAnonymizeStrength', Math.min(100, Math.max(10, Number(e.target.value))))} disabled={isNormalizing} />
+                        <input className="tb-quality-slider" type="range" min={1} max={100} value={normalizeSettings.batchAnonymizeStrength} onChange={(e) => updateNormalizeSetting('batchAnonymizeStrength', Number(e.target.value))} disabled={isNormalizing} />
+                        <input className="tb-quality-num" type="number" min={1} max={100} value={normalizeSettings.batchAnonymizeStrength} onChange={(e) => updateNormalizeSetting('batchAnonymizeStrength', Math.min(100, Math.max(1, Number(e.target.value))))} disabled={isNormalizing} />
                       </div>
                     </div>
                     <p style={{ fontSize: '0.65rem', color: 'var(--text-muted)', margin: '0.25rem 0 0' }}>
-                      Detects faces automatically and applies the selected effect to all found zones.
+                      Detects privacy zones automatically, applies this exact effect to every found zone, and previews it live on the canvas.
                     </p>
                   </div>
                 )}
@@ -488,6 +546,31 @@ export function EditorBatchPanel(props: EditorBatchPanelProps) {
             )
           })()}
 
+        </div>
+        <div className="batch-panel-process-bar">
+          <button
+            className="sidebar-process-btn batch-panel-process-btn"
+            type="button"
+            onClick={() => {
+              batchPanelBodyRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
+              void runNormalizeBatch()
+            }}
+            disabled={batchProcessCount === 0 || isNormalizing || isBusy}
+            title={batchProcessCount === 0 ? 'Select photos first' : `Process ${batchProcessCount} photo${batchProcessCount !== 1 ? 's' : ''}`}
+          >
+            {isNormalizing
+              ? `Processing ${normalizeProgressPercent}%`
+              : `Process ${batchProcessCount} photo${batchProcessCount !== 1 ? 's' : ''}`}
+          </button>
+          {isNormalizing && (
+            <button
+              className="batch-panel-cancel-btn"
+              type="button"
+              onClick={cancelNormalizeBatch}
+            >
+              Cancel
+            </button>
+          )}
         </div>
         </div>
       )}

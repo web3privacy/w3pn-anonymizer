@@ -38,7 +38,7 @@ export const EFFECTS: EffectDefinition[] = [
   { id: 'noise',     label: 'Noise',       description: 'Noise anonymization',                    icon: 'grain',           strengthLabel: 'Density',           mobileStrengthLabel: 'DENSITY' },
   { id: 'glitch',    label: 'Glitch',      description: 'RGB chroma-shift',                       icon: 'auto_fix_high',   strengthLabel: 'Shift amount',      mobileStrengthLabel: 'SHIFT' },
   { id: 'contour',   label: 'Contour',     description: 'Edge detection (Sobel)',                 icon: 'pentagon',        strengthLabel: 'Line thickness',    mobileStrengthLabel: 'THICK' },
-  { id: 'thermal',   label: 'Thermal',     description: 'Falsecolor thermal map',                 icon: 'thermostat',      strengthLabel: 'Color intensity',   mobileStrengthLabel: 'COLOR' },
+  { id: 'thermal',   label: 'Color Ball',  description: 'Abstract color blobs for face masking',   icon: 'bubble_chart',    strengthLabel: 'Color flow',        mobileStrengthLabel: 'COLOR' },
   { id: 'ascii',     label: 'ASCII',       description: 'ASCII-art character mosaic',             icon: 'data_array',      strengthLabel: 'Cell size',         mobileStrengthLabel: 'CELL' },
   { id: 'custom-image', label: 'Custom Image', description: 'Replace with uploaded image patches', icon: 'image',          strengthLabel: 'Opacity',           mobileStrengthLabel: 'OPACITY' },
 ]
@@ -765,63 +765,84 @@ const applyContourRect = (
   ctx.putImageData(out, rx, ry)
 }
 
-// ── Thermal (falsecolor heatmap) ──────────────────────────────────
-const THERMAL_COLORS: [number, number, number][] = [
-  [0, 0, 128], [0, 0, 255], [0, 128, 255], [0, 255, 255],
-  [0, 255, 128], [0, 255, 0], [128, 255, 0], [255, 255, 0],
-  [255, 128, 0], [255, 0, 0], [255, 0, 128],
-]
-const thermalColor = (t: number): [number, number, number] => {
-  const n = THERMAL_COLORS.length - 1
-  const i = clamp(Math.floor(t * n), 0, n - 1)
-  const f = t * n - i
-  const [r1, g1, b1] = THERMAL_COLORS[i]
-  const [r2, g2, b2] = THERMAL_COLORS[Math.min(i + 1, n)]
-  return [r1 + (r2 - r1) * f, g1 + (g2 - g1) * f, b1 + (b2 - b1) * f]
+// ── Color Ball (legacy id: thermal) ───────────────────────────────
+// The old thermal effect preserved too much luminance structure. The legacy
+// effect id now renders synthetic color blobs only; source pixels contribute
+// alpha, not face-identifying brightness or texture.
+const colorBallColor = (t: number): [number, number, number] => {
+  const p = Math.PI * 2
+  const r = 0.5 + 0.5 * Math.sin(p * (t + 0.00))
+  const g = 0.5 + 0.5 * Math.sin(p * (t + 0.34))
+  const b = 0.5 + 0.5 * Math.sin(p * (t + 0.68))
+  return [
+    Math.round(42 + r * 213),
+    Math.round(38 + g * 217),
+    Math.round(52 + b * 203),
+  ]
 }
+
+let colorBallUseCounter = 0
+
+const smoothstep = (edge0: number, edge1: number, value: number) => {
+  const t = clamp((value - edge0) / (edge1 - edge0), 0, 1)
+  return t * t * (3 - 2 * t)
+}
+
 const applyThermalRect = (
   ctx: CanvasRenderingContext2D,
   x: number, y: number, width: number, height: number, strength: number, options?: EffectRenderOptions,
 ) => {
   const { x: rx, y: ry, width: rw, height: rh } = normalizeRect(x, y, width, height, ctx.canvas.width, ctx.canvas.height)
-  if (tryGpuRect(ctx, rx, ry, rw, rh, (src, w, h) => glApplyThermalRect(src, w, h, strength))) return
+  const baseSeed = effectSeed('thermal', rx, ry, rw, rh, options)
+  const dynamicSeed = `${baseSeed}:${Date.now()}:${colorBallUseCounter++}`
+  const seedFloat = hashSeed(dynamicSeed) / 4294967296
+  if (tryGpuRect(ctx, rx, ry, rw, rh, (src, w, h) => glApplyThermalRect(src, w, h, strength, seedFloat))) return
   const imageData = ctx.getImageData(rx, ry, rw, rh)
   const src = new Uint8ClampedArray(imageData.data)
   const data = imageData.data
-  const rng = seededRandom(effectSeed('thermal', rx, ry, rw, rh, options))
-  const islands = Array.from({ length: Math.max(3, Math.round(4 + strength * 14)) }, () => ({
-    x: rng() * rw,
-    y: rng() * rh,
-    radius: Math.max(4, (0.08 + rng() * 0.22) * Math.min(rw, rh)),
+  const rng = seededRandom(dynamicSeed)
+  const blobCount = Math.max(5, Math.round(7 + strength * 12))
+  const blobs = Array.from({ length: blobCount }, () => ({
+    x: -0.15 + rng() * 1.3,
+    y: -0.15 + rng() * 1.3,
+    radius: 0.18 + rng() * (0.34 + strength * 0.18),
     hue: rng(),
+    spin: rng() * Math.PI * 2,
   }))
-  const warp = Math.max(1, Math.round(1 + strength * 8))
-  const spread = 0.4 + strength * 1.1
-  // Precompute deterministic per-row/column phase jitter so we never call rng()
-  // inside the per-pixel loop (huge cost + non-determinism on mobile).
-  const phaseX = new Float32Array(rh)
-  for (let i = 0; i < rh; i += 1) phaseX[i] = rng() * 0.4
-  const phaseY = new Float32Array(rw)
-  for (let i = 0; i < rw; i += 1) phaseY[i] = rng() * 0.4
+  const phase = rng() * Math.PI * 2
+  const aspect = rw / Math.max(1, rh)
+  const saturation = 0.68 + strength * 0.32
+  const grain = Math.round(4 + strength * 18)
   for (let py = 0; py < rh; py += 1) {
-    const sinPhase = Math.sin(py * 0.17 + phaseX[py]) * warp
+    const ny = (py + 0.5) / rh
     for (let px = 0; px < rw; px += 1) {
-      const wobbleX = Math.round(sinPhase)
-      const wobbleY = Math.round(Math.cos(px * 0.13 + phaseY[px]) * warp)
-      const sx = clamp(px + wobbleX, 0, rw - 1)
-      const sy = clamp(py + wobbleY, 0, rh - 1)
-      const si = (sy * rw + sx) * 4
       const dst = (py * rw + px) * 4
-      let luma = (0.299 * src[si] + 0.587 * src[si + 1] + 0.114 * src[si + 2]) / 255
-      for (const island of islands) {
-        const d = Math.hypot(px - island.x, py - island.y) / island.radius
-        if (d < 1) luma = clamp(luma * (0.55 + spread * 0.35) + island.hue * (0.25 + spread * 0.2) + (1 - d) * spread * 0.22, 0, 1)
+      const nx = (px + 0.5) / rw
+      const swirl = Math.sin((nx * 5.7 + ny * 4.3) * Math.PI + phase) * 0.08 * strength
+      let r = 20
+      let g = 18
+      let b = 34
+      let weight = 0.25
+      for (const blob of blobs) {
+        const dx = (nx - blob.x) * aspect
+        const dy = ny - blob.y
+        const dist = Math.sqrt(dx * dx + dy * dy)
+        const falloff = 1 - smoothstep(blob.radius * 0.12, blob.radius, dist)
+        if (falloff <= 0) continue
+        const [br, bg, bb] = colorBallColor(blob.hue + swirl + Math.sin(blob.spin + nx * 3.1 - ny * 2.4) * 0.045)
+        const w = falloff * falloff * (0.55 + saturation)
+        r += br * w
+        g += bg * w
+        b += bb * w
+        weight += w
       }
-      const [r, g, b] = thermalColor(luma)
-      data[dst] = r
-      data[dst + 1] = g
-      data[dst + 2] = b
-      data[dst + 3] = src[si + 3]
+      const vignette = 0.78 + 0.22 * (1 - smoothstep(0.25, 0.86, Math.hypot(nx - 0.5, ny - 0.5)))
+      const sparkleSeed = ((px * 73856093) ^ (py * 19349663) ^ Math.round(phase * 1000)) >>> 0
+      const sparkle = (sparkleSeed % 255) / 255 - 0.5
+      data[dst] = clamp((r / weight) * vignette + sparkle * grain, 0, 255)
+      data[dst + 1] = clamp((g / weight) * vignette + sparkle * grain, 0, 255)
+      data[dst + 2] = clamp((b / weight) * vignette + sparkle * grain, 0, 255)
+      data[dst + 3] = src[dst + 3]
     }
   }
   ctx.putImageData(imageData, rx, ry)

@@ -9,6 +9,7 @@ import { MobileHomeDefault } from './MobileHomeDefault'
 import { MobileLiveMode } from './MobileLiveMode'
 import { MobileToolDrawers } from './MobileToolDrawers'
 import { MobileTopBar } from './MobileTopBar'
+import { isBatchProcessablePhoto } from '../lib/batch-normalize'
 import './mobile.css'
 import './mobile-redesign.css'
 import './mobile-landscape.css'
@@ -37,7 +38,7 @@ export function MobileShell({
   const b = useMobileBindings()
   const showHome = b.photos.length === 0 && b.mobileMode !== 'live'
   const showLive = b.mobileMode === 'live'
-  const selectedProcessableCount = b.photos.filter((p) => b.selectedForBatch.has(p.id) && !p.isVideo).length
+  const selectedProcessableCount = b.photos.filter((p) => b.selectedForBatch.has(p.id) && isBatchProcessablePhoto(p)).length
 
   // Auto-sync mobileMode with library state. Intentionally overrides stale modes
   // (e.g. home after addRecords, editor/video after activePhoto type change).
@@ -103,6 +104,8 @@ export function MobileShell({
         b.setGalleryBatchSelect(true)
       }}
       onOpenBatch={() => {
+        b.setSelectedForBatch(new Set(b.photos.filter(isBatchProcessablePhoto).map((photo) => photo.id)))
+        b.setGalleryBatchSelect(true)
         b.setMobilePanelReturnTo('gallery')
         b.setMobilePanel('batch')
       }}

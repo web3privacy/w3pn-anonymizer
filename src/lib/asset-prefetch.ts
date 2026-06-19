@@ -1,13 +1,11 @@
 /**
- * Background asset prefetcher. Warms the HTTP cache for heavy, optional models
- * (YOLO ONNX, on-device OCR engine + language data) while the user is idle on
- * the home / hypno screen, so the first real detection feels instant without
- * bloating the initial app load.
+ * Asset loader for heavy, optional models (YOLO ONNX, on-device OCR engine +
+ * language data). It is intentionally called from explicit detection flows,
+ * not from the home screen, so the initial app load stays light.
  *
- * Prefetch is driven by which detection categories are actually enabled, so a
- * default session (faces + license plates + sensitive text) only warms the
- * license-plate model and the OCR engine — the broader COCO / custom privacy
- * models stream in only once the user opts into those extra targets.
+ * Prefetch is driven by which detection categories are actually enabled, so the
+ * detection loader warms one consistent set of model groups for the requested
+ * privacy targets.
  *
  * Everything stays local: this only fetches files already served from /public.
  * Respects Save-Data and very slow connections, and never blocks the UI.
@@ -77,6 +75,7 @@ let state: PrefetchState = {
 const warmedUrls = new Set<string>()
 let queue: PrefetchCandidate[] = []
 let running = false
+let activeDrain: Promise<void> | null = null
 const listeners = new Set<(s: PrefetchState) => void>()
 
 function emit(patch: Partial<PrefetchState>) {
@@ -174,13 +173,14 @@ async function drainQueue(): Promise<void> {
 /**
  * Warm the HTTP cache for the given capability groups. Safe to call repeatedly
  * and incrementally — only groups (and URLs) not already warmed are fetched, so
- * enabling an extra detection target later streams in just that model. Returns
- * immediately; progress arrives via subscribers.
+ * enabling an extra detection target later streams in just that model. Progress
+ * arrives via subscribers and the returned promise resolves when the queue is
+ * drained.
  */
-export function startAssetPrefetch(groups: PrefetchGroup[]): void {
+export function startAssetPrefetch(groups: PrefetchGroup[]): Promise<void> {
   if (shouldSkipForConnection()) {
     if (state.phase === 'idle') emit({ phase: 'skipped', label: 'Prefetch skipped (data saver)' })
-    return
+    return Promise.resolve()
   }
 
   for (const group of groups) {
@@ -191,14 +191,21 @@ export function startAssetPrefetch(groups: PrefetchGroup[]): void {
     }
   }
 
-  if (running || queue.length === 0) return
+  if (running) return activeDrain ?? Promise.resolve()
+  if (queue.length === 0) return Promise.resolve()
+  emit({ phase: 'running', label: 'Loading privacy models…' })
   running = true
-  void drainQueue().finally(() => { running = false })
+  activeDrain = drainQueue().finally(() => {
+    running = false
+    activeDrain = null
+  })
+  return activeDrain
 }
 
 /** Test seam. */
 export function _resetPrefetchForTest(): void {
   running = false
+  activeDrain = null
   queue = []
   warmedUrls.clear()
   listeners.clear()

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Icon } from '../../components/Icon'
+import { isBatchProcessablePhoto } from '../../lib/batch-normalize'
 import type { PhotoItem } from '../../types'
 import { MobileToolDrawer } from '../MobileToolDrawer'
 
@@ -83,6 +84,8 @@ export function MobileGalleryDrawer({
 
   const handleTap = (id: string) => {
     if (batchSelectMode) {
+      const photo = photos.find((p) => p.id === id)
+      if (!photo || !isBatchProcessablePhoto(photo)) return
       toggleBatchSelect(id)
       return
     }
@@ -90,10 +93,13 @@ export function MobileGalleryDrawer({
     onClose()
   }
 
-  const imageCount = photos.length
-  const selectedCount = batchSelectMode ? selectedForBatch.size : 0
+  const imageCount = photos.filter(isBatchProcessablePhoto).length
+  const skippedMediaCount = photos.length - imageCount
+  const selectedCount = batchSelectMode
+    ? photos.filter((p) => isBatchProcessablePhoto(p) && selectedForBatch.has(p.id)).length
+    : 0
   const selectedImageIds = batchSelectMode
-    ? photos.filter((p) => selectedForBatch.has(p.id)).map((p) => p.id)
+    ? photos.filter((p) => isBatchProcessablePhoto(p) && selectedForBatch.has(p.id)).map((p) => p.id)
     : []
   const selectedImageCount = batchSelectMode
     ? selectedImageIds.length
@@ -173,19 +179,21 @@ export function MobileGalleryDrawer({
 
           {batchSelectMode && (
             <div className="mobile-batch-count mobile-batch-count--gallery">
-              Selected: <strong>{selectedForBatch.size}</strong> files
+              Selected: <strong>{selectedCount}</strong> photos
+              {skippedMediaCount > 0 && <span> · Batch is only for photos</span>}
             </div>
           )}
 
           {sidebarView === 'grid' ? (
             <div className="mobile-gallery-grid">
               {displayedPhotos.map((p) => {
-                const selected = batchSelectMode ? selectedForBatch.has(p.id) : p.id === activePhotoId
+                const canBatchProcess = isBatchProcessablePhoto(p)
+                const selected = batchSelectMode ? canBatchProcess && selectedForBatch.has(p.id) : p.id === activePhotoId
                 const anonymized = anonymizedPhotoIds.has(p.id)
                 return (
                   <div
                     key={p.id}
-                    className={`mobile-gallery-item-shell${selected ? ' selected' : ''}${batchSelectMode ? ' selecting' : ''}${anonymized ? ' anonymized' : ''}`}
+                    className={`mobile-gallery-item-shell${selected ? ' selected' : ''}${batchSelectMode ? ' selecting' : ''}${batchSelectMode && !canBatchProcess ? ' batch-unavailable' : ''}${anonymized ? ' anonymized' : ''}`}
                   >
                     <button
                       type="button"
@@ -197,7 +205,7 @@ export function MobileGalleryDrawer({
                         {p.isVideo && <span className="mobile-gallery-video-badge">VIDEO</span>}
                         {p.isAudio && <span className="mobile-gallery-video-badge">AUDIO</span>}
                         {p.isDocument && <span className="mobile-gallery-video-badge">{(p.documentKind ?? 'DOC').toUpperCase()}</span>}
-                        {batchSelectMode && (
+                        {batchSelectMode && canBatchProcess && (
                           <span className={`mobile-gallery-check${selected ? ' checked' : ''}`} aria-hidden="true">
                             {selected ? <Icon name="check" size={14} /> : null}
                           </span>
@@ -220,12 +228,13 @@ export function MobileGalleryDrawer({
           ) : (
             <div className="mobile-gallery-list">
               {displayedPhotos.map((p) => {
-                const selected = batchSelectMode ? selectedForBatch.has(p.id) : p.id === activePhotoId
+                const canBatchProcess = isBatchProcessablePhoto(p)
+                const selected = batchSelectMode ? canBatchProcess && selectedForBatch.has(p.id) : p.id === activePhotoId
                 const anonymized = anonymizedPhotoIds.has(p.id)
                 return (
                   <div
                     key={p.id}
-                    className={`mobile-gallery-list-shell${selected ? ' selected' : ''}${batchSelectMode ? ' selecting' : ''}${anonymized ? ' anonymized' : ''}`}
+                    className={`mobile-gallery-list-shell${selected ? ' selected' : ''}${batchSelectMode ? ' selecting' : ''}${batchSelectMode && !canBatchProcess ? ' batch-unavailable' : ''}${anonymized ? ' anonymized' : ''}`}
                   >
                     <button
                       type="button"
@@ -234,7 +243,7 @@ export function MobileGalleryDrawer({
                     >
                       <div className="mobile-gallery-list-thumb">
                         <img src={p.previewUrl} alt="" loading="lazy" />
-                        {batchSelectMode && (
+                        {batchSelectMode && canBatchProcess && (
                           <span className={`mobile-gallery-check${selected ? ' checked' : ''}`} aria-hidden="true">
                             {selected ? <Icon name="check" size={14} /> : null}
                           </span>

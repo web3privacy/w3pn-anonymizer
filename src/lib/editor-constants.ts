@@ -73,7 +73,7 @@ export const EFFECT_ICONS: Record<AnonymizeEffectId, string> = {
   noise:        'grain',
   glitch:       'auto_fix_high',
   contour:      'pentagon',
-  thermal:      'thermostat',
+  thermal:      'bubble_chart',
   ascii:        'data_array',
   'custom-image': 'image',
 }

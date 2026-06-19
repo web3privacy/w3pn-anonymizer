@@ -52,6 +52,7 @@ import {
 } from './lib/canvas-geometry'
 import { drawZoneInView, drawNormalizeCropInView } from './lib/canvas-overlays'
 import { isMediaFile, fmtBytes, makeZipSafeName } from './lib/media-files'
+import { isBatchProcessablePhoto } from './lib/batch-normalize'
 import { useIsMobile } from './mobile/useIsMobile'
 import { usePinchZoom } from './mobile/usePinchZoom'
 import { usePhotoSwipeNav } from './mobile/usePhotoSwipeNav'
@@ -72,21 +73,28 @@ import type { MobileMode, MobilePanel, MobileToolCategory } from './mobile/types
 import { CROP_TOOLS, EFFECT_TOOL_ORDER, FACE_TOOLS, panelForCategory, ZONE_TOOLS } from './mobile/toolRotation'
 import type { AdjustToolId, CropToolId, EffectToolId, FaceToolId, ZoneToolId } from './mobile/toolRotation'
 import { usePrivacyDetectionConfig } from './hooks/usePrivacyDetectionConfig'
-import { probeAllYoloModels } from './lib/privacyDetectionPipeline'
 import { privacyDetectionsToZones } from './lib/detections/adapters'
 import { detectFaces } from './lib/detector'
-import { formatDetectionSummary, usesExtendedPrivacyDetection, applyFaceConfidenceToConfig } from './lib/detections/run-image-detection'
+import { formatDetectionSummary, applyFaceConfidenceToConfig } from './lib/detections/run-image-detection'
 import { faceBoxToPrivacyDetection } from './lib/detections/adapters'
 import { getCategoryConfig } from './lib/detection-config'
 import { dedupeOverlappingDetections } from './lib/detectors/detectorUtils'
 import { detectPiiViaOcr, isPiiTextEnabled } from './lib/detectors/ocrPiiDetector'
-import { runPrivacyDetectionOnSource } from './lib/privacyDetectionPipeline'
+import { detectImagePrivacyDetections } from './lib/detections/run-image-detection'
+import { normalizedBoxToPixel } from './lib/detections/adapters'
+import { probeAllYoloModels, runPrivacyDetectionOnSource } from './lib/privacyDetectionPipeline'
 import type { PrivacyDetection } from './types'
 import { initializeDetector, resetDetectorStatus, setDetectionProgressCallback } from './lib/detector'
 import { ModelLoadStatus } from './components/ModelLoadStatus'
 import { BackgroundAssetLoader } from './components/BackgroundAssetLoader'
-import { startAssetPrefetch, prefetchGroupsForConfig } from './lib/asset-prefetch'
-import { faceOffsetPads, zonesWithFaceOffset } from './lib/face-offset'
+import {
+  getPrefetchState,
+  prefetchGroupsForConfig,
+  startAssetPrefetch,
+  subscribePrefetch,
+  type PrefetchState,
+} from './lib/asset-prefetch'
+import { expandPixelBox, faceOffsetPads, zonesWithFaceOffset } from './lib/face-offset'
 import {
   applyDistortPipeline,
   DEFAULT_DISTORT_STRENGTHS,
@@ -129,6 +137,13 @@ import type {
 } from './types'
 import { COLOR_PRESETS, DEFAULT_COLOR_ADJUSTMENTS } from './types'
 
+type EffectPickerKind = 'emoji' | 'custom-image' | 'ascii'
+
+const effectPickerKindForEffect = (effect: AnonymizeEffectId): EffectPickerKind | null => {
+  if (effect === 'emoji' || effect === 'custom-image' || effect === 'ascii') return effect
+  return null
+}
+
 function App() {
   const isMobile = useIsMobile()
   const [photos, setPhotos] = useState<PhotoItem[]>([])
@@ -154,7 +169,7 @@ function App() {
   const [customImagePresetLoading, setCustomImagePresetLoading] = useState(false)
   const customImageAssetsRef = useRef<CustomImageAsset[]>([])
   // Emoji / custom-image picker dialog + chosen-vs-random selection.
-  const [effectPickerOpen, setEffectPickerOpen] = useState<'emoji' | 'custom-image' | 'ascii' | null>(null)
+  const [effectPickerOpen, setEffectPickerOpen] = useState<EffectPickerKind | null>(null)
   const [emojiRandom, setEmojiRandom] = useState(true)
   const [selectedEmoji, setSelectedEmoji] = useState<string | null>(null)
   const [customImageRandom, setCustomImageRandom] = useState(true)
@@ -208,12 +223,6 @@ function App() {
   } = usePrivacyDetectionConfig()
 
   useEffect(() => {
-    void probeAllYoloModels().then((yolo) => {
-      setModelStatus((prev) => ({ ...prev, ...yolo }))
-    })
-  }, [setModelStatus])
-
-  useEffect(() => {
     const yunetStatus: ModelAvailabilityStatus =
       detector.mode === 'yunet-wasm'
         ? 'ready'
@@ -254,6 +263,7 @@ function App() {
   const [isBusy, setIsBusy] = useState(false)
   const [isDetecting, setIsDetecting] = useState(false)
   const [detectionStep, setDetectionStep] = useState('')
+  const [assetPrefetchState, setAssetPrefetchState] = useState<PrefetchState>(() => getPrefetchState())
   const [isExporting, setIsExporting] = useState(false)
   const [localProcessingMs, setLocalProcessingMs] = useState<number | null>(null)
   const [lastDetectFailed, setLastDetectFailed] = useState(false)
@@ -316,11 +326,13 @@ function App() {
   const [feedbackSubject, setFeedbackSubject] = useState('')
   const [colorAdj, setColorAdj] = useState<ColorAdjustments>(DEFAULT_COLOR_ADJUSTMENTS)
   const [colorAdjByPhoto, setColorAdjByPhoto] = useState<Record<string, ColorAdjustments>>({})
+  const colorAdjApplyJustClosedRef = useRef(false)
   const [isApplyingAll, setIsApplyingAll] = useState(false)
   void isApplyingAll; void setIsApplyingAll
   const [sidebarWidth, setSidebarWidth] = useState(220)
   const [originalBlobByPhoto, setOriginalBlobByPhoto] = useState<Record<string, Blob>>({})
   const [selectedForBatch, setSelectedForBatch] = useState<Set<string>>(new Set())
+  useEffect(() => subscribePrefetch(setAssetPrefetchState), [])
   // Track whether the photo has had zones applied (for Anonymize/Reset button)
   const [appliedByPhoto, setAppliedByPhoto] = useState<Record<string, boolean>>({})
   const [imageMaskDrawActive, setImageMaskDrawActive] = useState(false)
@@ -756,10 +768,16 @@ function App() {
   }, [updateActiveZoneFields])
 
   const updateNormalizeSetting = useCallback(<K extends keyof NormalizeSettings>(key: K, value: NormalizeSettings[K]) => {
+    setNormalizeResults({})
+    setNormalizePreviewIds([])
+    setNormalizeSummary(null)
     setNormalizeSettings((cur) => ({ ...cur, [key]: value }))
   }, [])
 
   const updateNormalizeCropMode = useCallback((mode: NormalizeCropMode) => {
+    setNormalizeResults({})
+    setNormalizePreviewIds([])
+    setNormalizeSummary(null)
     setNormalizeSettings((cur) => ({ ...cur, cropMode: mode }))
     setNormalizeCropDraft(null)
     setIsNormalizeCropPicking(false)
@@ -900,7 +918,11 @@ function App() {
       return
     }
 
-    const isColorNoop = isColorAdjNoop(colorAdj)
+    const confirmedColorAdj = activePhotoId ? colorAdjByPhoto[activePhotoId] : undefined
+    const activeColorAdj = colorPanelOpen
+      ? colorAdj
+      : (confirmedColorAdj ?? DEFAULT_COLOR_ADJUSTMENTS)
+    const isColorNoop = isColorAdjNoop(activeColorAdj)
 
     let drawSource = selectBaseDrawSource({
       source,
@@ -914,7 +936,7 @@ function App() {
     })
     // Apply color adjustments on top of whatever source is being drawn
     // (works even when drawSource is a transform preview canvas)
-    if (!isColorNoop && colorPanelOpen) {
+    if (!isColorNoop) {
       if (!colorPreviewCanvasRef.current) colorPreviewCanvasRef.current = document.createElement('canvas')
       const pc = colorPreviewCanvasRef.current
       const base = drawSource  // could be source, transform preview, or quality preview
@@ -924,7 +946,7 @@ function App() {
       const pCtx = pc.getContext('2d', { willReadFrequently: true })
       if (pCtx) {
         pCtx.drawImage(base, 0, 0)
-        applyColorAdjustments(pCtx, colorAdj, pc)
+        applyColorAdjustments(pCtx, activeColorAdj, pc)
         drawSource = pc
       }
     }
@@ -971,7 +993,7 @@ function App() {
 
   }, [
     activePhoto, activeNormalizeCrop, effectiveZones, adjFlyoutOpen, adjTransform, batchPanelOpen,
-    colorAdj, colorPanelOpen, draftZone, enabledDistorts, exportFormat, getActiveDistorts, isMobile, isNormalizeCropPicking, transformPanelOpen,
+    activePhotoId, colorAdj, colorAdjByPhoto, colorPanelOpen, draftZone, enabledDistorts, exportFormat, getActiveDistorts, isMobile, isNormalizeCropPicking, transformPanelOpen,
     normalizeCropDraft, normalizeSettings.cropMode, selectedZoneId, showBoxes, showDetectionLabels, toolMode, effectiveTheme, mobileViewZoom, mobileViewPan, mobileViewRotation, mobileGestureActive, mobileExportDraft,
     syncOverlayLayout,
     applyMobilePreviewTransform,
@@ -1420,15 +1442,32 @@ function App() {
       const configNoFace = effectiveConfig.map((c) =>
         c.type === 'face' ? { ...c, enabled: false } : c,
       )
-      const needsYolo = usesExtendedPrivacyDetection(configNoFace, modelStatus, detectClasses)
+      const needsYolo = configNoFace.some((c) => c.enabled && c.type !== 'pii_text' && c.type !== 'manual_zone') || detectClasses.length > 0
       const needsOcr = isPiiTextEnabled(effectiveConfig)
 
       if (needsYolo || needsOcr) {
+        const prefetchGroups = [
+          ...new Set([
+            ...prefetchGroupsForConfig(configNoFace),
+            ...(detectClasses.length > 0
+              ? (['yolo-coco', 'yolo-license-plate', 'yolo-privacy-custom'] as const)
+              : []),
+          ]),
+        ]
+        if (prefetchGroups.length > 0) {
+          setDetectionStep(needsYolo ? 'Loading YOLO model…' : 'Loading OCR model…')
+          setNotice(needsYolo ? 'Loading object detection model…' : 'Loading sensitive-text model…')
+          await startAssetPrefetch(prefetchGroups)
+          if (generation !== detectGenerationRef.current || activePhotoIdRef.current !== photoId) return
+        }
         setDetectionStep(needsOcr ? 'Scanning objects & sensitive text…' : 'Scanning objects…')
         if (needsYolo) {
           const result = await runPrivacyDetectionOnSource(
             workCanvas, configNoFace, undefined, runRobust, detectClasses,
           )
+          void probeAllYoloModels().then((yolo) => {
+            setModelStatus((prev) => ({ ...prev, ...yolo }))
+          })
           if (generation !== detectGenerationRef.current || activePhotoIdRef.current !== photoId) return
           detections = dedupeOverlappingDetections([...detections, ...result.detections], 0.55)
           usedPipeline = true
@@ -1713,14 +1752,16 @@ function App() {
 
   const toggleBatchSelect = useCallback((photoId: string) => {
     setSelectedForBatch((cur) => {
+      const photo = photos.find((p) => p.id === photoId)
+      if (!photo || !isBatchProcessablePhoto(photo)) return cur
       const next = new Set(cur)
       if (next.has(photoId)) next.delete(photoId); else next.add(photoId)
       return next
     })
-  }, [])
+  }, [photos])
 
   const selectAllForBatch = useCallback(() => {
-    setSelectedForBatch(new Set(photos.filter((p) => !p.isVideo).map((p) => p.id)))
+    setSelectedForBatch(new Set(photos.filter(isBatchProcessablePhoto).map((p) => p.id)))
   }, [photos])
 
   const deselectAllForBatch = useCallback(() => {
@@ -1736,6 +1777,11 @@ function App() {
     colorAdjByPhoto,
     customImageAssets,
     customImageSource,
+    emojiRandom,
+    selectedEmoji,
+    customImageRandom,
+    selectedCustomImageId,
+    asciiCharset,
     activePhotoId,
     workCanvasRef,
     renderCanvas,
@@ -1792,6 +1838,31 @@ function App() {
     }
     renderCanvas()
   }, [activePhotoId, colorAdj, getWorkCtx, pushUndo, renderCanvas, setActiveDirty])
+
+  const confirmColorAdjForActive = useCallback(() => {
+    if (!activePhotoId) return
+    colorAdjApplyJustClosedRef.current = true
+    setColorAdjByPhoto((cur) => {
+      if (isColorAdjNoop(colorAdj)) {
+        const next = { ...cur }
+        delete next[activePhotoId]
+        return next
+      }
+      return { ...cur, [activePhotoId]: { ...colorAdj } }
+    })
+    setAdjFlyoutOpen(false)
+    renderCanvasRef.current()
+  }, [activePhotoId, colorAdj])
+
+  useEffect(() => {
+    if (adjFlyoutOpen) return
+    if (colorAdjApplyJustClosedRef.current) {
+      colorAdjApplyJustClosedRef.current = false
+      return
+    }
+    const saved = activePhotoId ? colorAdjByPhoto[activePhotoId] : undefined
+    setColorAdj(saved ? { ...saved } : DEFAULT_COLOR_ADJUSTMENTS)
+  }, [activePhotoId, adjFlyoutOpen, colorAdjByPhoto])
 
   const applyAdjTransformToCanvas = useCallback(async () => {
     const wc = workCanvasRef.current
@@ -1917,6 +1988,24 @@ function App() {
     bc.width = wc.width; bc.height = wc.height
     const bCtx = bc.getContext('2d', { willReadFrequently: true })
     if (!bCtx) return
+    const finishedResult = normalizeResults[activePhoto.id]
+    if (finishedResult && !normalizeProgress.active) {
+      try {
+        const bmp = await createImageBitmap(finishedResult.blob)
+        if (activePhotoIdRef.current !== activePhoto.id) { bmp.close(); return }
+        bc.width = bmp.width
+        bc.height = bmp.height
+        const resultCtx = bc.getContext('2d', { willReadFrequently: true })
+        if (!resultCtx) { bmp.close(); return }
+        resultCtx.clearRect(0, 0, bc.width, bc.height)
+        resultCtx.drawImage(bmp, 0, 0)
+        bmp.close()
+        renderCanvasRef.current()
+        return
+      } catch {
+        // If the result preview cannot decode, fall through to live preview.
+      }
+    }
     // Batch preview always starts from the un-anonymized original so opening the
     // batch panel never shows zone effects baked onto the work canvas.
     const orig = originalBlobByPhotoRef.current[activePhoto.id]
@@ -1951,10 +2040,81 @@ function App() {
         bc.getContext('2d')!.drawImage(result, 0, 0)
       } catch { /* ignore */ }
     }
+    if (activeBatchTasks.has('anonymize')) {
+      try {
+        const detect = detectSettingsRef.current
+        if (detect) {
+          const { detections } = await detectImagePrivacyDetections(bc, {
+            detectionConfig: detect.detectionConfig,
+            modelStatus: detect.modelStatus,
+            confidence: detect.confidence,
+            thorough: detect.thorough,
+            enabledClasses: detect.enabledClasses,
+          })
+          if (activePhotoIdRef.current !== activePhoto.id) return
+          if (detections.length > 0) {
+            const batchEffect = normalizeSettings.batchAnonymizeEffect as AnonymizeEffectId
+            const strength = Math.min(1, Math.max(0.01, normalizeSettings.batchAnonymizeStrength / 100))
+            const batchEmojis = pickUniqueEmojis(detections.length)
+            const W = bc.width
+            const H = bc.height
+            detections.forEach((det, i) => {
+              let box = normalizedBoxToPixel(det.bbox, W, H)
+              if (det.type === 'face') {
+                box = expandPixelBox(box.x, box.y, box.width, box.height, W, H, detect.faceOffset)
+                box = {
+                  x: box.x * W,
+                  y: box.y * H,
+                  width: box.width * W,
+                  height: box.height * H,
+                }
+              }
+              const zoneId = `${activePhoto.id}-batch-preview-${i}`
+              const emoji = !emojiRandom && selectedEmoji ? selectedEmoji : batchEmojis[i]
+              const customImageAssetId = !customImageRandom && selectedCustomImageId
+                ? selectedCustomImageId
+                : pickCustomImageAssetId(customImageAssetsRef.current, zoneId)
+              applyEffectRect(
+                bCtx,
+                batchEffect,
+                box.x,
+                box.y,
+                box.width,
+                box.height,
+                strength,
+                emoji,
+                {
+                  customImages: customImageAssetsRef.current,
+                  customImageSource,
+                  zoneId,
+                  seed: zoneId,
+                  customImageAssetId,
+                  asciiCharset,
+                },
+              )
+            })
+          }
+        }
+      } catch { /* preview detection failed — leave the base batch preview visible */ }
+    }
     renderCanvasRef.current()   // use ref to avoid dep on renderCanvas
   // renderCanvas intentionally not in deps — use renderCanvasRef
    
-  }, [activePhoto, activeBatchTasks, batchPanelOpen, colorAdj, normalizeSettings])
+  }, [
+    activePhoto,
+    activeBatchTasks,
+    batchPanelOpen,
+    colorAdj,
+    normalizeSettings,
+    normalizeResults,
+    normalizeProgress.active,
+    emojiRandom,
+    selectedEmoji,
+    customImageRandom,
+    selectedCustomImageId,
+    customImageSource,
+    asciiCharset,
+  ])
 
   // Keep ref in sync so photo-loading effect can call it
   useEffect(() => { computeBatchPreviewRef.current = computeBatchPreview }, [computeBatchPreview])
@@ -1970,7 +2130,21 @@ function App() {
     batchPreviewDebounceRef.current = setTimeout(() => { computeBatchPreview() }, 350)
     return () => { if (batchPreviewDebounceRef.current) clearTimeout(batchPreviewDebounceRef.current) }
    
-  }, [batchPanelOpen, activeBatchTasks, normalizeSettings, activePhoto, colorAdj])
+  }, [
+    batchPanelOpen,
+    activeBatchTasks,
+    normalizeSettings,
+    activePhoto,
+    colorAdj,
+    normalizeResults,
+    normalizeProgress.active,
+    emojiRandom,
+    selectedEmoji,
+    customImageRandom,
+    selectedCustomImageId,
+    customImageSource,
+    asciiCharset,
+  ])
 
   useEffect(() => {
     if (!activePhotoId || !activePhoto?.isVideo) return
@@ -2192,12 +2366,14 @@ function App() {
   const setSelectedEffect = useCallback((effect: AnonymizeEffectId) => {
     selectedEffectRef.current = effect
     setSelectedEffectState(effect)
+    setEffectPickerOpen((open) => (open == null ? open : effectPickerKindForEffect(effect)))
     if (effect === 'custom-image') setBrushStrength(1)
   }, [])
 
   const updateSelectedZoneEffect = useCallback((effect: AnonymizeEffectId) => {
     selectedEffectRef.current = effect
     setSelectedEffectState(effect)
+    setEffectPickerOpen((open) => (open == null ? open : effectPickerKindForEffect(effect)))
     if (effect === 'custom-image') setBrushStrength(1)
     setEraserActive(false)
     setEffectFlyoutOpen(false)
@@ -2501,22 +2677,18 @@ function App() {
    
   }, [autoDetect, detector.mode, activePhoto?.id])
 
-  // Live re-detection: changing a detection setting (sensitivity, an enabled
-  // target/class, or a model finishing loading) immediately re-runs detection so
-  // the preview always reflects the current settings — no manual "detect" button.
+  // Live re-detection: changing sensitivity, an enabled target, or a raw class
+  // re-runs detection. Model readiness is intentionally excluded: optional
+  // YOLO/OCR models lazy-load inside the detection run that requested them, and
+  // a later "ready" status must not trigger a surprise second scan/loader.
   const detectSignature = useMemo(() => {
     const cats = detectionConfig
       .filter((c) => c.enabled)
       .map((c) => `${c.type}:${c.confidenceThreshold.toFixed(2)}`)
       .join(',')
     const classes = [...enabledClasses].sort().join(',')
-    const ready = Object.entries(modelStatus)
-      .filter(([, s]) => s === 'ready')
-      .map(([id]) => id)
-      .sort()
-      .join(',')
-    return `${detectSensitivity}|${cats}|${classes}|${ready}`
-  }, [detectSensitivity, detectionConfig, enabledClasses, modelStatus])
+    return `${detectSensitivity}|${cats}|${classes}`
+  }, [detectSensitivity, detectionConfig, enabledClasses])
 
   const prevDetectSigRef = useRef<string | null>(null)
   useEffect(() => {
@@ -2573,6 +2745,9 @@ function App() {
   }, [photos])
 
   const toggleBatchTask = (taskId: BatchTaskId) => {
+    setNormalizeResults({})
+    setNormalizePreviewIds([])
+    setNormalizeSummary(null)
     setActiveBatchTasks((cur) => {
       const next = new Set(cur)
       const enabling = !next.has(taskId)
@@ -2865,8 +3040,8 @@ function App() {
     }
   }, [photos, selectPhoto])
 
-  const selectedBatchImageCount = photos.filter((p) => selectedForBatch.has(p.id) && !p.isVideo).length
-  const batchProcessCount = selectedForBatch.size > 0 ? selectedBatchImageCount : photos.filter((p) => !p.isVideo).length
+  const selectedBatchImageCount = photos.filter((p) => selectedForBatch.has(p.id) && isBatchProcessablePhoto(p)).length
+  const batchProcessCount = selectedForBatch.size > 0 ? selectedBatchImageCount : photos.filter(isBatchProcessablePhoto).length
 
   const updateMobileViewTransformDirty = useCallback(() => {
     const dirty =
@@ -2904,32 +3079,6 @@ function App() {
     () => initializeDetector().then((s) => setDetector(s)),
     [initializeDetector, setDetector],
   )
-
-  // Warm the HTTP cache for heavy optional models while the user is idle on the
-  // home / hypno screen — but only for the targets that are actually enabled.
-  // A default session (faces + plates + sensitive text) warms just the plate
-  // model + OCR engine; broader COCO / custom models stream in only once the
-  // user opts into those extra targets. Re-runs when the enabled set changes.
-  const enabledTargetsKey = useMemo(
-    () => detectionConfig.filter((c) => c.enabled).map((c) => c.type).sort().join(','),
-    [detectionConfig],
-  )
-  const detectionConfigRef = useRef(detectionConfig)
-  detectionConfigRef.current = detectionConfig
-  useEffect(() => {
-    const groups = prefetchGroupsForConfig(detectionConfigRef.current)
-    if (groups.length === 0) return
-    const w = window as Window & {
-      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number
-    }
-    const trigger = () => startAssetPrefetch(groups)
-    if (typeof w.requestIdleCallback === 'function') {
-      const id = w.requestIdleCallback(trigger, { timeout: 4000 })
-      return () => (w as unknown as { cancelIdleCallback?: (h: number) => void }).cancelIdleCallback?.(id)
-    }
-    const t = setTimeout(trigger, 2500)
-    return () => clearTimeout(t)
-  }, [enabledTargetsKey])
 
   const mobileStepMobileViewZoom = useCallback((dir: 1 | -1) => {
     const factor = dir === 1 ? 1.2 : 1 / 1.2
@@ -3163,6 +3312,7 @@ function App() {
     isDetecting,
     detector,
     detectorLoading,
+    modelLoadProgress,
     addLiveMediaToLibrary,
     openPhotoInEditor,
     stepAdjacentLibraryPhoto,
@@ -3249,6 +3399,7 @@ function App() {
   // The home default screen (no media loaded) renders its own inline model
   // preloader, so the global dialog/toast loaders are suppressed there.
   const onHomeDefaultScreen = (isMobile && photos.length === 0 && mobileMode !== 'live') || (!isMobile && photos.length === 0)
+  const mobileToolSheetOpen = isMobile && mobilePanel != null && mobilePanel.startsWith('tool-')
 
   useEffect(() => {
     mobileViewZoomRef.current = mobileViewZoom
@@ -3389,7 +3540,7 @@ function App() {
   return (
     <MobileBindingsProvider value={mobileBindings}>
     <div
-      className={`app-shell${isMobile ? ' app-shell-mobile' : ' app-shell-desktop-v2'}${isMobile && mobileMode === 'live' ? ' app-shell-mobile--live' : ''}${isMobile && mobileMode === 'video' ? ' app-shell-mobile--video' : ''}${isMobile && mobileMode === 'audio' ? ' app-shell-mobile--audio' : ''}${isMobile && mobileMode === 'editor' ? ' app-shell-mobile--image' : ''}${!isMobile && activePhoto?.isVideo ? ' app-shell-desktop-v2--video' : ''}${!isMobile && activePhoto?.isAudio ? ' app-shell-desktop-v2--audio' : ''}${!isMobile && activePhoto?.isDocument ? ' app-shell-desktop-v2--document' : ''}${isMobile && activePhoto?.isDocument ? ' app-shell-mobile--document' : ''}`}
+      className={`app-shell${isMobile ? ' app-shell-mobile' : ' app-shell-desktop-v2'}${isMobile && mobileMode === 'live' ? ' app-shell-mobile--live' : ''}${isMobile && mobileMode === 'video' ? ' app-shell-mobile--video' : ''}${isMobile && mobileMode === 'audio' ? ' app-shell-mobile--audio' : ''}${isMobile && mobileMode === 'editor' ? ' app-shell-mobile--image' : ''}${mobileToolSheetOpen ? ' app-shell-mobile--tool-sheet-open' : ''}${!isMobile && activePhoto?.isVideo ? ' app-shell-desktop-v2--video' : ''}${!isMobile && activePhoto?.isAudio ? ' app-shell-desktop-v2--audio' : ''}${!isMobile && activePhoto?.isDocument ? ' app-shell-desktop-v2--document' : ''}${isMobile && activePhoto?.isDocument ? ' app-shell-mobile--document' : ''}`}
       translate="no"
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
@@ -3474,6 +3625,7 @@ function App() {
             isDragOver={isDragOver}
             isBusy={isBusy}
             detectorLoading={detectorLoading}
+            modelLoadProgress={modelLoadProgress}
             onAbout={() => setAboutOpen(true)}
             onSelectMedia={openUnifiedPicker}
             onLoadDemo={loadDemoPhotos}
@@ -3511,11 +3663,6 @@ function App() {
             deletePhoto={deletePhoto}
             hasMorePhotosToRender={hasMorePhotosToRender}
             setPhotoListLimit={setPhotoListLimit}
-            runNormalizeBatch={runNormalizeBatch}
-            isNormalizing={isNormalizing}
-            selectedBatchImageCount={selectedBatchImageCount}
-            normalizeProgressPercent={normalizeProgressPercent}
-            cancelNormalizeBatch={cancelNormalizeBatch}
           />
         )}
 
@@ -3573,6 +3720,7 @@ function App() {
           setAdjFlyoutAnchor={setAdjFlyoutAnchor}
           colorAdj={colorAdj}
           setColorAdj={setColorAdj}
+          confirmColorAdjForActive={confirmColorAdjForActive}
           renderCanvas={renderCanvas}
           transformFlyoutOpen={transformFlyoutOpen}
           transformFlyoutAnchor={transformFlyoutAnchor}
@@ -3611,6 +3759,13 @@ function App() {
           normResultsCount={normResultsCount}
           exportNormalizeZip={exportNormalizeZip}
           isExporting={isExporting}
+          runNormalizeBatch={runNormalizeBatch}
+          cancelNormalizeBatch={cancelNormalizeBatch}
+          batchProcessCount={batchProcessCount}
+          setEffectPickerOpen={setEffectPickerOpen}
+          customImageAssets={customImageAssets}
+          customImageSource={customImageSource}
+          loadCustomImagePreset={loadCustomImagePreset}
           normalizePreviewPhotos={normalizePreviewPhotos}
           selectPhoto={selectPhoto}
           activeBatchTasks={activeBatchTasks}
@@ -3743,6 +3898,17 @@ function App() {
             isBusy={isBusy}
             isDetecting={isDetecting}
             detectionStep={detectionStep}
+            detectionModelProgress={isDetecting && assetPrefetchState.phase === 'running'
+              ? {
+                  label: assetPrefetchState.label || detectionStep || 'Loading privacy model…',
+                  pct: assetPrefetchState.total > 0
+                    ? Math.min(99, Math.round((assetPrefetchState.loaded / assetPrefetchState.total) * 100))
+                    : null,
+                  detail: assetPrefetchState.total > 0
+                    ? `${(assetPrefetchState.loaded / 1048576).toFixed(1)} / ${(assetPrefetchState.total / 1048576).toFixed(1)} MB`
+                    : undefined,
+                }
+              : null}
             localProcessingMs={localProcessingMs}
             videoProcessing={videoProcessing}
             videoProgress={videoProgress}
@@ -3874,7 +4040,7 @@ function App() {
         />
       )}
 
-      {!onHomeDefaultScreen && <BackgroundAssetLoader />}
+      {!onHomeDefaultScreen && !isDetecting && <BackgroundAssetLoader />}
 
       {/* Headless test seam: surfaces the latest detection counts for e2e checks. */}
       <div data-testid="detection-counts" data-counts={JSON.stringify(lastDetectionCounts ?? {})} hidden />

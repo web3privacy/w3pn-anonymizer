@@ -68,7 +68,7 @@ export const DEFAULT_DETECTION_CONFIG: DetectionCategoryConfig[] = [
   {
     type: 'person',
     label: 'People / full body',
-    enabled: true,
+    enabled: false,
     confidenceThreshold: 0.45,
     color: DETECTION_COLORS.person,
     effectId: 'pixelate',
@@ -76,7 +76,7 @@ export const DEFAULT_DETECTION_CONFIG: DetectionCategoryConfig[] = [
   {
     type: 'license_plate',
     label: 'License plates / SPZ',
-    enabled: true,
+    enabled: false,
     confidenceThreshold: 0.45,
     color: DETECTION_COLORS.license_plate,
     effectId: 'pixelate',
@@ -108,7 +108,7 @@ export const DEFAULT_DETECTION_CONFIG: DetectionCategoryConfig[] = [
   {
     type: 'document',
     label: 'Documents / papers / IDs',
-    enabled: true,
+    enabled: false,
     confidenceThreshold: 0.22,
     color: DETECTION_COLORS.document,
     effectId: 'pixelate',
@@ -116,7 +116,7 @@ export const DEFAULT_DETECTION_CONFIG: DetectionCategoryConfig[] = [
   {
     type: 'pii_text',
     label: 'Sensitive text (emails, cards, IDs…)',
-    enabled: true,
+    enabled: false,
     confidenceThreshold: 0.22,
     color: DETECTION_COLORS.pii_text,
     effectId: 'pixelate',

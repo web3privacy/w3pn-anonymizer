@@ -34,6 +34,7 @@ type TessLine = { words?: TessWord[] }
 type TessParagraph = { lines?: TessLine[] }
 type TessBlock = { paragraphs?: TessParagraph[] }
 type TessData = { text?: string; words?: TessWord[]; blocks?: TessBlock[] }
+type WordLine = { words: TessWord[]; text: string; bbox: TessBBox }
 
 let workerPromise: Promise<TessWorker | null> | null = null
 
@@ -122,6 +123,146 @@ function unionBox(words: TessWord[]): TessBBox | null {
   return { x0, y0, x1, y1 }
 }
 
+function normalizeForSensitiveHeuristics(text: string): string {
+  return text
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[|]/g, 'i')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+const SENSITIVE_LABEL_RE = /\b(?:jmeno|name|e-?mail|mail|telefon|phone|tel\.?|adresa|address|datum\s+narozeni|datum|narozen|birth|iban|bic|swift|ucet|uctu|account|cislo\s+uctu|card|karta|ico|ic\b|dic|tax\s+id|vat|op\b|passport|id\s*(?:card|number)?|wifi|wi\s*fi|heslo|password|secret|token|private\s+key)\b/i
+const EMAILISH_RE = /@|(?:[a-z0-9._%+-]{2,}\s+(?:at|u)\s+[a-z0-9.-]{2,})/i
+const LONG_NUMBER_RE = /(?:\+?\d[\d\s()./-]{5,}\d)/
+const DATE_RE = /\b(?:\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{4}[./-]\d{1,2}[./-]\d{1,2})\b/
+const MONEY_RE = /\b\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{2})?\s*(?:kc|kč|czk|eur|usd|gbp|€|\$)\b/i
+const POSTAL_CITY_RE = /\b\d{3}\s?\d{2}\s+[a-z]{2,}/i
+const ADDRESS_RE = /\b(?:ulice|street|str\.?|namesti|trida|nabrezi|nabrezi|sidlo|sídlo|praha|brno|ostrava|plzen|olomouc|liberec|pardubice)\b/i
+const REFERENCE_RE = /\b(?:fv|obj|inv|invoice|faktura|objednavka|smlouva|contract|cislo|c\.|no\.?)\s*[-:]?\s*[a-z0-9/-]{3,}\b/i
+const NUMERIC_CLUSTER_RE = /(?:\d[\d\s./-]{2,}\d)/g
+
+function lineLooksSensitive(text: string): boolean {
+  const normalized = normalizeForSensitiveHeuristics(text)
+  if (!normalized) return false
+  if (SENSITIVE_LABEL_RE.test(normalized)) return true
+  if (EMAILISH_RE.test(normalized)) return true
+  if (DATE_RE.test(normalized)) return true
+  if (MONEY_RE.test(normalized)) return true
+  if (POSTAL_CITY_RE.test(normalized)) return true
+  if (ADDRESS_RE.test(normalized) && /\d/.test(normalized)) return true
+  if (REFERENCE_RE.test(normalized)) return true
+  const digits = normalized.replace(/\D/g, '')
+  if (digits.length >= 7 && LONG_NUMBER_RE.test(normalized)) return true
+  const clusters = normalized.match(NUMERIC_CLUSTER_RE) ?? []
+  return clusters.length >= 2 && digits.length >= 6
+}
+
+function groupWordsIntoLines(words: TessWord[]): WordLine[] {
+  const usable = words
+    .filter((w) => (w.text ?? '').trim() && (w.confidence === undefined || w.confidence >= 25))
+    .sort((a, b) => {
+      const ac = (a.bbox.y0 + a.bbox.y1) / 2
+      const bc = (b.bbox.y0 + b.bbox.y1) / 2
+      return ac - bc || a.bbox.x0 - b.bbox.x0
+    })
+  const lines: TessWord[][] = []
+  for (const word of usable) {
+    const center = (word.bbox.y0 + word.bbox.y1) / 2
+    const height = Math.max(1, word.bbox.y1 - word.bbox.y0)
+    const last = lines[lines.length - 1]
+    if (!last) {
+      lines.push([word])
+      continue
+    }
+    const lastBox = unionBox(last)
+    const lastCenter = lastBox ? (lastBox.y0 + lastBox.y1) / 2 : center
+    const lastHeight = lastBox ? Math.max(1, lastBox.y1 - lastBox.y0) : height
+    if (Math.abs(center - lastCenter) <= Math.max(12, Math.max(height, lastHeight) * 0.8)) {
+      last.push(word)
+    } else {
+      lines.push([word])
+    }
+  }
+  return lines.flatMap((lineWords) => {
+    const sorted = [...lineWords].sort((a, b) => a.bbox.x0 - b.bbox.x0)
+    const segments: TessWord[][] = []
+    for (const word of sorted) {
+      const current = segments[segments.length - 1]
+      if (!current) {
+        segments.push([word])
+        continue
+      }
+      const prev = current[current.length - 1]
+      const gap = word.bbox.x0 - prev.bbox.x1
+      const avgHeight = Math.max(1, ((word.bbox.y1 - word.bbox.y0) + (prev.bbox.y1 - prev.bbox.y0)) / 2)
+      const prevWidth = Math.max(1, prev.bbox.x1 - prev.bbox.x0)
+      if (gap > Math.max(110, avgHeight * 7, prevWidth * 2.2)) {
+        segments.push([word])
+      } else {
+        current.push(word)
+      }
+    }
+    return segments.flatMap((segmentWords) => {
+      const bbox = unionBox(segmentWords)
+      if (!bbox) return []
+      const text = segmentWords.map((w) => (w.text ?? '').trim()).filter(Boolean).join(' ')
+      return [{ words: segmentWords, text, bbox }]
+    })
+  })
+}
+
+function bboxOverlaps(a: TessBBox, b: TessBBox): boolean {
+  const x = Math.max(0, Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0))
+  const y = Math.max(0, Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0))
+  return x > 0 && y > 0
+}
+
+function bboxToDetection(
+  box: TessBBox,
+  imageW: number,
+  imageH: number,
+  confidence: number,
+  objectClass: string,
+): PrivacyDetection | null {
+  const padX = imageW * 0.004
+  const padY = imageH * 0.006
+  const x = Math.max(0, box.x0 - padX)
+  const y = Math.max(0, box.y0 - padY)
+  const right = Math.min(imageW, box.x1 + padX)
+  const bottom = Math.min(imageH, box.y1 + padY)
+  if (right <= x || bottom <= y) return null
+  return {
+    id: createDetectionId('pii'),
+    type: 'pii_text',
+    bbox: { x: x / imageW, y: y / imageH, width: (right - x) / imageW, height: (bottom - y) / imageH },
+    confidence,
+    sourceModel: 'tesseract-ocr',
+    color: DETECTION_COLORS.pii_text,
+    objectClass,
+  }
+}
+
+function sensitiveLineFallbackDetections(
+  words: TessWord[],
+  imageW: number,
+  imageH: number,
+  existingBoxes: TessBBox[],
+  minConfidence: number,
+): PrivacyDetection[] {
+  const fallbackConfidence = 0.82
+  if (fallbackConfidence < minConfidence) return []
+  const detections: PrivacyDetection[] = []
+  for (const line of groupWordsIntoLines(words)) {
+    if (!lineLooksSensitive(line.text)) continue
+    if (existingBoxes.some((box) => bboxOverlaps(box, line.bbox))) continue
+    const det = bboxToDetection(line.bbox, imageW, imageH, fallbackConfidence, 'sensitive_line')
+    if (det) detections.push(det)
+  }
+  return detections
+}
+
 /**
  * Pure core: turn OCR words + image size into PII privacy detections. Exposed
  * for unit testing without the Tesseract worker.
@@ -135,10 +276,9 @@ export function piiDetectionsFromWords(
   if (words.length === 0 || imageW <= 0 || imageH <= 0) return []
   const { text, indexed } = buildText(words)
   const spans = detectPiiInText(text)
-  const padX = imageW * 0.004
-  const padY = imageH * 0.006
 
   const detections: PrivacyDetection[] = []
+  const existingBoxes: TessBBox[] = []
   for (const span of spans) {
     if ((span.confidence ?? 0) < minConfidence) continue
     const s = span.start ?? 0
@@ -146,22 +286,15 @@ export function piiDetectionsFromWords(
     const hitWords = indexed.filter((iw) => iw.start < e && iw.end > s).map((iw) => iw.word)
     const box = unionBox(hitWords)
     if (!box) continue
-    const x = Math.max(0, box.x0 - padX)
-    const y = Math.max(0, box.y0 - padY)
-    const right = Math.min(imageW, box.x1 + padX)
-    const bottom = Math.min(imageH, box.y1 + padY)
-    if (right <= x || bottom <= y) continue
-    detections.push({
-      id: createDetectionId('pii'),
-      type: 'pii_text',
-      bbox: { x: x / imageW, y: y / imageH, width: (right - x) / imageW, height: (bottom - y) / imageH },
-      confidence: span.confidence ?? 0.8,
-      sourceModel: 'tesseract-ocr',
-      color: DETECTION_COLORS.pii_text,
-      objectClass: span.type,
-    })
+    const det = bboxToDetection(box, imageW, imageH, span.confidence ?? 0.8, span.type)
+    if (!det) continue
+    existingBoxes.push(box)
+    detections.push(det)
   }
-  return detections
+  return [
+    ...detections,
+    ...sensitiveLineFallbackDetections(words, imageW, imageH, existingBoxes, minConfidence),
+  ]
 }
 
 /**

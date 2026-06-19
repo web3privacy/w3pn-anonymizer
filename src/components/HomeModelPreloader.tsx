@@ -14,6 +14,7 @@ export function HomeModelPreloader({ status }: { status: ModelPreloadStatus }) {
         <span className="home-preloader-label">{status.label}</span>
         {!indeterminate && <span className="home-preloader-pct">{status.pct}%</span>}
       </div>
+      {status.detail && <span className="home-preloader-detail">{status.detail}</span>}
       <span className="home-preloader-bar" aria-hidden="true">
         <span
           className={`home-preloader-fill${indeterminate ? ' home-preloader-fill--indeterminate' : ''}`}

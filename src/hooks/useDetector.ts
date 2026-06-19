@@ -68,6 +68,7 @@ export function useDetector(): DetectorApi {
   useEffect(() => {
     const retryIfUnavailable = () => {
       if (document.visibilityState === 'hidden') return
+      if (detectorLoading) return
       if (detector.mode !== 'unavailable') return
       void refreshDetector(true)
     }
@@ -77,9 +78,10 @@ export function useDetector(): DetectorApi {
       window.removeEventListener('focus', retryIfUnavailable)
       document.removeEventListener('visibilitychange', retryIfUnavailable)
     }
-  }, [detector.mode, refreshDetector])
+  }, [detector.mode, detectorLoading, refreshDetector])
 
   useEffect(() => {
+    if (detectorLoading) return
     if (detector.mode !== 'unavailable') return
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | null = null
@@ -98,7 +100,7 @@ export function useDetector(): DetectorApi {
       cancelled = true
       if (timer) clearTimeout(timer)
     }
-  }, [detector.mode, refreshDetector])
+  }, [detector.mode, detectorLoading, refreshDetector])
 
   return { detector, setDetector, detectorLoading, modelLoadProgress, refreshDetector }
 }

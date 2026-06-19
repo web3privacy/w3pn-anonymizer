@@ -2,11 +2,13 @@ import { AnonymizerLogoMotion } from '../components/AnonymizerLogoMotion'
 import { HomeModelPreloader } from '../components/HomeModelPreloader'
 import { useOpticalCalibration } from '../hooks/useOpticalCalibration'
 import { useModelPreload } from '../hooks/useModelPreload'
+import type { DetectorLoadProgress } from '../lib/detector'
 
 interface DesktopHomeDefaultProps {
   isDragOver: boolean
   isBusy: boolean
   detectorLoading?: boolean
+  modelLoadProgress?: DetectorLoadProgress | null
   onAbout: () => void
   onSelectMedia: () => void
   onLoadDemo: () => void
@@ -17,13 +19,14 @@ export function DesktopHomeDefault({
   isDragOver,
   isBusy,
   detectorLoading = false,
+  modelLoadProgress = null,
   onAbout,
   onSelectMedia,
   onLoadDemo,
   onLiveCamera,
 }: DesktopHomeDefaultProps) {
   const { mode, activate, cancel, isCalibratingLayout, isSessionActive, isSettling } = useOpticalCalibration()
-  const preload = useModelPreload(detectorLoading)
+  const preload = useModelPreload(detectorLoading, modelLoadProgress)
   const pasteHint = navigator.platform.includes('Mac') ? '\u2318V' : 'Ctrl+V'
 
   return (
@@ -68,7 +71,7 @@ export function DesktopHomeDefault({
                 </button>
               </div>
               <button type="button" className="desktop-home-v2-btn desktop-home-v2-btn--ghost" onClick={onLoadDemo} disabled={isBusy}>
-                LOAD DEMO
+                {isBusy ? 'LOADING DEMO…' : 'LOAD DEMO'}
               </button>
             </div>
           ) : (

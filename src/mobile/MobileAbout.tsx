@@ -10,7 +10,7 @@ interface MobileAboutProps {
 
 const FEATURES = [
   { icon: 'visibility_off' as const, title: 'Privacy detection', desc: 'Faces, people, plates, documents, PII text (YuNet + YOLO + OCR)' },
-  { icon: 'grid_on' as const, title: 'Anonymization effects', desc: 'Blur, pixelate, blackout, emoji, ASCII, custom image, glitch, thermal…' },
+  { icon: 'grid_on' as const, title: 'Anonymization effects', desc: 'Blur, pixelate, blackout, emoji, ASCII, custom image, glitch, Color Ball…' },
   { icon: 'description' as const, title: 'Document mode', desc: 'PDF/TXT redaction — detect, review, export flattened PDF or tokenized text' },
   { icon: 'graphic_eq' as const, title: 'Audio anonymization', desc: 'Waveform editor with voice-modulation presets and local export' },
   { icon: 'photo_camera' as const, title: 'Live camera + mic', desc: 'Real-time face masking, video capture, and live voice mask presets' },

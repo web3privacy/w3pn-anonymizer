@@ -51,6 +51,50 @@ describe('piiDetectionsFromWords', () => {
     expect(piiDetectionsFromWords(words, W, H)).toHaveLength(0)
   })
 
+  it('falls back to sensitive OCR lines when regex PII is broken by recognition', () => {
+    const words: TessWord[] = [
+      word('Email:', 10, 110, 90, 140),
+      word('petra', 100, 110, 170, 140),
+      word('dwara', 180, 110, 260, 140),
+      word('k', 270, 110, 290, 140),
+      word('gmail', 300, 110, 380, 140),
+      word('coT', 390, 110, 440, 140),
+      word('Telefon:', 10, 150, 110, 180),
+      word('+420', 120, 150, 190, 180),
+      word('606', 200, 150, 250, 180),
+      word('987', 260, 150, 310, 180),
+      word('654', 320, 150, 370, 180),
+    ]
+    const dets = piiDetectionsFromWords(words, W, H)
+    expect(dets.some((d) => d.objectClass === 'sensitive_line')).toBe(true)
+    expect(dets.length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('treats dates, amounts and address-like lines as sensitive on document photos', () => {
+    const words: TessWord[] = [
+      word('Datum', 10, 210, 90, 240),
+      word('vystaveni:', 100, 210, 220, 240),
+      word('18.', 230, 210, 270, 240),
+      word('05.', 280, 210, 320, 240),
+      word('2024', 330, 210, 400, 240),
+      word('Celkem', 10, 250, 100, 280),
+      word('k', 110, 250, 130, 280),
+      word('uhrade:', 140, 250, 230, 280),
+      word('24', 240, 250, 270, 280),
+      word('200,00', 280, 250, 360, 280),
+      word('Kc', 370, 250, 400, 280),
+      word('Kollarova', 10, 290, 130, 320),
+      word('1234/56', 140, 290, 230, 320),
+      word('602', 240, 290, 290, 320),
+      word('00', 300, 290, 330, 320),
+      word('Brno', 340, 290, 400, 320),
+    ]
+    const dets = piiDetectionsFromWords(words, W, H)
+    const sensitiveLines = dets.filter((d) => d.objectClass === 'sensitive_line')
+    expect(dets.length).toBeGreaterThanOrEqual(3)
+    expect(sensitiveLines.length).toBeGreaterThanOrEqual(2)
+  })
+
   it('respects the minimum confidence threshold', () => {
     const words: TessWord[] = [word('+420 777 123 456', 10, 10, 300, 40)]
     // Phone confidence is 0.6; a 0.9 floor should drop it.

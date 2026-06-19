@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type SetStateAction } from 'react'
 import { cloneDetectionConfig, DEFAULT_DETECTION_CONFIG } from '../lib/detection-config'
-import { isDetectionTypeOperational, sanitizeDetectionConfig } from '../lib/detections/detection-availability'
+import { getDetectionAvailability, sanitizeDetectionConfig } from '../lib/detections/detection-availability'
 import {
   mergeDetectionConfig,
   readPrivacySettings,
@@ -15,11 +15,12 @@ export type ModelStatusMap = Record<string, ModelAvailabilityStatus>
 
 const INITIAL_MODEL_STATUS: ModelStatusMap = {
   'yunet-face': 'loading',
-  // 'loading' (not 'missing') until the probe resolves, so a default-on target
-  // is not race-disabled by sanitizeDetectionConfig before the model is found.
-  'yolo-coco': 'loading',
-  'yolo-license-plate': 'loading',
-  'yolo-privacy-custom': 'loading',
+  // YOLO assets are optional and lazy-loaded on first use. Mark them available
+  // in the UI without probing/downloading anything during app boot; if an asset
+  // is missing, the first requested YOLO run will report it then.
+  'yolo-coco': 'ready',
+  'yolo-license-plate': 'ready',
+  'yolo-privacy-custom': 'ready',
 }
 
 export function usePrivacyDetectionConfig() {
@@ -58,7 +59,8 @@ export function usePrivacyDetectionConfig() {
 
   const setCategoryEnabled = useCallback((type: PrivacyDetectionType, enabled: boolean) => {
     setDetectionConfig((cur) => {
-      if (enabled && !isDetectionTypeOperational(type, modelStatus)) return cur
+      const availability = getDetectionAvailability(type, modelStatus)
+      if (enabled && (availability === 'coming_soon' || availability === 'error')) return cur
       return cur.map((c) => (c.type === type ? { ...c, enabled } : c))
     })
   }, [setDetectionConfig, modelStatus])

@@ -39,6 +39,12 @@ type VideoProgress = {
   renderTotal?: number
 }
 
+export type DetectionModelProgress = {
+  label: string
+  pct: number | null
+  detail?: string
+}
+
 type HoldRepeatBindings = {
   onPointerDown: (e: ReactPointerEvent) => void
   onPointerUp: () => void
@@ -56,6 +62,7 @@ export interface CanvasViewerProps {
   isBusy: boolean
   isDetecting: boolean
   detectionStep: string
+  detectionModelProgress: DetectionModelProgress | null
   localProcessingMs: number | null
   videoProcessing: boolean
   videoProgress: VideoProgress | null
@@ -150,6 +157,7 @@ export function CanvasViewer(props: CanvasViewerProps) {
     isBusy,
     isDetecting,
     detectionStep,
+    detectionModelProgress,
     localProcessingMs,
     videoProcessing,
     videoProgress,
@@ -285,6 +293,8 @@ export function CanvasViewer(props: CanvasViewerProps) {
       {/* Detecting overlay — portaled on mobile so it sits above bottom drawers */}
       {(() => {
         if (!isDetecting) return null
+        const progressPct = detectionModelProgress?.pct ?? null
+        const progressLabel = detectionModelProgress?.label ?? detectionStep
         const overlay = (
           <div
             className={`detecting-overlay${isMobile ? ' detecting-overlay--portal' : ''}`}
@@ -292,7 +302,7 @@ export function CanvasViewer(props: CanvasViewerProps) {
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
               <span>⏳</span>
-              <span>Detecting faces…</span>
+              <span>{detectionModelProgress ? 'Preparing analysis…' : 'Detecting faces…'}</span>
               <ElapsedTimer />
             </div>
             {activePhoto && (
@@ -300,11 +310,20 @@ export function CanvasViewer(props: CanvasViewerProps) {
                 {activePhoto.name.split('/').pop()}
               </span>
             )}
-            {detectionStep && (
-              <span style={{ fontSize: '0.58rem', color: 'var(--accent)', opacity: 0.9 }}>{detectionStep}</span>
+            {progressLabel && (
+              <span style={{ fontSize: '0.58rem', color: 'var(--accent)', opacity: 0.9 }}>
+                {progressLabel}{progressPct !== null ? ` · ${progressPct}%` : ''}
+              </span>
+            )}
+            {detectionModelProgress?.detail && (
+              <span style={{ fontSize: '0.54rem', color: 'var(--text-muted)' }}>
+                {detectionModelProgress.detail}
+              </span>
             )}
             <div className="local-proof-bar">
-              <div className="local-proof-progress" />
+              <div className={`local-proof-progress${progressPct !== null ? ' local-proof-progress--determinate' : ''}`}>
+                {progressPct !== null && <span style={{ width: `${progressPct}%` }} />}
+              </div>
               <span className="local-proof-label">
                 <Icon name="lock" size={10} /> All data stays on your device
               </span>

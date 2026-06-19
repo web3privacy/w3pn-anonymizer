@@ -45,16 +45,37 @@ describe('privacy-settings-storage', () => {
     expect(merged.find((c) => c.type === 'screen')?.label).toBe('Screens / displays')
   })
 
-  it('migrates old (unversioned) settings to enable License plates by default', () => {
+  it('migrates old (unversioned) settings to faces-only defaults', () => {
     const oldConfig = DEFAULT_DETECTION_CONFIG.map((c) =>
-      c.type === 'license_plate' ? { ...c, enabled: false } : c,
+      c.type !== 'face' ? { ...c, enabled: true } : c,
     )
     store.set(
       'anonymizer-privacy-settings',
       JSON.stringify({ detectionConfig: oldConfig, showDetectionLabels: false }),
     )
     const loaded = readPrivacySettings()
-    expect(loaded.detectionConfig.find((c) => c.type === 'license_plate')?.enabled).toBe(true)
+    expect(loaded.detectionConfig.find((c) => c.type === 'face')?.enabled).toBe(true)
+    expect(loaded.detectionConfig.filter((c) => c.type !== 'face').every((c) => !c.enabled)).toBe(true)
+  })
+
+  it('migrates v6 settings to faces-only and clears raw classes', () => {
+    const oldConfig = DEFAULT_DETECTION_CONFIG.map((c) =>
+      c.type !== 'face' ? { ...c, enabled: true } : c,
+    )
+    store.set(
+      'anonymizer-privacy-settings',
+      JSON.stringify({
+        version: 6,
+        detectionConfig: oldConfig,
+        showDetectionLabels: false,
+        audioSettings: { mode: 'keep_original', preset: 'maximum_mask', intensity: 0 },
+        enabledClasses: ['car', 'truck'],
+      }),
+    )
+    const loaded = readPrivacySettings()
+    expect(loaded.detectionConfig.find((c) => c.type === 'face')?.enabled).toBe(true)
+    expect(loaded.detectionConfig.filter((c) => c.type !== 'face').every((c) => !c.enabled)).toBe(true)
+    expect(loaded.enabledClasses).toEqual([])
   })
 
   it('respects user choice to disable License plates on current version', () => {

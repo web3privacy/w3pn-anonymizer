@@ -7,15 +7,9 @@ import {
 } from './detection-config'
 
 describe('detection-config', () => {
-  it('defaults to faces, people, license plates, documents and sensitive text; other targets disabled', () => {
-    const enabledByDefault = ['face', 'person', 'license_plate', 'document', 'pii_text']
-    for (const type of enabledByDefault) {
-      expect(DEFAULT_DETECTION_CONFIG.find((c) => c.type === type)?.enabled).toBe(true)
-    }
-    const otherDefaultsOff = DEFAULT_DETECTION_CONFIG
-      .filter((c) => !enabledByDefault.includes(c.type))
-      .every((c) => !c.enabled)
-    expect(otherDefaultsOff).toBe(true)
+  it('defaults to faces only; heavier YOLO/OCR targets are opt-in', () => {
+    expect(DEFAULT_DETECTION_CONFIG.find((c) => c.type === 'face')?.enabled).toBe(true)
+    expect(DEFAULT_DETECTION_CONFIG.filter((c) => c.type !== 'face').every((c) => !c.enabled)).toBe(true)
   })
 
   it('always uses the single global effect for every detection type', () => {

@@ -69,6 +69,7 @@ export interface EditorToolStripProps {
   setAdjFlyoutAnchor: Dispatch<SetStateAction<FlyoutAnchor | null>>
   colorAdj: ColorAdjustments
   setColorAdj: Dispatch<SetStateAction<ColorAdjustments>>
+  confirmColorAdjForActive: () => void
   renderCanvas: () => void
   transformFlyoutOpen: boolean
   transformFlyoutAnchor: FlyoutAnchor | null
@@ -143,6 +144,7 @@ export function EditorToolStrip(props: EditorToolStripProps) {
     setAdjFlyoutAnchor,
     colorAdj,
     setColorAdj,
+    confirmColorAdjForActive,
     renderCanvas,
     transformFlyoutOpen,
     transformFlyoutAnchor,
@@ -312,8 +314,11 @@ export function EditorToolStrip(props: EditorToolStripProps) {
             colorAdj={colorAdj}
             onChange={setColorAdj}
             onReset={() => { setColorAdj(DEFAULT_COLOR_ADJUSTMENTS); renderCanvas() }}
+            onApply={confirmColorAdjForActive}
             showPresets
             showExtended
+            showApply
+            applyDisabled={!activePhoto}
           />
         </div>,
         document.body
@@ -425,6 +430,8 @@ export function EditorToolStrip(props: EditorToolStripProps) {
                     if (ef.id === 'custom-image' && customImageAssets.length === 0) {
                       void loadCustomImagePreset(customImageSource === 'custom' ? DEFAULT_CUSTOM_IMAGE_PRESET_ID : customImageSource)
                     }
+                  } else {
+                    setEffectPickerOpen(null)
                   }
                 }}
                 title={ef.description}

@@ -14,7 +14,7 @@ const baseSettings = {
   templateCropNormalized: null,
 } as NormalizeSettings
 
-function photo(id: string, isVideo = false): PhotoItem {
+function photo(id: string, overrides: Partial<PhotoItem> = {}): PhotoItem {
   return {
     id,
     name: `${id}.jpg`,
@@ -22,19 +22,26 @@ function photo(id: string, isVideo = false): PhotoItem {
     blob: new Blob(),
     previewUrl: `blob:${id}`,
     source: 'upload',
-    isVideo,
+    isVideo: false,
     edited: false,
+    ...overrides,
   }
 }
 
 describe('selectBatchPhotos', () => {
-  it('returns all non-video photos when nothing is selected', () => {
-    const photos = [photo('a'), photo('b', true), photo('c')]
+  it('returns all processable image photos when nothing is selected', () => {
+    const photos = [
+      photo('a'),
+      photo('b', { isVideo: true }),
+      photo('c'),
+      photo('d', { isAudio: true }),
+      photo('e', { isDocument: true }),
+    ]
     expect(selectBatchPhotos(photos, new Set())).toEqual([photo('a'), photo('c')])
   })
 
-  it('returns only selected non-video photos when selection is non-empty', () => {
-    const photos = [photo('a'), photo('b'), photo('c', true), photo('d')]
+  it('returns only selected processable image photos when selection is non-empty', () => {
+    const photos = [photo('a'), photo('b'), photo('c', { isVideo: true }), photo('d')]
     expect(selectBatchPhotos(photos, new Set(['b', 'c', 'd']))).toEqual([photo('b'), photo('d')])
   })
 })

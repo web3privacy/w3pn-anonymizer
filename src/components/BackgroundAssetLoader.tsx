@@ -12,6 +12,10 @@ export function BackgroundAssetLoader() {
 
   useEffect(() => subscribePrefetch(setState), [])
 
+  useEffect(() => {
+    if (state.phase === 'running') setDismissed(false)
+  }, [state.phase])
+
   // Auto-hide a short while after completion.
   useEffect(() => {
     if (state.phase !== 'done') return

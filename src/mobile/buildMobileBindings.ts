@@ -207,6 +207,7 @@ export interface MobileBindingsSource {
   isDetecting: boolean
   detector: AppMobileBindings['detector']
   detectorLoading: boolean
+  modelLoadProgress: AppMobileBindings['modelLoadProgress']
   addLiveMediaToLibrary: AppMobileBindings['addLiveMediaToLibrary']
   openPhotoInEditor: AppMobileBindings['openPhotoInEditor']
   stepAdjacentLibraryPhoto: AppMobileBindings['stepAdjacentLibraryPhoto']

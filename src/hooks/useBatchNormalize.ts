@@ -11,13 +11,13 @@ import { exportCanvasToBlob } from '../lib/export-canvas'
 import { pickCustomImageAssetId } from '../lib/ids'
 import { detectImagePrivacyDetections } from '../lib/detections/run-image-detection'
 import { normalizedBoxToPixel } from '../lib/detections/adapters'
-import { effectForDetectionType } from '../lib/detection-config'
 import { expandPixelBox } from '../lib/face-offset'
 import { normalizeSinglePhoto } from '../lib/normalize'
 import { waitForUi } from '../lib/video-overlay-helpers'
 import {
   computeBatchEta,
   formatBatchCompleteNotice,
+  isBatchProcessablePhoto,
   resolveBatchConcurrency,
   resolvePhotoColorAdj,
   selectBatchPhotos,
@@ -35,6 +35,7 @@ import type {
   NormalizeResult,
   NormalizeSettings,
   PhotoItem,
+  AsciiCharset,
 } from '../types'
 
 export type NormalizeProgressState = {
@@ -78,6 +79,11 @@ export interface UseBatchNormalizeParams {
   colorAdjByPhoto: Record<string, ColorAdjustments>
   customImageAssets: CustomImageAsset[]
   customImageSource: CustomImageSource
+  emojiRandom: boolean
+  selectedEmoji: string | null
+  customImageRandom: boolean
+  selectedCustomImageId: string | null
+  asciiCharset: AsciiCharset
   activePhotoId: string | null
   workCanvasRef: RefObject<HTMLCanvasElement | null>
   renderCanvas: () => void
@@ -105,6 +111,11 @@ export function useBatchNormalize({
   colorAdjByPhoto,
   customImageAssets,
   customImageSource,
+  emojiRandom,
+  selectedEmoji,
+  customImageRandom,
+  selectedCustomImageId,
+  asciiCharset,
   activePhotoId,
   workCanvasRef,
   renderCanvas,
@@ -135,9 +146,12 @@ export function useBatchNormalize({
       setNotice(preflightError)
       return
     }
-    const concurrency = resolveBatchConcurrency(s.batchConcurrency)
+    const concurrency = activeBatchTasks.has('anonymize') ? 1 : resolveBatchConcurrency(s.batchConcurrency)
     normalizeCancelRef.current = false
     setIsNormalizing(true)
+    setNormalizeResults({})
+    setNormalizePreviewIds([])
+    setNormalizeSummary(null)
     const startedAt = Date.now()
     setNormalizeProgress({
       total: batch.length,
@@ -240,46 +254,52 @@ export function useBatchNormalize({
                   enabledClasses: detect.enabledClasses,
                 })
                 if (detections.length > 0) {
-                const defaultEff = s.batchAnonymizeEffect as AnonymizeEffectId
-                const strength = s.batchAnonymizeStrength
-                const batchEmojis = pickUniqueEmojis(detections.length)
-                const W = tmp.width
-                const H = tmp.height
-                detections.forEach((det, i) => {
-                  const effId = effectForDetectionType(det.type, detect.detectionConfig, defaultEff)
-                  let box = normalizedBoxToPixel(det.bbox, W, H)
-                  if (det.type === 'face') {
-                    box = expandPixelBox(box.x, box.y, box.width, box.height, W, H, detect.faceOffset)
-                    box = {
-                      x: box.x * W,
-                      y: box.y * H,
-                      width: box.width * W,
-                      height: box.height * H,
+                  const batchEffect = s.batchAnonymizeEffect as AnonymizeEffectId
+                  const strength = Math.min(1, Math.max(0.01, s.batchAnonymizeStrength / 100))
+                  const batchEmojis = pickUniqueEmojis(detections.length)
+                  const W = tmp.width
+                  const H = tmp.height
+                  detections.forEach((det, i) => {
+                    let box = normalizedBoxToPixel(det.bbox, W, H)
+                    if (det.type === 'face') {
+                      box = expandPixelBox(box.x, box.y, box.width, box.height, W, H, detect.faceOffset)
+                      box = {
+                        x: box.x * W,
+                        y: box.y * H,
+                        width: box.width * W,
+                        height: box.height * H,
+                      }
                     }
-                  }
-                  const zoneId = `${photo.id}-${i}`
-                  applyEffectRect(
-                    tmpCtx,
-                    effId,
-                    box.x,
-                    box.y,
-                    box.width,
-                    box.height,
-                    strength,
-                    batchEmojis[i],
-                    effId === 'custom-image'
-                      ? {
-                          customImages: customImageAssets,
-                          customImageSource,
-                          zoneId,
-                          customImageAssetId: pickCustomImageAssetId(customImageAssets, zoneId),
-                        }
-                      : undefined,
-                  )
-                })
+                    const zoneId = `${photo.id}-${i}`
+                    const emoji = !emojiRandom && selectedEmoji ? selectedEmoji : batchEmojis[i]
+                    const customImageAssetId = !customImageRandom && selectedCustomImageId
+                      ? selectedCustomImageId
+                      : pickCustomImageAssetId(customImageAssets, zoneId)
+                    applyEffectRect(
+                      tmpCtx,
+                      batchEffect,
+                      box.x,
+                      box.y,
+                      box.width,
+                      box.height,
+                      strength,
+                      emoji,
+                      {
+                        customImages: customImageAssets,
+                        customImageSource,
+                        zoneId,
+                        seed: zoneId,
+                        customImageAssetId,
+                        asciiCharset,
+                      },
+                    )
+                  })
+                }
               }
-              }
-            } catch { /* detection failed — skip anonymize for this photo */ }
+            } catch (err) {
+              console.error('Batch anonymize detection failed', photo.name, err)
+              throw err
+            }
             const anonBlob = await exportCanvasToBlob(tmp, s.outputFormat, s.quality, 'full')
             result = { ...result, blob: anonBlob, afterBytes: anonBlob.size }
           }
@@ -334,7 +354,6 @@ export function useBatchNormalize({
     await Promise.all(Array.from({ length: concurrency }, (_, i) => processNext(i + 1)))
     const canceled = normalizeCancelRef.current
     const elapsedSeconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000))
-    const updatedPhotos = photos.map((p) => updatedMap.get(p.id) ?? p)
     setNormalizeProgress((cur) => ({
       ...cur,
       active: false,
@@ -349,7 +368,7 @@ export function useBatchNormalize({
     setIsNormalizing(false)
     if (Object.keys(localResults).length > 0) {
       setNormalizeResults((cur) => ({ ...cur, ...localResults }))
-      setPhotos(updatedPhotos)
+      setPhotos((cur) => cur.map((p) => (isBatchProcessablePhoto(p) ? updatedMap.get(p.id) ?? p : p)))
       toRevoke.forEach((url) => URL.revokeObjectURL(url))
       if (activePhotoId && localResults[activePhotoId]) {
         const updated = updatedMap.get(activePhotoId)
@@ -380,6 +399,11 @@ export function useBatchNormalize({
     colorAdjByPhoto,
     customImageAssets,
     customImageSource,
+    emojiRandom,
+    selectedEmoji,
+    customImageRandom,
+    selectedCustomImageId,
+    asciiCharset,
     detectSettingsRef,
     normalizeSettings,
     photos,

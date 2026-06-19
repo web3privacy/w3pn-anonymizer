@@ -1,10 +1,14 @@
 import type { BatchTaskId, ColorAdjustments, NormalizeSettings, PhotoItem } from '../types'
 
 /** Photos eligible for batch normalize (non-video), honoring explicit selection. */
+export function isBatchProcessablePhoto(photo: PhotoItem): boolean {
+  return !photo.isVideo && !photo.isAudio && !photo.isDocument
+}
+
 export function selectBatchPhotos(photos: PhotoItem[], selectedForBatch: Set<string>): PhotoItem[] {
   return selectedForBatch.size > 0
-    ? photos.filter((p) => selectedForBatch.has(p.id) && !p.isVideo)
-    : photos.filter((p) => !p.isVideo)
+    ? photos.filter((p) => selectedForBatch.has(p.id) && isBatchProcessablePhoto(p))
+    : photos.filter(isBatchProcessablePhoto)
 }
 
 export function resolveBatchConcurrency(batchConcurrency: number): number {

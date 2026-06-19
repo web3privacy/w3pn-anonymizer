@@ -1,5 +1,6 @@
 import type { Dispatch, SetStateAction } from 'react'
 import { Icon } from '../components/Icon'
+import { isBatchProcessablePhoto } from '../lib/batch-normalize'
 import type { PhotoItem } from '../types'
 
 interface EditorSidebarProps {
@@ -30,22 +31,25 @@ interface EditorSidebarProps {
   deletePhoto: (id: string) => void
   hasMorePhotosToRender: boolean
   setPhotoListLimit: Dispatch<SetStateAction<number>>
-  runNormalizeBatch: () => void
-  isNormalizing: boolean
-  selectedBatchImageCount: number
-  normalizeProgressPercent: number
-  cancelNormalizeBatch: () => void
 }
 
-/** Desktop left sidebar: add/batch controls, folder tree, photo list, batch process bar. */
+/** Desktop left sidebar: add/batch controls, folder tree, and photo list. */
 export function EditorSidebar(props: EditorSidebarProps) {
   const {
     photos, displayedPhotos, activePhotoId, dirtyByPhoto, anonymizedPhotoIds, sidebarWidth, sidebarView, setSidebarView,
     batchPanelOpen, setBatchPanelOpen, busy, onAddFiles, folderTree, currentFolderPrefix, setCurrentFolderPrefix,
     folderTreeOpen, setFolderTreeOpen, selectedForBatch, setSelectedForBatch, selectPhoto, selectAllForBatch,
     deselectAllForBatch, toggleBatchSelect, rotatePhoto, deletePhoto, hasMorePhotosToRender, setPhotoListLimit,
-    runNormalizeBatch, isNormalizing, selectedBatchImageCount, normalizeProgressPercent, cancelNormalizeBatch,
   } = props
+  const processablePhotos = photos.filter(isBatchProcessablePhoto)
+  const processablePhotoIds = new Set(processablePhotos.map((photo) => photo.id))
+  const selectedProcessableCount = processablePhotos.filter((photo) => selectedForBatch.has(photo.id)).length
+  const skippedMediaCount = photos.length - processablePhotos.length
+  const toggleBatchPanel = () => {
+    const opening = !batchPanelOpen
+    if (opening) setSelectedForBatch(new Set(processablePhotoIds))
+    setBatchPanelOpen(opening)
+  }
 
   return (
     <aside
@@ -65,7 +69,7 @@ export function EditorSidebar(props: EditorSidebarProps) {
         <button
           className={`sidebar-batch-btn${batchPanelOpen ? ' active' : ''}`}
           type="button"
-          onClick={() => setBatchPanelOpen((o) => !o)}
+          onClick={toggleBatchPanel}
           title="Batch processing settings"
         >
           Batch
@@ -125,9 +129,9 @@ export function EditorSidebar(props: EditorSidebarProps) {
                       title={`Show ${ids.length} item${ids.length === 1 ? '' : 's'} in ${seg}`}
                       onClick={() => {
                         // Always scope the library to the picked folder; in batch
-                        // mode also add its items to the current selection.
+                        // mode also add its processable photos to the selection.
                         if (batchPanelOpen) {
-                          setSelectedForBatch((cur) => { const next = new Set(cur); ids.forEach((id) => next.add(id)); return next })
+                          setSelectedForBatch((cur) => { const next = new Set(cur); ids.filter((id) => processablePhotoIds.has(id)).forEach((id) => next.add(id)); return next })
                         }
                         setCurrentFolderPrefix(fullPath)
                       }}
@@ -147,14 +151,14 @@ export function EditorSidebar(props: EditorSidebarProps) {
       <div className="sidebar-head">
         <span className="sidebar-head-label">
           {batchPanelOpen
-            ? `${selectedForBatch.size}/${photos.length} items`
+            ? `${selectedProcessableCount}/${processablePhotos.length} photos`
             : `${photos.length} photo${photos.length === 1 ? '' : 's'}`}
         </span>
         <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
           {batchPanelOpen && photos.length > 0 && (
             <>
-              <button className="icon-btn" type="button" onClick={selectAllForBatch} title="Select all" aria-label="Select all"><Icon name="done_all" size={14} /></button>
-              <button className="icon-btn" type="button" onClick={deselectAllForBatch} title="Deselect all" aria-label="Deselect all"><Icon name="remove_done" size={14} /></button>
+              <button className="icon-btn" type="button" onClick={selectAllForBatch} title="Select all photos" aria-label="Select all photos"><Icon name="done_all" size={14} /></button>
+              <button className="icon-btn" type="button" onClick={deselectAllForBatch} title="Deselect all photos" aria-label="Deselect all photos"><Icon name="remove_done" size={14} /></button>
             </>
           )}
           <button className={`icon-btn ${sidebarView === 'grid' ? 'active' : ''}`} type="button" onClick={() => setSidebarView('grid')} title="Thumbnails" aria-label="Thumbnails"><Icon name="grid_view" size={14} /></button>
@@ -162,14 +166,23 @@ export function EditorSidebar(props: EditorSidebarProps) {
         </div>
       </div>
 
+      {batchPanelOpen && (
+        <div className="sidebar-batch-info">
+          Batch is only for photos. {selectedProcessableCount}/{processablePhotos.length} selected
+          {skippedMediaCount > 0 ? `; ${skippedMediaCount} other file${skippedMediaCount === 1 ? '' : 's'} skipped.` : '.'}
+        </div>
+      )}
+
       <div className={`photo-list ${sidebarView === 'grid' ? 'grid-mode' : ''}`}>
         {displayedPhotos.map((photo) => {
           const isEdited = photo.edited || dirtyByPhoto[photo.id]
           const isAnonymized = anonymizedPhotoIds.has(photo.id)
+          const canBatchProcess = isBatchProcessablePhoto(photo)
+          const isBatchSelected = batchPanelOpen && canBatchProcess && selectedForBatch.has(photo.id)
           return (
             <div
               key={photo.id}
-              className={`photo-item ${photo.id === activePhotoId ? 'active' : ''} ${batchPanelOpen && selectedForBatch.has(photo.id) ? 'batch-selected' : ''}${isAnonymized ? ' anonymized' : ''}`}
+              className={`photo-item ${photo.id === activePhotoId ? 'active' : ''} ${isBatchSelected ? 'batch-selected' : ''}${batchPanelOpen && !canBatchProcess ? ' batch-unavailable' : ''}${isAnonymized ? ' anonymized' : ''}`}
               onClick={() => selectPhoto(photo.id)}
               title={photo.name}
               role="button"
@@ -178,11 +191,11 @@ export function EditorSidebar(props: EditorSidebarProps) {
             >
               {batchPanelOpen && (
                 <div
-                  className="batch-checkbox"
-                  onClick={(e) => { e.stopPropagation(); toggleBatchSelect(photo.id) }}
-                  title={selectedForBatch.has(photo.id) ? 'Remove from batch' : 'Add to batch'}
+                  className={`batch-checkbox${canBatchProcess ? '' : ' disabled'}`}
+                  onClick={(e) => { e.stopPropagation(); if (canBatchProcess) toggleBatchSelect(photo.id) }}
+                  title={canBatchProcess ? (selectedForBatch.has(photo.id) ? 'Remove from batch' : 'Add to batch') : 'Batch supports photos only'}
                 >
-                  {selectedForBatch.has(photo.id) ? '☑' : '☐'}
+                  {canBatchProcess ? (selectedForBatch.has(photo.id) ? '☑' : '☐') : '-'}
                 </div>
               )}
               {isEdited && (
@@ -199,7 +212,9 @@ export function EditorSidebar(props: EditorSidebarProps) {
                   <Icon name={photo.isDocument ? 'description' : 'graphic_eq'} size={sidebarView === 'grid' ? 30 : 20} />
                 </div>
               ) : sidebarView === 'grid' ? (
-                <img src={photo.previewUrl} alt={photo.name} loading="lazy" />
+                <div className="photo-item-grid-thumb">
+                  <img src={photo.previewUrl} alt={photo.name} loading="lazy" />
+                </div>
               ) : (
                 <img
                   src={photo.previewUrl}
@@ -250,31 +265,6 @@ export function EditorSidebar(props: EditorSidebarProps) {
         )}
       </div>
 
-      {/* Batch process bar — visible when batch panel open */}
-      {batchPanelOpen && (
-        <div className="sidebar-process-bar">
-          <button
-            className="sidebar-process-btn"
-            type="button"
-            onClick={runNormalizeBatch}
-            disabled={photos.length === 0 || isNormalizing || busy || selectedBatchImageCount === 0}
-            title={selectedBatchImageCount === 0 ? 'Select photos first' : `Process ${selectedBatchImageCount} selected photos`}
-          >
-            {isNormalizing
-              ? `Processing ${normalizeProgressPercent}%`
-              : `Process ${selectedBatchImageCount} photo${selectedBatchImageCount !== 1 ? 's' : ''}`}
-          </button>
-          {isNormalizing && (
-            <button
-              style={{ background: 'none', border: '1px solid var(--danger)', borderRadius: 5, padding: '0.25rem', fontSize: '0.7rem', color: 'var(--danger)', cursor: 'pointer', font: 'inherit' }}
-              type="button"
-              onClick={cancelNormalizeBatch}
-            >
-              Cancel
-            </button>
-          )}
-        </div>
-      )}
     </aside>
   )
 }

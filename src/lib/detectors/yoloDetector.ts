@@ -59,6 +59,9 @@ export function getYoloModelStatus(modelId: string): ModelAvailabilityStatus {
 }
 
 export async function probeYoloModelAvailability(modelId: string): Promise<ModelAvailabilityStatus> {
+  const existing = cache.get(modelId)
+  if (existing?.session && existing.metadata) return 'ready'
+
   const metaPath = METADATA_PATHS[modelId]
   const modelPath = MODEL_PATHS[modelId]
   if (!metaPath || !modelPath) return 'missing'
@@ -75,7 +78,11 @@ export async function probeYoloModelAvailability(modelId: string): Promise<Model
       cache.set(modelId, { metadata: null, status: 'missing', session: null })
       return 'missing'
     }
-    cache.set(modelId, { metadata: null, status: 'ready', session: null })
+    cache.set(modelId, {
+      metadata: existing?.metadata ?? null,
+      status: 'ready',
+      session: existing?.session ?? null,
+    })
     return 'ready'
   } catch {
     cache.set(modelId, { metadata: null, status: 'missing', session: null })

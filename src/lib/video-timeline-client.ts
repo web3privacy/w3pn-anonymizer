@@ -25,7 +25,7 @@ function getWorker(): Worker | null {
 }
 
 export function isVideoTimelineWorkerAvailable(): boolean {
-  return getWorker() !== null
+  return !workerFailed && typeof Worker !== 'undefined'
 }
 
 export async function expandTimelineViaWorker(

@@ -4,7 +4,7 @@ import { CustomImagePickerPanel } from '../components/CustomImagePickerPanel'
 import { EmojiPickerPanel } from '../components/EmojiPickerPanel'
 import { AsciiCharsetPicker } from '../components/AsciiCharsetPicker'
 import { EFFECTS } from '../lib/effects'
-import type { AppMobileBindings, EffectPickerSnapshot } from './bindings'
+import type { AppMobileBindings } from './bindings'
 import { MobileToolDrawer } from './MobileToolDrawer'
 import { MobileVectorizePanel } from './MobileVectorizePanel'
 import { isEffectApplied } from './categoryActivity'
@@ -22,14 +22,10 @@ interface MobileEffectsDrawerProps {
 export function MobileEffectsDrawer({ b, liveMode = false }: MobileEffectsDrawerProps) {
   const open = b.mobilePanel === 'tool-effects'
   const videoEditor = Boolean(b.activePhoto?.isVideo && !liveMode)
+  const photoEditor = !liveMode && !videoEditor
   const [subView, setSubView] = useState<EffectsSubView | null>(null)
   const [slideToSub, setSlideToSub] = useState(false)
   const slideTimerRef = useRef<ReturnType<typeof setTimeout>>()
-  const pickerSnapshotRef = useRef<EffectPickerSnapshot | null>(null)
-  // Remember which picker the drawer was last left in so reopening returns there
-  // (e.g. straight back to the Emoji/Custom-image grid instead of the effect
-  // list). Reset to null whenever the user backs out to the effect list or
-  // picks a non-picker effect.
   const lastSubViewRef = useRef<EffectsSubView | null>(null)
   const wasOpenRef = useRef(false)
 
@@ -58,20 +54,6 @@ export function MobileEffectsDrawer({ b, liveMode = false }: MobileEffectsDrawer
     })
   }, [clearSlideTimer])
 
-  const buildPickerSnapshot = useCallback((): EffectPickerSnapshot => {
-    return b.captureEffectPickerSnapshot() ?? {
-      zones: b.activeZones.map((z) => ({ ...z })),
-      zonesAnonymized: b.zonesAnonymized,
-      selectedEffect: b.selectedEffect,
-      emojiRandom: b.emojiRandom,
-      selectedEmoji: b.selectedEmoji,
-      customImageRandom: b.customImageRandom,
-      selectedCustomImageId: b.selectedCustomImageId,
-      customImageSource: b.customImageSource,
-      workCanvasSnap: null,
-    }
-  }, [b])
-
   const syncEmojiPreview = useCallback((draft: { emojiRandom: boolean; selectedEmoji: string | null }) => {
     b.onToggleEmojiRandom(draft.emojiRandom)
     if (!draft.emojiRandom && draft.selectedEmoji) {
@@ -90,34 +72,35 @@ export function MobileEffectsDrawer({ b, liveMode = false }: MobileEffectsDrawer
     }
   }, [b])
 
-  const previewPickerEffect = useCallback((effect: 'emoji' | 'custom-image') => {
+  const armPhotoEffect = useCallback((effect: typeof EFFECTS[number]['id']) => {
     if (liveMode || videoEditor) {
       b.setSelectedEffect(effect)
-    } else {
-      b.setEffectToolCustomized(true)
-      b.updateSelectedZoneEffect(effect)
+      return
     }
+    b.setEffectToolCustomized(true)
+    b.updateSelectedZoneEffect(effect)
   }, [b, liveMode, videoEditor])
 
-  const revertPickerDraft = useCallback(() => {
-    const snap = pickerSnapshotRef.current
-    if (!snap) return
-    void b.restoreEffectPickerSnapshot(snap)
-  }, [b])
+  const dismissToPreview = useCallback(() => {
+    clearSlideTimer()
+    setSubView(null)
+    setSlideToSub(false)
+    b.setVectorizePanelOpen(false)
+    if (photoEditor) b.setEffectToolCustomized(true)
+    b.setMobilePanel(null)
+  }, [b, clearSlideTimer, photoEditor])
 
   const openEmojiPicker = useCallback(() => {
     lastSubViewRef.current = 'emoji'
-    pickerSnapshotRef.current = buildPickerSnapshot()
     const draft = { emojiRandom: b.emojiRandom, selectedEmoji: b.selectedEmoji }
     setEmojiDraft(draft)
-    previewPickerEffect('emoji')
+    armPhotoEffect('emoji')
     syncEmojiPreview(draft)
     openSubView('emoji')
-  }, [b.emojiRandom, b.selectedEmoji, buildPickerSnapshot, openSubView, previewPickerEffect, syncEmojiPreview])
+  }, [armPhotoEffect, b.emojiRandom, b.selectedEmoji, openSubView, syncEmojiPreview])
 
   const openCustomImagePicker = useCallback(() => {
     lastSubViewRef.current = 'custom-image'
-    pickerSnapshotRef.current = buildPickerSnapshot()
     const draft = {
       customImageRandom: b.customImageRandom,
       selectedCustomImageId: b.selectedCustomImageId,
@@ -125,45 +108,30 @@ export function MobileEffectsDrawer({ b, liveMode = false }: MobileEffectsDrawer
     }
     setCustomImageDraft(draft)
     void b.loadCustomImagePreset(draft.customImageSource).then(() => {
-      previewPickerEffect('custom-image')
+      armPhotoEffect('custom-image')
       syncCustomImagePreview(draft)
     })
     openSubView('custom-image')
-  }, [
-    b,
-    buildPickerSnapshot,
-    openSubView,
-    previewPickerEffect,
-    syncCustomImagePreview,
-  ])
+  }, [armPhotoEffect, b, openSubView, syncCustomImagePreview])
 
   const openAsciiPicker = useCallback(() => {
     lastSubViewRef.current = 'ascii'
-    if (liveMode || videoEditor) {
-      b.setSelectedEffect('ascii')
-    } else {
-      b.setEffectToolCustomized(true)
-      b.updateSelectedZoneEffect('ascii')
-    }
+    armPhotoEffect('ascii')
     openSubView('ascii')
-  }, [b, liveMode, videoEditor, openSubView])
+  }, [armPhotoEffect, openSubView])
 
   const backToEffects = useCallback(() => {
     clearSlideTimer()
     lastSubViewRef.current = null
     if (subView === 'vectorize') {
       b.setVectorizePanelOpen(false)
-    } else if (subView === 'emoji' || subView === 'custom-image') {
-      revertPickerDraft()
-      pickerSnapshotRef.current = null
     }
     setSlideToSub(false)
     slideTimerRef.current = setTimeout(() => setSubView(null), EFFECTS_SLIDE_MS)
-  }, [b.setVectorizePanelOpen, clearSlideTimer, revertPickerDraft, subView])
+  }, [b.setVectorizePanelOpen, clearSlideTimer, subView])
 
   useEffect(() => {
     if (open && !wasOpenRef.current) {
-      // Drawer just opened: jump back to the picker the user last left it in.
       const last = lastSubViewRef.current
       if (last === 'emoji') openEmojiPicker()
       else if (last === 'custom-image') openCustomImagePicker()
@@ -172,41 +140,12 @@ export function MobileEffectsDrawer({ b, liveMode = false }: MobileEffectsDrawer
       clearSlideTimer()
       setSubView(null)
       setSlideToSub(false)
-      pickerSnapshotRef.current = null
       b.setVectorizePanelOpen(false)
     }
     wasOpenRef.current = open
   }, [open, clearSlideTimer, b, openEmojiPicker, openCustomImagePicker, openAsciiPicker])
 
   useEffect(() => () => clearSlideTimer(), [clearSlideTimer])
-
-  const close = useCallback(() => {
-    clearSlideTimer()
-    setSubView(null)
-    setSlideToSub(false)
-    pickerSnapshotRef.current = null
-    b.setMobilePanel(null)
-  }, [b, clearSlideTimer])
-
-  const cancelSubViewAndClose = useCallback(() => {
-    if (subView === 'emoji' || subView === 'custom-image') {
-      revertPickerDraft()
-    }
-    close()
-  }, [close, revertPickerDraft, subView])
-
-  const handleDrawerClose = useCallback(() => {
-    if (subView === 'emoji' || subView === 'custom-image') {
-      cancelSubViewAndClose()
-      return
-    }
-    close()
-  }, [cancelSubViewAndClose, close, subView])
-
-  const applySubView = useCallback(() => {
-    pickerSnapshotRef.current = null
-    close()
-  }, [close])
 
   const selectEffect = (efId: typeof EFFECTS[number]['id']) => {
     b.setActiveCategory('effects')
@@ -222,16 +161,13 @@ export function MobileEffectsDrawer({ b, liveMode = false }: MobileEffectsDrawer
       openAsciiPicker()
       return
     }
-    // A direct (non-picker) effect: the drawer's "home" is the effect grid, so
-    // forget any remembered picker.
     lastSubViewRef.current = null
-    if (liveMode || videoEditor) {
-      b.setSelectedEffect(efId)
+    armPhotoEffect(efId)
+    if (photoEditor) {
+      dismissToPreview()
     } else {
-      b.setEffectToolCustomized(true)
-      b.updateSelectedZoneEffect(efId)
+      b.setMobilePanel(null)
     }
-    close()
   }
 
   const inSub = subView !== null
@@ -245,30 +181,27 @@ export function MobileEffectsDrawer({ b, liveMode = false }: MobileEffectsDrawer
           ? 'VECTORIZE'
           : (liveMode ? 'CHOOSE EFFECT' : 'Effects')
 
-  const showApplyFooter = subView === 'emoji' || subView === 'custom-image'
-
   const header = inSub ? (
     <div className="mobile-drawer-header-v2">
       <button type="button" className="mobile-drawer-header-v2-btn" onClick={backToEffects} aria-label="Back to effects">
         <Icon name="arrow_back" size={20} />
       </button>
       <h2 className="mobile-drawer-header-v2-title">{title}</h2>
-      <button type="button" className="mobile-drawer-header-v2-btn mobile-drawer-header-v2-close" onClick={cancelSubViewAndClose} aria-label="Cancel">
+      <button
+        type="button"
+        className="mobile-drawer-header-v2-btn mobile-drawer-header-v2-close"
+        onClick={photoEditor ? dismissToPreview : () => b.setMobilePanel(null)}
+        aria-label="Close"
+      >
         <Icon name="close" size={20} />
       </button>
     </div>
   ) : undefined
 
-  const footer = showApplyFooter ? (
-    <div className="mobile-effects-apply-footer">
-      <button type="button" className="mobile-distort-apply-btn" onClick={applySubView}>
-        APPLY
-      </button>
-    </div>
-  ) : undefined
+  const handleDrawerClose = photoEditor ? dismissToPreview : () => b.setMobilePanel(null)
 
   return (
-    <MobileToolDrawer open={open} onClose={handleDrawerClose} title={title} variant="tool" header={header} footer={footer}>
+    <MobileToolDrawer open={open} onClose={handleDrawerClose} title={title} variant="tool" header={header}>
       <div className="mobile-distort-viewport mobile-effects-viewport">
         <div className={`mobile-distort-panels${slideToSub ? ' show-settings' : ''}`}>
           <div className="mobile-distort-panel mobile-effects-panel-list">

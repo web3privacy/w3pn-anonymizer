@@ -11,7 +11,7 @@ A free, open-source tool by [Web3Privacy Now](https://www.web3privacy.info) for 
 ## Features
 
 ### Anonymization
-- **12+ effects** — blur, zoom blur, pixelate, blackout, emoji, custom image, ASCII art, glitch, thermal, noise, contour, and more
+- **12+ effects** — blur, zoom blur, pixelate, blackout, emoji, custom image, ASCII art, glitch, Color Ball, noise, contour, and more
 - **Modular privacy detection** — faces (YuNet, on by default) plus optional YOLO targets: people, license plates, screens, documents, signs, tattoos
 - **Sensitive text on photos** — on-device OCR (Tesseract.js, EN + CS) finds emails, phone numbers, payment cards, IBANs, national IDs, crypto addresses, secrets/keys, and more, then boxes and redacts them (on by default)
 - **Progressive detection** — face boxes appear immediately while YOLO/OCR scans continue in the background

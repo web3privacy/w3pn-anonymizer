@@ -12,6 +12,7 @@ interface MobileHomeDefaultProps {
     | 'loadDemoPhotos'
     | 'isBusy'
     | 'detectorLoading'
+    | 'modelLoadProgress'
     | 'openUnifiedPicker'
     | 'setMobileMode'
     | 'setMobilePanel'
@@ -20,7 +21,7 @@ interface MobileHomeDefaultProps {
 
 export function MobileHomeDefault({ b }: MobileHomeDefaultProps) {
   const { mode, activate, cancel, isCalibratingLayout, isSessionActive, isSettling } = useOpticalCalibration()
-  const preload = useModelPreload(b.detectorLoading)
+  const preload = useModelPreload(b.detectorLoading, b.modelLoadProgress)
 
   const enterLive = () => {
     b.setMobileMode('live')
@@ -110,7 +111,7 @@ export function MobileHomeDefault({ b }: MobileHomeDefaultProps) {
                 onClick={b.loadDemoPhotos}
                 disabled={b.isBusy}
               >
-                LOAD DEMO
+                {b.isBusy ? 'LOADING DEMO…' : 'LOAD DEMO'}
               </button>
             </>
           )}

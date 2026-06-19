@@ -11,8 +11,9 @@ const STORAGE_KEY = 'anonymizer-privacy-settings'
 // defaults (e.g. License plates / SPZ becoming enabled by default in v2,
 // Sensitive text / PII in v3). v4 re-baselines the whole enabled set to the
 // curated defaults (faces, people, SPZ, documents, sensitive text) and clears
-// any extra "All classes" toggles.
-const SETTINGS_VERSION = 5
+// any extra "All classes" toggles. v6/v7 switch the default back to face-only
+// so heavy YOLO/OCR models lazy-load only after a user enables those targets.
+const SETTINGS_VERSION = 7
 // Types enabled by default per DEFAULT_DETECTION_CONFIG (kept in sync there).
 const DEFAULT_ENABLED_TYPES = new Set<DetectionCategoryConfig['type']>(
   DEFAULT_DETECTION_CONFIG.filter((c) => c.enabled).map((c) => c.type),
@@ -61,6 +62,9 @@ function migrateDetectionConfig(
       if (c.type === 'pii_text') return { ...c, confidenceThreshold: 0.22 }
       return c
     })
+  }
+  if (savedVersion < 7) {
+    next = next.map((c) => ({ ...c, enabled: DEFAULT_ENABLED_TYPES.has(c.type) }))
   }
   return next
 }

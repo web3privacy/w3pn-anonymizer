@@ -33,6 +33,7 @@ const ICONS = {
   person: 'accessibility_new',
   license_plate: 'directions_car',
   document: 'description',
+  pii_text: 'id_card',
   vehicles: 'commute',
 } as const
 
@@ -88,6 +89,13 @@ export function PrimaryTargetsToggles({
     key: 'document', icon: ICONS.document, label: doc.label,
     enabled: doc.enabled, status: statusFor('document'),
     onToggle: (v) => onToggleCategory('document', v),
+  })
+
+  const pii = cat('pii_text')
+  if (pii) rows.push({
+    key: 'pii_text', icon: ICONS.pii_text, label: pii.label,
+    enabled: pii.enabled, status: statusFor('pii_text'),
+    onToggle: (v) => onToggleCategory('pii_text', v),
   })
 
   rows.push({

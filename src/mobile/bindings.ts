@@ -278,6 +278,7 @@ export interface AppMobileBindings {
   isDetecting: boolean
   detector: import('../types').DetectorStatus
   detectorLoading: boolean
+  modelLoadProgress: import('../lib/detector').DetectorLoadProgress | null
   addLiveMediaToLibrary: (blob: Blob, opts?: { stayInLive?: boolean }) => string | null
   openPhotoInEditor: (photoId: string, opts?: { slide?: boolean; returnTo?: 'live' }) => void
   stepAdjacentLibraryPhoto: (dir: -1 | 1) => void
