@@ -1425,7 +1425,7 @@
   background: var(--surface-muted);
   color: var(--text-secondary);
   border-radius: 5px;
-  padding: 0.25rem 0.38rem;
+  padding: 0.25rem 1.35rem 0.25rem 0.38rem;
   font-size: 0.75rem;
   font: inherit;
   cursor: pointer;
@@ -2329,7 +2329,7 @@ button, select, input[type='range'], input[type='number'] { font: inherit; }
   background: var(--surface-muted);
   color: var(--text-primary);
   border-radius: 5px;
-  padding: 0.28rem 0.4rem;
+  padding: 0.28rem 1.35rem 0.28rem 0.4rem;
   font-size: 12px;
   font: inherit;
   cursor: pointer;
@@ -4884,9 +4884,21 @@ input[type="number"].tb-quality-num {
   color: var(--text-primary);
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 0.3rem 0.5rem;
+  padding: 0.3rem 1.35rem 0.3rem 0.5rem;
   font-size: 0.74rem;
   cursor: pointer;
+}
+
+.tb-select,
+.field-select,
+.video-track-mode-select,
+.vectorize-panel select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 16 16' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M4 6l4 4 4-4' fill='none' stroke='%23b8b8b8' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  background-size: 12px 12px;
 }
 .audio-mode-viewer--embed {
   /* Let the parent .video-audio-panel own the scroll/height; the embedded stage

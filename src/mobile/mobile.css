@@ -1106,7 +1106,7 @@
 .mobile-custom-image-select {
   width: 100%;
   min-height: 40px;
-  padding: 0 0.75rem;
+  padding: 0 1.5rem 0 0.75rem;
   border-radius: 8px;
   border: 1px solid var(--mobile-glass-border, var(--border));
   background: rgba(255, 255, 255, 0.06);
@@ -3325,4 +3325,19 @@
 .app-shell-mobile .vectorize-panel input,
 .app-shell-mobile .vectorize-panel select {
   font-size: 0.62rem;
+}
+
+.app-shell-mobile select,
+.mobile-custom-image-select,
+.mobile-distort-select,
+.mobile-editor-toolbar .mobile-tb-select,
+.mobile-editor-toolbar .tb-select,
+.mobile-vectorize-select,
+.app-shell-mobile .vectorize-panel select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 16 16' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M4 6l4 4 4-4' fill='none' stroke='%23d4d4d4' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  background-size: 12px 12px;
 }

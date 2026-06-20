@@ -925,7 +925,7 @@
   border: 1px solid rgba(255, 255, 255, 0.12);
   color: #fff;
   border-radius: 4px;
-  padding: 4px 6px;
+  padding: 4px 22px 4px 6px;
   font-size: 0.55rem;
   /* +24px longer dimension / format inputs for easier entry. */
   width: 80px;
@@ -1794,13 +1794,25 @@
 .mobile-vectorize-select {
   width: 100%;
   min-height: 40px;
-  padding: 0.45rem 0.65rem;
+  padding: 0.45rem 1.45rem 0.45rem 0.65rem;
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.05);
   color: #fff;
   font-size: 0.68rem;
   font: inherit;
+}
+
+.mobile-editor-toolbar-v2 select,
+.mobile-vectorize-select,
+.mobile-tb-v2-format-select,
+.mobile-distort-select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 16 16' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M4 6l4 4 4-4' fill='none' stroke='%23d4d4d4' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  background-size: 12px 12px;
 }
 
 .mobile-vectorize-progress {
@@ -3900,4 +3912,16 @@
   .mobile-home-v2-spiral-wrap {
     transition: none;
   }
+}
+
+.mobile-editor-toolbar-v2 select,
+.mobile-vectorize-select,
+.mobile-tb-v2-format-select,
+.mobile-distort-select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 16 16' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M4 6l4 4 4-4' fill='none' stroke='%23d4d4d4' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  background-size: 12px 12px;
 }
