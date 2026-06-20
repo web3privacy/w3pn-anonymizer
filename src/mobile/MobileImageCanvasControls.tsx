@@ -22,7 +22,7 @@ export const MobileImageCanvasControls = memo(function MobileImageCanvasControls
   const canUndo = b.undoCount > 0
   const editPrevHold = useHoldRepeat({ onStep: () => b.stepEditFrameAdjacent(-1) })
   const editNextHold = useHoldRepeat({ onStep: () => b.stepEditFrameAdjacent(1) })
-  const libraryPhotos = b.photos.filter((p) => !p.isVideo)
+  const libraryPhotos = b.photos.filter((p) => !p.isVideo && !p.isVideoFrameEdit)
   const libraryIndex = photo ? libraryPhotos.findIndex((p) => p.id === photo.id) : -1
   const hasLibraryPrev = libraryIndex > 0
   const hasLibraryNext = libraryIndex >= 0 && libraryIndex < libraryPhotos.length - 1
@@ -81,6 +81,18 @@ export const MobileImageCanvasControls = memo(function MobileImageCanvasControls
             <span>BACK</span>
           </button>
         )}
+        {editFrame && (
+          <button
+            type="button"
+            className="mobile-canvas-top-btn mobile-canvas-top-btn--back"
+            onClick={b.jumpToSourceVideoFromSnapshot}
+            disabled={busy}
+            aria-label="Back to video"
+          >
+            <Icon name="arrow_back" size={16} />
+            <span>BACK TO VIDEO</span>
+          </button>
+        )}
         {canUndo && (
           <button
             type="button"
@@ -118,92 +130,89 @@ export const MobileImageCanvasControls = memo(function MobileImageCanvasControls
       </div>
 
       <div className="mobile-canvas-bottom-bar mobile-canvas-bottom-bar--image">
-        <button
-          type="button"
-          className="mobile-zoom-side-btn"
-          onClick={() => zoomStep(-1)}
-          aria-label="Zoom out"
-        >
-          −
-        </button>
-
-        <div className="mobile-canvas-action-cluster">
-          <div className="mobile-image-action-stack">
-            <div className={`mobile-zoom-indicator${zoomVisible ? ' visible' : ''}`} aria-live="polite">
-              {zoomPct}%
-            </div>
-          {editFrame ? (
-            <div className="mobile-edit-frame-actions">
-              <button
-                type="button"
-                className="mobile-canvas-secondary-btn"
-                onClick={b.jumpToSourceVideoFromSnapshot}
-                disabled={busy}
-              >
-                CANCEL
-              </button>
-              <button
-                type="button"
-                className="mobile-anonymize-btn mobile-anonymize-btn--save-video"
-                onClick={b.applySnapshotToSourceVideo}
-                disabled={busy}
-              >
-                SAVE TO VIDEO
-              </button>
-            </div>
-          ) : cropMode ? (
-            <div className="mobile-edit-frame-actions">
-              <button
-                type="button"
-                className="mobile-canvas-secondary-btn"
-                onClick={b.cancelCropMode}
-                disabled={busy}
-              >
-                CANCEL
-              </button>
-              <button
-                className="mobile-anonymize-btn"
-                type="button"
-                onClick={b.cropToSelection}
-                disabled={busy || !canApplyCrop}
-              >
-                APPLY CROP
-              </button>
-            </div>
-          ) : canAnonymize ? (
-            <button
-              className="mobile-anonymize-btn"
-              type="button"
-              onClick={b.applyZones}
-              disabled={busy}
-            >
-              ANONYMIZE
+        {editFrame ? (
+          <>
+            <button type="button" className="mobile-zoom-side-btn" {...editPrevHold} disabled={busy} aria-label="Previous frame">
+              <Icon name="skip_previous" size={18} />
             </button>
-          ) : null}
-          </div>
-        </div>
-
-        <button
-          type="button"
-          className="mobile-zoom-side-btn"
-          onClick={() => zoomStep(1)}
-          aria-label="Zoom in"
-        >
-          +
-        </button>
-      </div>
-
-      {editFrame && (
-        <div className="mobile-canvas-frame-nav">
-          {b.activeVideoFrameLabel && (
-            <div className="mobile-video-frame-indicator mobile-video-frame-indicator--snapshot" aria-live="polite">
-              {b.activeVideoFrameLabel}
+            <div className="mobile-canvas-action-cluster">
+              {b.activeVideoFrameLabel && (
+                <div className="mobile-video-frame-indicator mobile-video-frame-indicator--snapshot" aria-live="polite">
+                  {b.activeVideoFrameLabel}
+                </div>
+              )}
+              <button
+                type="button"
+                className={`mobile-anonymize-btn mobile-anonymize-btn--save-video${!b.activeFrameEditDirty && b.activeFrameSavedToVideo ? ' saved' : ''}`}
+                onClick={b.applySnapshotToSourceVideo}
+                disabled={busy || !b.activeFrameEditDirty}
+              >
+                {!b.activeFrameEditDirty && b.activeFrameSavedToVideo ? '✓ SAVED' : 'SAVE TO VIDEO'}
+              </button>
             </div>
-          )}
-          <button type="button" className="mobile-zoom-side-btn" {...editPrevHold} disabled={busy} aria-label="Previous frame">◀</button>
-          <button type="button" className="mobile-zoom-side-btn" {...editNextHold} disabled={busy} aria-label="Next frame">▶</button>
-        </div>
-      )}
+            <button type="button" className="mobile-zoom-side-btn" {...editNextHold} disabled={busy} aria-label="Next frame">
+              <Icon name="skip_next" size={18} />
+            </button>
+          </>
+        ) : (
+          <>
+            <button
+              type="button"
+              className="mobile-zoom-side-btn"
+              onClick={() => zoomStep(-1)}
+              aria-label="Zoom out"
+            >
+              −
+            </button>
+
+            <div className="mobile-canvas-action-cluster">
+              <div className="mobile-image-action-stack">
+                <div className={`mobile-zoom-indicator${zoomVisible ? ' visible' : ''}`} aria-live="polite">
+                  {zoomPct}%
+                </div>
+                {cropMode ? (
+                  <div className="mobile-edit-frame-actions">
+                    <button
+                      type="button"
+                      className="mobile-canvas-secondary-btn"
+                      onClick={b.cancelCropMode}
+                      disabled={busy}
+                    >
+                      CANCEL
+                    </button>
+                    <button
+                      className="mobile-anonymize-btn"
+                      type="button"
+                      onClick={b.cropToSelection}
+                      disabled={busy || !canApplyCrop}
+                    >
+                      APPLY CROP
+                    </button>
+                  </div>
+                ) : canAnonymize ? (
+                  <button
+                    className="mobile-anonymize-btn"
+                    type="button"
+                    onClick={b.applyZones}
+                    disabled={busy}
+                  >
+                    ANONYMIZE
+                  </button>
+                ) : null}
+              </div>
+            </div>
+
+            <button
+              type="button"
+              className="mobile-zoom-side-btn"
+              onClick={() => zoomStep(1)}
+              aria-label="Zoom in"
+            >
+              +
+            </button>
+          </>
+        )}
+      </div>
     </div>
   )
 })

@@ -3,7 +3,7 @@ import { glApplyColorAdjustments } from './gl/color-adjust-gl'
 import { glApplyColorShift } from './gl/color-shift-gl'
 import { glApplyContourRect } from './gl/contour-gl'
 import { glApplyNoiseRect } from './gl/noise-gl'
-import { glApplyPixelateRect, mapPixelateBlockSize } from './gl/pixelate-gl'
+import { glApplyPixelateRect, mapPixelateBlockSize, pixelateStrengthForBlockSize } from './gl/pixelate-gl'
 import { glApplyPixelShift } from './gl/pixel-shift-gl'
 import { glApplyThermalRect } from './gl/thermal-gl'
 
@@ -14,6 +14,9 @@ import { glApplyThermalRect } from './gl/thermal-gl'
 let asciiCharsetDefault: AsciiCharset = 'all'
 export const setAsciiCharsetDefault = (charset: AsciiCharset) => { asciiCharsetDefault = charset }
 export const getAsciiCharsetDefault = (): AsciiCharset => asciiCharsetDefault
+let asciiColorDefault = '#72ff9f'
+export const setAsciiColorDefault = (color: string) => { asciiColorDefault = color }
+export const getAsciiColorDefault = (): string => asciiColorDefault
 
 export const EMOJI_POOL = [
   // Cats
@@ -37,7 +40,6 @@ export const EFFECTS: EffectDefinition[] = [
   { id: 'emoji',     label: 'Emoji',       description: 'Replace with random emoji',              icon: 'mood',            strengthLabel: 'Size',              mobileStrengthLabel: 'SIZE' },
   { id: 'noise',     label: 'Noise',       description: 'Noise anonymization',                    icon: 'grain',           strengthLabel: 'Density',           mobileStrengthLabel: 'DENSITY' },
   { id: 'glitch',    label: 'Glitch',      description: 'RGB chroma-shift',                       icon: 'auto_fix_high',   strengthLabel: 'Shift amount',      mobileStrengthLabel: 'SHIFT' },
-  { id: 'contour',   label: 'Contour',     description: 'Edge detection (Sobel)',                 icon: 'pentagon',        strengthLabel: 'Line thickness',    mobileStrengthLabel: 'THICK' },
   { id: 'thermal',   label: 'Color Ball',  description: 'Abstract color blobs for face masking',   icon: 'bubble_chart',    strengthLabel: 'Color flow',        mobileStrengthLabel: 'COLOR' },
   { id: 'ascii',     label: 'ASCII',       description: 'ASCII-art character mosaic',             icon: 'data_array',      strengthLabel: 'Cell size',         mobileStrengthLabel: 'CELL' },
   { id: 'custom-image', label: 'Custom Image', description: 'Replace with uploaded image patches', icon: 'image',          strengthLabel: 'Opacity',           mobileStrengthLabel: 'OPACITY' },
@@ -48,6 +50,14 @@ export function getMobileStrengthLabel(effectId: AnonymizeEffectId): string {
   if (meta?.mobileStrengthLabel) return meta.mobileStrengthLabel
   if (meta?.strengthLabel) return meta.strengthLabel.slice(0, 5).toUpperCase()
   return 'STR'
+}
+
+export const getDefaultEffectStrength = (effectId: AnonymizeEffectId): number => {
+  if (effectId === 'pixelate') return pixelateStrengthForBlockSize(20)
+  if (effectId === 'noise') return 0.88
+  if (effectId === 'ascii') return 0.18
+  if (effectId === 'custom-image') return 1
+  return 0.48
 }
 
 const scratchA = document.createElement('canvas')
@@ -325,7 +335,7 @@ const applyZoomBlurRect = (
   ctx.restore()
 }
 
-export { mapPixelateBlockSize } from './gl/pixelate-gl'
+export { mapPixelateBlockSize, pixelateStrengthForBlockSize } from './gl/pixelate-gl'
 
 const applyPixelateRect = (
   ctx: CanvasRenderingContext2D,
@@ -839,9 +849,14 @@ const applyThermalRect = (
       const vignette = 0.78 + 0.22 * (1 - smoothstep(0.25, 0.86, Math.hypot(nx - 0.5, ny - 0.5)))
       const sparkleSeed = ((px * 73856093) ^ (py * 19349663) ^ Math.round(phase * 1000)) >>> 0
       const sparkle = (sparkleSeed % 255) / 255 - 0.5
-      data[dst] = clamp((r / weight) * vignette + sparkle * grain, 0, 255)
-      data[dst + 1] = clamp((g / weight) * vignette + sparkle * grain, 0, 255)
-      data[dst + 2] = clamp((b / weight) * vignette + sparkle * grain, 0, 255)
+      const edgeDistance = Math.min(nx, 1 - nx, ny, 1 - ny)
+      const edgeMix = smoothstep(0, 0.14 - strength * 0.08, edgeDistance)
+      const ballR = clamp((r / weight) * vignette + sparkle * grain, 0, 255)
+      const ballG = clamp((g / weight) * vignette + sparkle * grain, 0, 255)
+      const ballB = clamp((b / weight) * vignette + sparkle * grain, 0, 255)
+      data[dst] = Math.round(src[dst] * (1 - edgeMix) + ballR * edgeMix)
+      data[dst + 1] = Math.round(src[dst + 1] * (1 - edgeMix) + ballG * edgeMix)
+      data[dst + 2] = Math.round(src[dst + 2] * (1 - edgeMix) + ballB * edgeMix)
       data[dst + 3] = src[dst + 3]
     }
   }
@@ -876,7 +891,7 @@ const applyAsciiRect = (
 ) => {
   const { x: rx, y: ry, width: rw, height: rh } = normalizeRect(x, y, width, height, ctx.canvas.width, ctx.canvas.height)
   const s = Number.isFinite(strength) ? clamp(strength, 0, 1) : 0.5
-  const cell = Math.max(4, Math.round(5 + s * 13)) // 5..18 px per glyph
+  const cell = Math.max(3, Math.round(3 + s * 12)) // 3..15 px per glyph
   const cols = Math.max(2, Math.floor(rw / cell))
   const rows = Math.max(2, Math.floor(rh / cell))
 
@@ -892,12 +907,17 @@ const applyAsciiRect = (
   const cw = rw / cols
   const chh = rh / rows
   ctx.save()
-  ctx.fillStyle = '#000'
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.72)'
   ctx.fillRect(rx, ry, rw, rh)
   ctx.font = `${Math.round(Math.min(cw, chh) * 1.25)}px ui-monospace, "SF Mono", Menlo, Consolas, monospace`
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
   const charset = options?.asciiCharset ?? asciiCharsetDefault
+  const glyphColor = options?.asciiColor ?? asciiColorDefault
+  const colorMatch = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(glyphColor)
+  const glyphRgb = colorMatch
+    ? [parseInt(colorMatch[1], 16), parseInt(colorMatch[2], 16), parseInt(colorMatch[3], 16)]
+    : [114, 255, 159]
   const ramp = ASCII_RAMPS[charset] ?? ASCII_RAMPS.all
   for (let gy = 0; gy < rows; gy += 1) {
     for (let gx = 0; gx < cols; gx += 1) {
@@ -905,9 +925,8 @@ const applyAsciiRect = (
       const luma = (0.299 * cellData[i] + 0.587 * cellData[i + 1] + 0.114 * cellData[i + 2]) / 255
       const ch = ramp[clamp(Math.floor(luma * ramp.length), 0, ramp.length - 1)]
       if (ch === ' ') continue
-      // Terminal-green tint scaled by brightness keeps the "matrix" look.
-      const v = Math.round(110 + luma * 145)
-      ctx.fillStyle = `rgb(${Math.round(v * 0.18)}, ${v}, ${Math.round(v * 0.36)})`
+      const intensity = 0.52 + luma * 0.48
+      ctx.fillStyle = `rgb(${Math.round(glyphRgb[0] * intensity)}, ${Math.round(glyphRgb[1] * intensity)}, ${Math.round(glyphRgb[2] * intensity)})`
       ctx.fillText(ch, rx + (gx + 0.5) * cw, ry + (gy + 0.5) * chh)
     }
   }

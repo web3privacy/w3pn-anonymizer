@@ -24,6 +24,7 @@ const TOP_K = 5000
 
 let session: ort.InferenceSession | null = null
 let initPromise: Promise<boolean> | null = null
+let inferenceTail: Promise<void> = Promise.resolve()
 
 // Reusable preprocessing buffers. The model input is a fixed 640x640 tensor, so
 // the resize canvas and the CHW float buffer (~4.9 MB) can be allocated once and
@@ -225,7 +226,7 @@ export function disposeYuNet(): void {
  * Detect faces on a canvas using YuNet ONNX model.
  * Returns boxes in the canvas's original coordinate space.
  */
-export async function detectYuNet(
+async function detectYuNetExclusive(
   canvas: HTMLCanvasElement,
   scoreThreshold = DEFAULT_SCORE_THR,
 ): Promise<FaceBox[]> {
@@ -345,6 +346,20 @@ export async function detectYuNet(
     height: Math.min(f.h, origH - Math.max(0, f.y)),
     score: f.score,
   }))
+}
+
+/**
+ * ONNX sessions and the reusable preprocessing buffers are not concurrency-safe.
+ * Serialize inference so video preview, playback, live mode, and batch work can
+ * never mutate one shared tensor while another session.run() is still reading it.
+ */
+export function detectYuNet(
+  canvas: HTMLCanvasElement,
+  scoreThreshold = DEFAULT_SCORE_THR,
+): Promise<FaceBox[]> {
+  const run = inferenceTail.then(() => detectYuNetExclusive(canvas, scoreThreshold))
+  inferenceTail = run.then(() => undefined, () => undefined)
+  return run
 }
 
 // ── NMS ──────────────────────────────────────────────────────────────────────

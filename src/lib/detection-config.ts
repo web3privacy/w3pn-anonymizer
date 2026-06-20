@@ -56,12 +56,29 @@ export const DEFAULT_EFFECT_BY_TYPE: Record<PrivacyDetectionType, AnonymizeEffec
   manual_zone: 'pixelate',
 }
 
+/** Product-facing sensitivity percentages. Higher sensitivity means a lower confidence threshold. */
+export const DEFAULT_DETECTION_SENSITIVITY: Record<Exclude<PrivacyDetectionType, 'manual_zone'>, number> = {
+  face: 25,
+  person: 25,
+  license_plate: 50,
+  screen: 10,
+  tattoo: 10,
+  sign: 10,
+  document: 100,
+  pii_text: 100,
+  object: 10,
+}
+
+export function sensitivityToConfidenceThreshold(sensitivity: number): number {
+  return 1 - Math.max(0, Math.min(100, sensitivity)) / 100
+}
+
 export const DEFAULT_DETECTION_CONFIG: DetectionCategoryConfig[] = [
   {
     type: 'face',
     label: 'Faces',
     enabled: true,
-    confidenceThreshold: 0.65,
+    confidenceThreshold: sensitivityToConfidenceThreshold(DEFAULT_DETECTION_SENSITIVITY.face),
     color: DETECTION_COLORS.face,
     effectId: 'pixelate',
   },
@@ -69,7 +86,7 @@ export const DEFAULT_DETECTION_CONFIG: DetectionCategoryConfig[] = [
     type: 'person',
     label: 'People / full body',
     enabled: false,
-    confidenceThreshold: 0.45,
+    confidenceThreshold: sensitivityToConfidenceThreshold(DEFAULT_DETECTION_SENSITIVITY.person),
     color: DETECTION_COLORS.person,
     effectId: 'pixelate',
   },
@@ -77,7 +94,7 @@ export const DEFAULT_DETECTION_CONFIG: DetectionCategoryConfig[] = [
     type: 'license_plate',
     label: 'License plates / SPZ',
     enabled: false,
-    confidenceThreshold: 0.45,
+    confidenceThreshold: sensitivityToConfidenceThreshold(DEFAULT_DETECTION_SENSITIVITY.license_plate),
     color: DETECTION_COLORS.license_plate,
     effectId: 'pixelate',
   },
@@ -85,7 +102,7 @@ export const DEFAULT_DETECTION_CONFIG: DetectionCategoryConfig[] = [
     type: 'screen',
     label: 'Screens / displays',
     enabled: false,
-    confidenceThreshold: 0.45,
+    confidenceThreshold: sensitivityToConfidenceThreshold(DEFAULT_DETECTION_SENSITIVITY.screen),
     color: DETECTION_COLORS.screen,
     effectId: 'pixelate',
   },
@@ -93,7 +110,7 @@ export const DEFAULT_DETECTION_CONFIG: DetectionCategoryConfig[] = [
     type: 'tattoo',
     label: 'Tattoos',
     enabled: false,
-    confidenceThreshold: 0.35,
+    confidenceThreshold: sensitivityToConfidenceThreshold(DEFAULT_DETECTION_SENSITIVITY.tattoo),
     color: DETECTION_COLORS.tattoo,
     effectId: 'pixelate',
   },
@@ -101,7 +118,7 @@ export const DEFAULT_DETECTION_CONFIG: DetectionCategoryConfig[] = [
     type: 'sign',
     label: 'Signs / billboards / shop signs',
     enabled: false,
-    confidenceThreshold: 0.4,
+    confidenceThreshold: sensitivityToConfidenceThreshold(DEFAULT_DETECTION_SENSITIVITY.sign),
     color: DETECTION_COLORS.sign,
     effectId: 'pixelate',
   },
@@ -109,7 +126,7 @@ export const DEFAULT_DETECTION_CONFIG: DetectionCategoryConfig[] = [
     type: 'document',
     label: 'Documents / papers / IDs',
     enabled: false,
-    confidenceThreshold: 0.22,
+    confidenceThreshold: sensitivityToConfidenceThreshold(DEFAULT_DETECTION_SENSITIVITY.document),
     color: DETECTION_COLORS.document,
     effectId: 'pixelate',
   },
@@ -117,7 +134,7 @@ export const DEFAULT_DETECTION_CONFIG: DetectionCategoryConfig[] = [
     type: 'pii_text',
     label: 'Sensitive text (emails, cards, IDs…)',
     enabled: false,
-    confidenceThreshold: 0.22,
+    confidenceThreshold: sensitivityToConfidenceThreshold(DEFAULT_DETECTION_SENSITIVITY.pii_text),
     color: DETECTION_COLORS.pii_text,
     effectId: 'pixelate',
   },

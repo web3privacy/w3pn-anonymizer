@@ -2,7 +2,7 @@ import type { BatchTaskId, ColorAdjustments, NormalizeSettings, PhotoItem } from
 
 /** Photos eligible for batch normalize (non-video), honoring explicit selection. */
 export function isBatchProcessablePhoto(photo: PhotoItem): boolean {
-  return !photo.isVideo && !photo.isAudio && !photo.isDocument
+  return !photo.isVideo && !photo.isAudio && !photo.isDocument && !photo.isVideoFrameEdit
 }
 
 export function selectBatchPhotos(photos: PhotoItem[], selectedForBatch: Set<string>): PhotoItem[] {

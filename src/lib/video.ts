@@ -13,6 +13,7 @@ import type { EffectRenderOptions } from '../types'
 import type { AnonymizeEffectId, ColorAdjustments, CustomImageAsset, CustomImageSource, DetectionCategoryConfig, ModelAvailabilityStatus, Zone } from '../types'
 import { getFrameZonesAtTime, type VideoTrackKeyframe } from './video-timeline-core'
 import { expandTimelineFramesAsync, isVideoTimelineWorkerAvailable } from './video-timeline-client'
+import { resolveVideoExportSize, VIDEO_MAX_EXPORT_DIMENSION, type VideoExportSize } from './video-export-size'
 import fixWebmDuration from 'webm-duration-fix'
 import { Muxer as Mp4Muxer, ArrayBufferTarget as Mp4ArrayBufferTarget } from 'mp4-muxer'
 import { Muxer as WebmMuxer, ArrayBufferTarget as WebmArrayBufferTarget } from 'webm-muxer'
@@ -24,10 +25,28 @@ export interface VideoDistortOptions {
   pixelShiftType: PixelShiftType
 }
 
+export interface VideoRenderSettings {
+  effect: AnonymizeEffectId
+  strength: number
+  fixedEmoji?: string
+  fixedCustomImageId?: string
+  customImageSource?: CustomImageSource
+  customImages?: CustomImageAsset[]
+  colorAdj?: ColorAdjustments
+  distort?: VideoDistortOptions
+}
+
+export interface VideoRenderSettingsKeyframe {
+  timeSec: number
+  settings: VideoRenderSettings
+}
+
 export interface VideoProcessingOptions {
   effect: AnonymizeEffectId
   strength: number
   emoji: string
+  /** Optional exact export dimensions. Detection stays on the source frame; render output is scaled here. */
+  targetSize?: VideoExportSize | null
   /** When set, every detected face uses this exact emoji instead of random unique ones. */
   fixedEmoji?: string
   /** When set, every custom-image zone uses this asset instead of random picks. */
@@ -43,6 +62,8 @@ export interface VideoProcessingOptions {
   colorAdj?: ColorAdjustments
   /** Global distort filter applied after color adjustments on non-override frames. */
   distort?: VideoDistortOptions
+  /** Optional timeline of effect/color/distort settings captured while scrubbing the video. */
+  renderSettingsKeyframes?: VideoRenderSettingsKeyframe[]
   /** Optional multi-target detection (YOLO). Face-only when omitted or no extended targets enabled. */
   detectionConfig?: DetectionCategoryConfig[]
   modelStatus?: Record<string, ModelAvailabilityStatus>
@@ -71,6 +92,7 @@ export interface VideoTimedZone {
   startSec: number
   endSec: number
   zone: Zone
+  keyframes?: { timeSec: number; zone: Zone }[]
 }
 
 export type VideoProcessingPhase = 'analyzing' | 'preparing' | 'rendering' | 'finishing'
@@ -142,7 +164,10 @@ export const VIDEO_RUNTIME_LIMITS = {
   estimatedFpsRange: { min: 10, max: 60 },
   videoBitrate: VIDEO_BITRATE,
   audioBitrate: AUDIO_BITRATE,
+  maxExportDimension: VIDEO_MAX_EXPORT_DIMENSION,
 } as const
+
+export { resolveVideoExportSize, type VideoExportSize } from './video-export-size'
 
 interface WebCodecsHost {
   VideoEncoder?: {
@@ -694,18 +719,50 @@ function pickCustomImageAssetId(assets: CustomImageAsset[] | undefined, seed: st
   return ready[(hash >>> 0) % ready.length]?.id
 }
 
-function applyVideoEffectSettings(zone: Zone, options: VideoProcessingOptions, timedZoneIds: Set<string>): Zone {
+function applyVideoEffectSettings(
+  zone: Zone,
+  settings: VideoRenderSettings,
+  customImages: CustomImageAsset[] | undefined,
+  timedZoneIds: Set<string>,
+): Zone {
   const isTimedMask = [...timedZoneIds].some((prefix) => zone.id.startsWith(`${prefix}-`))
   if (isTimedMask) return zone
-  const effect = options.effect
+  const effect = settings.effect
   return {
     ...zone,
     effect,
-    emoji: options.fixedEmoji ?? zone.emoji,
+    emoji: settings.fixedEmoji ?? zone.emoji,
     customImageAssetId: effect === 'custom-image'
-      ? (options.fixedCustomImageId ?? zone.customImageAssetId ?? pickCustomImageAssetId(options.customImages, zone.id))
+      ? (settings.fixedCustomImageId ?? zone.customImageAssetId ?? pickCustomImageAssetId(customImages, zone.id))
       : zone.customImageAssetId,
   }
+}
+
+function resolveVideoRenderSettingsAtTime(
+  options: VideoProcessingOptions,
+  mediaTime: number,
+): VideoRenderSettings {
+  const base: VideoRenderSettings = {
+    effect: options.effect,
+    strength: options.strength,
+    fixedEmoji: options.fixedEmoji,
+    fixedCustomImageId: options.fixedCustomImageId,
+    customImageSource: options.customImageSource,
+    customImages: options.customImages,
+    colorAdj: options.colorAdj,
+    distort: options.distort,
+  }
+  const keyframes = (options.renderSettingsKeyframes ?? [])
+    .filter((item) => Number.isFinite(item.timeSec))
+    .sort((a, b) => a.timeSec - b.timeSec)
+  if (keyframes.length === 0) return base
+
+  let active: VideoRenderSettingsKeyframe | null = null
+  for (const keyframe of keyframes) {
+    if (keyframe.timeSec <= mediaTime + 0.0005) active = keyframe
+    else break
+  }
+  return active ? { ...base, ...active.settings } : base
 }
 
 function drawZones(
@@ -781,6 +838,23 @@ function faceToZone(
   }
 }
 
+function isLikelyVideoFace(
+  box: { width: number; height: number; score?: number },
+  w: number,
+  h: number,
+  minScore: number,
+): boolean {
+  const score = box.score ?? 1
+  const aspect = box.width / Math.max(1, box.height)
+  const relativeArea = (box.width * box.height) / Math.max(1, w * h)
+  return (
+    score >= minScore &&
+    aspect >= 0.55 &&
+    aspect <= 1.55 &&
+    relativeArea >= 0.00008 &&
+    relativeArea <= 0.14
+  )
+}
 
 function filterVideoDetections(
   detections: Zone[],
@@ -1327,8 +1401,9 @@ export async function processVideo(
 
     await waitForVideoEvent(video, 'loadeddata')
 
-    const w = video.videoWidth
-    const h = video.videoHeight
+    const sourceW = video.videoWidth
+    const sourceH = video.videoHeight
+    const { width: w, height: h } = resolveVideoExportSize(sourceW, sourceH, options.targetSize)
     const duration = video.duration
     if (!Number.isFinite(duration) || duration <= 0) {
       throw new Error('Could not read video duration.')
@@ -1354,9 +1429,9 @@ export async function processVideo(
     canvas.height = h
     const ctx = canvas.getContext('2d')!
 
-    const detectScale = Math.min(1, DETECT_MAX_DIM / Math.max(w, h))
-    const detectW = Math.max(1, Math.round(w * detectScale))
-    const detectH = Math.max(1, Math.round(h * detectScale))
+    const detectScale = Math.min(1, DETECT_MAX_DIM / Math.max(sourceW, sourceH))
+    const detectW = Math.max(1, Math.round(sourceW * detectScale))
+    const detectH = Math.max(1, Math.round(sourceH * detectScale))
     const detectCanvas = document.createElement('canvas')
     detectCanvas.width = detectW
     detectCanvas.height = detectH
@@ -1382,6 +1457,7 @@ export async function processVideo(
     const timeline: VideoTrackKeyframe[] = []
     const timedZones = options.timedZones ?? []
     const totalWork = sampleTimes.length + totalFrames
+    const faceDetectConfidence = options.detectConfidence ?? 0.65
 
     options.onPhase?.('analyzing')
     const useExtended = options.detectionConfig && options.modelStatus
@@ -1401,7 +1477,7 @@ export async function processVideo(
         const { detections } = await detectImagePrivacyDetections(detectCanvas, {
           detectionConfig: options.detectionConfig!,
           modelStatus: options.modelStatus!,
-          confidence: options.detectConfidence ?? 0.65,
+          confidence: faceDetectConfidence,
           thorough: true,
           robust: true,
           enabledClasses: options.enabledClasses,
@@ -1412,16 +1488,16 @@ export async function processVideo(
             const px = normalizedBoxToPixel(d.bbox, detectW, detectH)
             return { ...px, score: d.confidence }
           })
-          .filter((face) => isLikelyDetection(face, 'face', detectW, detectH))
+          .filter((face) => isLikelyVideoFace(face, detectW, detectH, faceDetectConfidence))
         const rawFaceZones = faceBoxes.map((face) => faceToZone(
-          {
-            x: face.x / detectScale,
-            y: face.y / detectScale,
-            width: face.width / detectScale,
-            height: face.height / detectScale,
-          },
-          w,
-          h,
+            {
+              x: face.x / detectScale,
+              y: face.y / detectScale,
+              width: face.width / detectScale,
+              height: face.height / detectScale,
+            },
+          sourceW,
+          sourceH,
           options.effect,
           options.fixedEmoji ?? options.emoji,
         ))
@@ -1443,13 +1519,13 @@ export async function processVideo(
             globalEffect: options.effect,
             emoji: nextTrackEmoji(),
             faceOffsetPercent: 0,
-            imageW: w,
-            imageH: h,
+            imageW: sourceW,
+            imageH: sourceH,
           }))
       } else {
-        const faces = await detectFaces(detectCanvas, true)
+        const faces = await detectFaces(detectCanvas, true, faceDetectConfidence)
         const rawDetections = faces
-          .filter((face) => isLikelyDetection(face, 'face', detectW, detectH))
+          .filter((face) => isLikelyVideoFace(face, detectW, detectH, faceDetectConfidence))
           .map((face) => faceToZone(
             {
               x: face.x / detectScale,
@@ -1457,8 +1533,8 @@ export async function processVideo(
               width: face.width / detectScale,
               height: face.height / detectScale,
             },
-            w,
-            h,
+            sourceW,
+            sourceH,
             options.effect,
             options.fixedEmoji ?? options.emoji,
           ))
@@ -1486,40 +1562,40 @@ export async function processVideo(
     const expandedFrames = await expandTimelineFramesAsync(timeline, timedZones, fps, totalFrames)
     options.onPhase?.('rendering')
 
-    const effectOptions: EffectRenderOptions = {
-      customImages: options.customImages,
-      customImageSource: options.customImageSource,
-    }
-
-    const distortEnabled = (options.distort?.enabled.length ?? 0) > 0
-    const colorAdjEnabled = options.colorAdj != null && !isColorAdjNoop(options.colorAdj)
     const frameDurationUs = Math.round(1_000_000 / fps)
 
     const timedZoneIds = new Set(timedZones.map((item) => item.id))
 
     const renderProcessedFrame = async (mediaTime: number, sourceFrame?: CanvasImageSource) => {
       const override = overrideBitmaps.find((item) => Math.abs(item.timeSec - mediaTime) <= overrideWindowSec)
+      const renderSettings = resolveVideoRenderSettingsAtTime(options, mediaTime)
+      const effectOptions: EffectRenderOptions = {
+        customImages: renderSettings.customImages ?? options.customImages,
+        customImageSource: renderSettings.customImageSource,
+      }
+      const distortEnabled = (renderSettings.distort?.enabled.length ?? 0) > 0
+      const colorAdjEnabled = renderSettings.colorAdj != null && !isColorAdjNoop(renderSettings.colorAdj)
       ctx.clearRect(0, 0, w, h)
       if (override) {
         ctx.drawImage(override.bitmap, 0, 0, w, h)
-        return
+      } else {
+        ctx.drawImage(sourceFrame ?? video, 0, 0, w, h)
+        const frameIndex = clamp(Math.round(mediaTime * fps), 0, Math.max(0, totalFrames - 1))
+        const zones = (expandedFrames[frameIndex] ?? getFrameZonesAtTime(timeline, timedZones, mediaTime))
+          .map((zone) => applyVideoEffectSettings(zone, renderSettings, renderSettings.customImages ?? options.customImages, timedZoneIds))
+        drawZones(ctx, zones, w, h, renderSettings.strength, effectOptions)
       }
-      ctx.drawImage(sourceFrame ?? video, 0, 0, w, h)
-      const frameIndex = clamp(Math.round(mediaTime * fps), 0, Math.max(0, totalFrames - 1))
-      const zones = (expandedFrames[frameIndex] ?? getFrameZonesAtTime(timeline, timedZones, mediaTime))
-        .map((zone) => applyVideoEffectSettings(zone, options, timedZoneIds))
-      drawZones(ctx, zones, w, h, options.strength, effectOptions)
-      if (colorAdjEnabled && options.colorAdj) {
-        applyColorAdjustments(ctx, options.colorAdj, canvas)
+      if (colorAdjEnabled && renderSettings.colorAdj) {
+        applyColorAdjustments(ctx, renderSettings.colorAdj, canvas)
       }
-      if (distortEnabled && options.distort) {
+      if (distortEnabled && renderSettings.distort) {
         const frameSeed = clamp(Math.round(mediaTime * fps), 0, Math.max(0, totalFrames - 1))
         const distorted = await applyDistortPipeline(
           canvas,
-          options.distort.enabled,
-          options.distort.strengths,
-          options.distort.params,
-          options.distort.pixelShiftType,
+          renderSettings.distort.enabled,
+          renderSettings.distort.strengths,
+          renderSettings.distort.params,
+          renderSettings.distort.pixelShiftType,
           frameSeed,
         )
         ctx.clearRect(0, 0, w, h)
@@ -1652,9 +1728,10 @@ export class VideoDetectionTrackStabilizer {
     timeSec: number,
     effect: AnonymizeEffectId,
     emojiForTrack: () => string,
+    minFaceScore = 0.58,
   ): Zone[] {
     const rawDetections = faces
-      .filter((face) => isLikelyDetection(face, 'face', frameW, frameH))
+      .filter((face) => isLikelyVideoFace(face, frameW, frameH, minFaceScore))
       .map((face) => faceToZone(
         { x: face.x, y: face.y, width: face.width, height: face.height },
         frameW,

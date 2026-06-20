@@ -55,6 +55,7 @@ export function AdjustToolPanel({
             label={label}
             min={-100}
             max={100}
+            defaultValue={0}
             value={colorAdj[key] as number}
             format={(v) => `${v > 0 ? '+' : ''}${v}`}
             onChange={(v) => onChange({ ...colorAdj, [key]: v, preset: 'none' })}

@@ -110,11 +110,21 @@ export function MobileAbout({ open, onClose, onFeedback }: MobileAboutProps) {
           <footer className="mobile-about-footer">
             <div className="mobile-about-band">
               <p className="mobile-about-footer-text">Built with love by the Web3Privacy Now community.</p>
-              {onFeedback && (
-                <button type="button" className="mobile-about-feedback" onClick={onFeedback}>
-                  Give us Feedback
-                </button>
-              )}
+              <div className="mobile-about-actions">
+                {onFeedback && (
+                  <button type="button" className="mobile-about-feedback" onClick={onFeedback}>
+                    Give us Feedback
+                  </button>
+                )}
+                <a
+                  className="mobile-about-donate"
+                  href="https://web3privacy.info/donate"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Donate to Web3Privacy
+                </a>
+              </div>
             </div>
             <div className="mobile-about-rule mobile-about-rule--feedback" aria-hidden="true" />
             <div className="mobile-about-band mobile-about-band--footer-row">

@@ -15,7 +15,9 @@ The frontend depends on these same-origin assets:
 - `public/vendor/browser-image-compression.js`
 - `public/vendor/imagetracer_v1.2.6.js`
 
-Heavy optional assets (YOLO ONNX, OCR engine + language data) are **lazy-loaded**: only face detection and live mode initialize on boot, and the rest are prefetched into the HTTP cache in the background while the user is idle (respecting Save-Data / slow connections).
+Heavy optional assets (YOLO ONNX, OCR engine + language data) are **lazy-loaded**: only YuNet initializes for the default face-only flow. A YOLO/OCR group starts loading after the user enables a target that requires it; the shared loader reports the complete download and respects Save-Data / slow connections.
+
+See [Dependencies and integrated runtimes](./DEPENDENCIES.md) for the package, model, worker, browser API, native wrapper, and optional server inventory.
 
 For correct YuNet execution in production:
 
@@ -38,9 +40,9 @@ At runtime the app makes **no third-party network requests**. All `fetch()` call
 - Custom image preset manifests and assets
 - Bundled demo media
 - Brand SVG assets
-- Background prefetch warming of the above optional models/OCR assets
+- On-demand cache warming for the explicitly enabled YOLO/OCR group
 
-External links (GitHub, Web3Privacy Now, mailto) open only when the user clicks them.
+External links (GitHub, Web3Privacy Now, Donate) open only when the user clicks them. Feedback is posted to the same-origin `/api/feedback` endpoint and contains no media.
 
 ## Data lifecycle
 
@@ -72,9 +74,9 @@ External links (GitHub, Web3Privacy Now, mailto) open only when the user clicks 
 
 ### Document path
 
-1. PDFs are parsed and rendered locally with `pdfjs-dist`; TXT/MD/DOCX are read as text.
+1. PDFs are parsed and rendered locally with `pdfjs-dist`; TXT/MD are read as text. DOCX is not yet a supported public import format.
 2. PII is detected with regex + checksum recognizers (no model, no OCR upload).
-3. Redaction (blackout/blur/pixelate or token replacement) is applied locally; exports are flattened PDFs, ZIPs of page images, or token-replaced text.
+3. PDF and text documents default to blackout; TXT/MD open directly in the anonymized preview. Redaction (blackout/blur/pixelate or token replacement) is applied locally; exports are flattened PDFs, ZIPs of page images, or redacted text.
 4. Detected PII strings are kept only in memory and are never embedded in exports or persisted.
 
 ### Sensitive-text (OCR) path
@@ -124,7 +126,7 @@ Only on explicit user action:
 
 ## Security headers (production)
 
-Configured in [`vercel.json`](../vercel.json) and mirrored in [`vite.config.ts`](../vite.config.ts) for dev/preview:
+Mirrored in [`vite.config.ts`](../vite.config.ts) for dev/preview and configured in the production nginx virtual host. [`vercel.json`](../vercel.json) remains a portable static-host header reference, but production does not depend on Vercel:
 
 - COOP / COEP / CORP for WASM isolation
 - Content-Security-Policy restricting scripts, connections, and workers to `'self'` (`wasm-unsafe-eval` for ONNX WebAssembly; `unsafe-inline` for boot scripts in `index.html`)
@@ -144,7 +146,7 @@ Configured in [`vercel.json`](../vercel.json) and mirrored in [`vite.config.ts`]
 ## Recommended deployment (public web)
 
 1. Build: `npm run build`
-2. Deploy `dist/` to static hosting (e.g. Vercel)
+2. Deploy `dist/` to the nginx document root (production: `/opt/w3pn-anonymizer/repo/dist`)
 3. Verify ONNX model and WASM files are served from `/models/` and `/onnx/`
 4. Verify isolation + CSP headers on all routes
 5. Smoke-test face detection on the production URL

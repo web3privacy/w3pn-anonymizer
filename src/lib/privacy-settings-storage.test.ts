@@ -78,6 +78,25 @@ describe('privacy-settings-storage', () => {
     expect(loaded.enabledClasses).toEqual([])
   })
 
+  it('migrates v7 category thresholds to the curated sensitivity defaults', () => {
+    const oldConfig = DEFAULT_DETECTION_CONFIG.map((c) => ({ ...c, confidenceThreshold: 0.42 }))
+    store.set(
+      'anonymizer-privacy-settings',
+      JSON.stringify({
+        version: 7,
+        detectionConfig: oldConfig,
+        showDetectionLabels: true,
+        audioSettings: { mode: 'keep_original', preset: 'maximum_mask', intensity: 0 },
+        enabledClasses: [],
+      }),
+    )
+    const loaded = readPrivacySettings()
+    for (const expected of DEFAULT_DETECTION_CONFIG) {
+      expect(loaded.detectionConfig.find((c) => c.type === expected.type)?.confidenceThreshold)
+        .toBe(expected.confidenceThreshold)
+    }
+  })
+
   it('respects user choice to disable License plates on current version', () => {
     const config = DEFAULT_DETECTION_CONFIG.map((c) =>
       c.type === 'license_plate' ? { ...c, enabled: false } : c,

@@ -25,6 +25,30 @@ function interpolateZone(a: Zone, b: Zone, t: number): Zone {
   }
 }
 
+export function resolveTimedZoneAtTime(timedZone: VideoTimedZone, mediaTime: number): Zone {
+  const keyframes = (timedZone.keyframes ?? [])
+    .filter((keyframe) => Number.isFinite(keyframe.timeSec))
+    .sort((a, b) => a.timeSec - b.timeSec)
+  if (keyframes.length === 0) return cloneZone(timedZone.zone)
+
+  if (mediaTime <= keyframes[0].timeSec) return cloneZone(keyframes[0].zone)
+  const last = keyframes[keyframes.length - 1]
+  if (mediaTime >= last.timeSec) return cloneZone(last.zone)
+
+  let prev = keyframes[0]
+  let next = last
+  for (let i = 1; i < keyframes.length; i++) {
+    if (keyframes[i].timeSec >= mediaTime) {
+      next = keyframes[i]
+      break
+    }
+    prev = keyframes[i]
+  }
+  const span = Math.max(0.001, next.timeSec - prev.timeSec)
+  const t = clamp((mediaTime - prev.timeSec) / span, 0, 1)
+  return interpolateZone(prev.zone, next.zone, t)
+}
+
 export function zonesAtTime(timeline: VideoTrackKeyframe[], mediaTime: number): Zone[] {
   if (timeline.length === 0) return []
   if (mediaTime <= timeline[0].timeSec) return timeline[0].zones.map(cloneZone)
@@ -97,7 +121,7 @@ export function getFrameZonesAtTime(
   }
   for (const timedZone of timedZones) {
     if (mediaTime >= timedZone.startSec && mediaTime <= timedZone.endSec) {
-      zones.push({ ...timedZone.zone, id: `${timedZone.id}-t${Math.round(mediaTime * 1000)}` })
+      zones.push({ ...resolveTimedZoneAtTime(timedZone, mediaTime), id: `${timedZone.id}-t${Math.round(mediaTime * 1000)}` })
     }
   }
   return zones

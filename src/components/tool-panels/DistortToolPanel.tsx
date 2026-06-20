@@ -6,6 +6,7 @@ import {
   DISTORT_EFFECT_ORDER,
   type DistortEffectId,
 } from '../../lib/distort-effects'
+import { DEFAULT_ADJ_TRANSFORM_PARAMS } from '../../lib/editor-constants'
 import { ToolSliderRow } from '../ToolSliderRow'
 
 type PixelShiftType = 'wave' | 'shear' | 'ripple' | 'mirror'
@@ -49,6 +50,7 @@ function DistortEffectSettings({
               label={label}
               min={min}
               max={max}
+              defaultValue={DEFAULT_ADJ_TRANSFORM_PARAMS[key]}
               value={params[key]}
               onChange={(v) => onParamChange(key, v)}
             />
@@ -60,6 +62,7 @@ function DistortEffectSettings({
           label="Shift"
           min={1}
           max={40}
+          defaultValue={DEFAULT_ADJ_TRANSFORM_PARAMS.glitchShift}
           value={params.glitchShift}
           onChange={(v) => onParamChange('glitchShift', v)}
         />
@@ -87,6 +90,7 @@ function DistortEffectSettings({
               label={label}
               min={min}
               max={max}
+              defaultValue={DEFAULT_ADJ_TRANSFORM_PARAMS[key]}
               value={params[key]}
               onChange={(v) => onParamChange(key, v)}
             />
@@ -101,6 +105,7 @@ function DistortEffectSettings({
               label={label}
               min={min}
               max={max}
+              defaultValue={DEFAULT_ADJ_TRANSFORM_PARAMS[key]}
               value={params[key]}
               onChange={(v) => onParamChange(key, v)}
             />
@@ -111,6 +116,7 @@ function DistortEffectSettings({
         label="Strength"
         min={1}
         max={80}
+        defaultValue={DEFAULT_DISTORT_STRENGTHS[id]}
         value={strength}
         onChange={onStrengthChange}
       />
@@ -131,6 +137,8 @@ export interface DistortToolPanelProps {
   onApply: () => void
   canApply: boolean
   showApply?: boolean
+  /** Desktop flyouts keep settings open for every enabled effect. */
+  multiExpand?: boolean
 }
 
 export function DistortToolPanel({
@@ -146,8 +154,19 @@ export function DistortToolPanel({
   onApply,
   canApply,
   showApply = true,
+  multiExpand = false,
 }: DistortToolPanelProps) {
-  const [expandedId, setExpandedId] = useState<DistortEffectId | null>(null)
+  const [expandedIds, setExpandedIds] = useState<Set<DistortEffectId>>(() => new Set())
+
+  const setExpanded = (id: DistortEffectId, expanded: boolean) => {
+    setExpandedIds((current) => {
+      if (!multiExpand) return expanded ? new Set([id]) : new Set()
+      const next = new Set(current)
+      if (expanded) next.add(id)
+      else next.delete(id)
+      return next
+    })
+  }
 
   return (
     <div className="tool-panel tool-panel--distort">
@@ -155,13 +174,16 @@ export function DistortToolPanel({
         {DISTORT_EFFECT_ORDER.map((id) => {
           const meta = DISTORT_EFFECT_META[id]
           const enabled = enabledDistorts.includes(id)
-          const expanded = expandedId === id
+          const expanded = expandedIds.has(id)
           return (
             <div key={id} className={`mobile-distort-list-row${enabled ? ' active' : ''}`}>
               <button
                 type="button"
                 className="mobile-distort-toggle"
-                onClick={() => toggleDistortEffect(id)}
+                onClick={() => {
+                  toggleDistortEffect(id)
+                  if (multiExpand) setExpanded(id, !enabled)
+                }}
                 aria-pressed={enabled}
               >
                 <span className={`mobile-distort-check${enabled ? ' on' : ''}`} aria-hidden="true">
@@ -173,7 +195,7 @@ export function DistortToolPanel({
               <button
                 type="button"
                 className={`mobile-distort-settings-open${expanded ? ' expanded' : ''}`}
-                onClick={() => setExpandedId((cur) => (cur === id ? null : id))}
+                onClick={() => setExpanded(id, !expanded)}
                 aria-label={`${meta.label} settings`}
                 aria-expanded={expanded}
               >

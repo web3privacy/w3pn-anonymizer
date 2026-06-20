@@ -16,7 +16,7 @@ const getInitialTheme = (): ThemeMode => {
 export interface ThemeModeApi {
   theme: ThemeMode
   setTheme: Dispatch<SetStateAction<ThemeMode>>
-  /** Mobile is always dark; desktop follows the user-selected theme. */
+  /** The public app is temporarily locked to dark mode. */
   effectiveTheme: ThemeMode
 }
 
@@ -26,7 +26,7 @@ export interface ThemeModeApi {
  */
 export function useThemeMode(isMobile: boolean): ThemeModeApi {
   const [theme, setTheme] = useState<ThemeMode>(getInitialTheme)
-  const effectiveTheme: ThemeMode = isMobile ? 'dark' : theme
+  const effectiveTheme: ThemeMode = 'dark'
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', effectiveTheme)

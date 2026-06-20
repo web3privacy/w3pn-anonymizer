@@ -1,17 +1,16 @@
 import { Icon } from '../components/Icon'
-import type { ThemeMode } from '../types'
 
 interface DesktopTopBarProps {
-  theme: ThemeMode
   busy: boolean
   onAbout: () => void
   onLoadDemo: () => void
+  showDemo: boolean
   onLiveCamera: () => void
-  onToggleTheme: () => void
+  onFeedback: () => void
 }
 
 export function DesktopTopBar({
-  theme, busy, onAbout, onLoadDemo, onLiveCamera, onToggleTheme,
+  busy, onAbout, onLoadDemo, showDemo, onLiveCamera, onFeedback,
 }: DesktopTopBarProps) {
   return (
     <header className="topbar">
@@ -27,15 +26,17 @@ export function DesktopTopBar({
 
       <div className="topbar-gap" />
 
-      <button
-        className="topbar-demo-btn"
-        type="button"
-        onClick={onLoadDemo}
-        disabled={busy}
-        title="Load demo photos"
-      >
-        Demo
-      </button>
+      {showDemo && (
+        <button
+          className="topbar-demo-btn"
+          type="button"
+          onClick={onLoadDemo}
+          disabled={busy}
+          title="Load demo photos"
+        >
+          Demo
+        </button>
+      )}
 
       <button
         className="topbar-live-btn"
@@ -48,6 +49,15 @@ export function DesktopTopBar({
         Live mode
       </button>
 
+      <button
+        className="topbar-demo-btn"
+        type="button"
+        onClick={onFeedback}
+        title="Give feedback"
+      >
+        Give Feedback
+      </button>
+
       <a
         className="topbar-github-link"
         href="https://github.com/web3privacy/w3pn-anonymizer"
@@ -57,16 +67,6 @@ export function DesktopTopBar({
       >
         GitHub
       </a>
-
-      <button
-        className="theme-toggle-icon"
-        type="button"
-        onClick={onToggleTheme}
-        title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-        aria-label="Toggle theme"
-      >
-        <Icon name={theme === 'dark' ? 'dark_mode' : 'light_mode'} size={18} />
-      </button>
     </header>
   )
 }

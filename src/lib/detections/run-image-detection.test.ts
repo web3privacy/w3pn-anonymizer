@@ -14,7 +14,7 @@ describe('run-image-detection helpers', () => {
   it('applyFaceConfidenceToConfig updates face threshold only', () => {
     const next = applyFaceConfidenceToConfig(DEFAULT_DETECTION_CONFIG, 0.42)
     expect(next.find((c) => c.type === 'face')?.confidenceThreshold).toBe(0.42)
-    expect(next.find((c) => c.type === 'person')?.confidenceThreshold).toBe(0.45)
+    expect(next.find((c) => c.type === 'person')?.confidenceThreshold).toBe(0.75)
   })
 
   it('usesExtendedPrivacyDetection when enabled target has ready model', () => {

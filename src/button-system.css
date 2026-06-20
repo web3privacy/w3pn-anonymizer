@@ -1,0 +1,50 @@
+/* Final button layer: shared typography and geometry across every app shell. */
+:root {
+  --ui-button-radius: 8px;
+  --ui-button-font-size: 12px;
+  --ui-button-letter-spacing: 0.06em;
+}
+
+button {
+  text-transform: uppercase;
+}
+
+/* Text transforms must not break the lowercase ligatures used by icon fonts. */
+button .material-symbols-outlined,
+button .material-icons,
+button .material-icons-round {
+  text-transform: none;
+}
+
+/* Standard controls use one restrained corner shape instead of mixed pills. */
+button:not(.mobile-home-orb):not(.mobile-live-capture-btn):not(.mobile-live-capture-thumb):not(.mobile-live-side-btn):not(.mobile-live-aspect-btn):not(.mobile-live-close-btn):not(.mobile-live-settings-btn):not(.mobile-home-v2-wordmark-btn):not(.video-face-rect):not(.zone-overlay-hit):not(.mobile-live-face-box):not(.ab-switch):not(.audio-ab-switch) {
+  border-radius: var(--ui-button-radius) !important;
+}
+
+/* Large/primary actions share one type size; compact controls keep their own. */
+.desktop-home-v2-btn,
+.welcome-upload-title,
+.btn:not(.btn-sm),
+.deps-install-btn,
+.sidebar-process-btn,
+.corner-btn-anonymize,
+.picker-choice-actions .btn,
+.feedback-modal-actions .btn,
+.mobile-cta-primary,
+.mobile-cta-secondary,
+.mobile-anonymize-btn,
+.mobile-gallery-add,
+.mobile-gallery-batch,
+.mobile-gallery-download-all,
+.mobile-batch-process-btn,
+.mobile-distort-apply-btn,
+.mobile-vectorize-download-btn,
+.mobile-vectorize-apply-btn,
+.mobile-face-action-btn,
+.mobile-about-feedback,
+.mobile-about-donate,
+.detect-settings-detect,
+.voice-mask-enable-btn {
+  font-size: var(--ui-button-font-size) !important;
+  letter-spacing: var(--ui-button-letter-spacing);
+}

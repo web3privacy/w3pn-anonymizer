@@ -37,6 +37,7 @@ import {
   filterDismissedFaceZones,
   formatVideoTime,
   getVideoDetectSettings,
+  getVideoPreviewDetectionSize,
   measureVideoContentLayout,
   type NormalizedFaceRect,
   type VideoContentLayout,
@@ -46,6 +47,7 @@ import {
 } from '../lib/editor-constants'
 import type { MobilePanel } from '../mobile/types'
 import { syncVideoOverlayCanvasDisplay, paintVideoPreviewOverlay, waitForVideoFrame } from '../lib/video-overlay-helpers'
+import { resolveTimedZoneAtTime } from '../lib/video-timeline-core'
 import {
   extractPosterFrame,
   getSupportedVideoExportOptions,
@@ -53,12 +55,15 @@ import {
   getVideoPipelineCapabilities,
   mimeTypeToVideoExtension,
   processVideo,
+  type VideoExportSize,
   videoZoneStrength,
   VideoFaceTrackStabilizer,
   type VideoDistortOptions,
   type VideoExportFormatId,
   type VideoFrameOverride,
   type VideoProcessingPhase,
+  type VideoRenderSettings,
+  type VideoRenderSettingsKeyframe,
   type VideoTimedZone,
 } from '../lib/video'
 import type {
@@ -71,6 +76,8 @@ import type {
   SourceType,
   Zone,
 } from '../types'
+
+export type VideoMaskEditMode = 'move' | 'nw' | 'ne' | 'sw' | 'se'
 
 export interface UseVideoControllerOptions {
   activePhoto: PhotoItem | null
@@ -106,6 +113,7 @@ export interface UseVideoControllerOptions {
   customImageRandomRef: MutableRefObject<boolean>
   selectedCustomImageIdRef: MutableRefObject<string | null>
   customImageAssetsRef: MutableRefObject<CustomImageAsset[]>
+  customImageAssetsSignature: string
   customImageSource: CustomImageSource
   colorAdj: ColorAdjustments
   getActiveDistorts: () => DistortEffectId[]
@@ -121,6 +129,7 @@ export interface UseVideoControllerOptions {
   autoDetect: boolean
   detector: import('../types').DetectorStatus
   audioSettings: import('../lib/audio/audioTypes').AudioEffectSettings
+  videoExportSize?: VideoExportSize | null
   resolveEmoji: () => string
   resolveCustomImageAssetId: (seed: string | number) => string | undefined
   customEffectOptions: (
@@ -188,6 +197,7 @@ export interface VideoControllerApi {
   setProcessedVideoEpoch: Dispatch<SetStateAction<number>>
   activeVideoTimedZones: VideoTimedZone[]
   activeVideoFrameOverrides: VideoFrameOverride[]
+  activeVideoRenderSettingsKeyframes: VideoRenderSettingsKeyframe[]
   visibleVideoTimedZones: VideoTimedZone[]
   hasPendingVideoEdits: boolean
   videoDismissedAtFrame: NormalizedFaceRect[]
@@ -195,8 +205,12 @@ export interface VideoControllerApi {
   handleVideoMaskPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void
   handleVideoMaskPointerMove: (event: ReactPointerEvent<HTMLDivElement>) => void
   handleVideoMaskPointerUp: (event: ReactPointerEvent<HTMLDivElement>) => void
+  handleVideoTimedZonePointerDown: (id: string, mode: VideoMaskEditMode, event: ReactPointerEvent<HTMLElement>) => void
+  handleVideoTimedZonePointerMove: (event: ReactPointerEvent<HTMLElement>) => void
+  handleVideoTimedZonePointerUp: (event: ReactPointerEvent<HTMLElement>) => void
+  removeVideoTimedZoneFromCurrentFrame: (id: string) => void
   clearVideoTimedZones: () => void
-  processActiveVideo: () => Promise<void>
+  processActiveVideo: () => Promise<Blob | null>
   cancelVideoProcessing: () => void
   stepActiveVideoFrame: (direction: -1 | 1) => void
   framePrevHold: ReturnType<typeof useHoldRepeat>
@@ -212,6 +226,86 @@ export interface VideoControllerApi {
   removeVideoPreviewFaceZone: (zoneId: string) => void
   restoreVideoPreviewFaceZone: (rect: NormalizedFaceRect) => void
   clearVideoDistortPreview: () => void
+}
+
+function findFrameOverrideAtTime(overrides: VideoFrameOverride[], timeSec: number, fps: number): VideoFrameOverride | null {
+  const tolerance = Math.max(1 / Math.max(1, fps * 2), 0.001)
+  return overrides.find((item) => Math.abs(item.timeSec - timeSec) <= tolerance) ?? null
+}
+
+function clampZoneRect(zone: Zone): Zone {
+  const width = clamp(zone.width, 0.01, 1)
+  const height = clamp(zone.height, 0.01, 1)
+  return {
+    ...zone,
+    x: clamp(zone.x, 0, 1 - width),
+    y: clamp(zone.y, 0, 1 - height),
+    width,
+    height,
+  }
+}
+
+function transformZoneForMaskEdit(zone: Zone, mode: VideoMaskEditMode, dx: number, dy: number): Zone {
+  if (mode === 'move') return clampZoneRect({ ...zone, x: zone.x + dx, y: zone.y + dy })
+
+  let x = zone.x
+  let y = zone.y
+  let width = zone.width
+  let height = zone.height
+  if (mode.includes('w')) { x += dx; width -= dx }
+  if (mode.includes('e')) width += dx
+  if (mode.includes('n')) { y += dy; height -= dy }
+  if (mode.includes('s')) height += dy
+  return clampZoneRect({ ...zone, x, y, width, height })
+}
+
+function withTimedZoneKeyframe(timedZone: VideoTimedZone, timeSec: number, zone: Zone): VideoTimedZone {
+  const tolerance = 1 / 120
+  const keyframes = [
+    ...(timedZone.keyframes ?? [{ timeSec: timedZone.startSec, zone: timedZone.zone }]),
+  ].filter((keyframe) => Math.abs(keyframe.timeSec - timeSec) > tolerance)
+  keyframes.push({ timeSec, zone: { ...zone, id: timedZone.id } })
+  keyframes.sort((a, b) => a.timeSec - b.timeSec)
+  return {
+    ...timedZone,
+    zone: timeSec <= timedZone.startSec + tolerance ? { ...zone, id: timedZone.id } : timedZone.zone,
+    keyframes,
+  }
+}
+
+function cloneVideoDistortOptions(input: VideoDistortOptions | undefined): VideoDistortOptions | undefined {
+  if (!input) return undefined
+  return {
+    enabled: [...input.enabled],
+    strengths: { ...input.strengths },
+    params: { ...input.params },
+    pixelShiftType: input.pixelShiftType,
+  }
+}
+
+function videoRenderSettingsSignature(settings: VideoRenderSettings): string {
+  const distortKey = settings.distort
+    ? distortPipelineKey(settings.distort.enabled, settings.distort.strengths, settings.distort.params, settings.distort.pixelShiftType)
+    : 'distort:none'
+  return [
+    settings.effect,
+    settings.strength.toFixed(4),
+    settings.fixedEmoji ?? '',
+    settings.fixedCustomImageId ?? '',
+    settings.customImageSource ?? '',
+    settings.customImages?.map((asset) => asset.id).join(',') ?? '',
+    settings.colorAdj ? colorAdjExportKey(settings.colorAdj) : 'color:none',
+    distortKey,
+  ].join('|')
+}
+
+function cloneVideoRenderSettings(settings: VideoRenderSettings): VideoRenderSettings {
+  return {
+    ...settings,
+    customImages: settings.customImages ? [...settings.customImages] : undefined,
+    colorAdj: settings.colorAdj ? { ...settings.colorAdj } : undefined,
+    distort: cloneVideoDistortOptions(settings.distort),
+  }
 }
 
 export function useVideoController(options: UseVideoControllerOptions): VideoControllerApi {
@@ -249,6 +343,7 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
     customImageRandomRef,
     selectedCustomImageIdRef,
     customImageAssetsRef,
+    customImageAssetsSignature,
     customImageSource,
     colorAdj,
     getActiveDistorts,
@@ -264,6 +359,7 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
     autoDetect,
     detector,
     audioSettings,
+    videoExportSize,
     resolveEmoji,
     resolveCustomImageAssetId,
     customEffectOptions,
@@ -288,9 +384,19 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
   const [activeVideoFrameLabel, setActiveVideoFrameLabel] = useState<string | null>(null)
   const [videoDraftZone, setVideoDraftZone] = useState<Zone | null>(null)
   const videoMaskPointerStartRef = useRef<{ x: number; y: number } | null>(null)
+  const videoTimedZoneEditRef = useRef<{
+    id: string
+    mode: VideoMaskEditMode
+    startPointer: { x: number; y: number }
+    startZone: Zone
+    timeSec: number
+  } | null>(null)
   const videoFrameLabelTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [videoExportedDistortKeyByPhoto, setVideoExportedDistortKeyByPhoto] = useState<Record<string, string>>({})
   const [videoExportedColorAdjKeyByPhoto, setVideoExportedColorAdjKeyByPhoto] = useState<Record<string, string>>({})
+  const [videoExportedAudioModeByPhoto, setVideoExportedAudioModeByPhoto] = useState<Record<string, string>>({})
+  const [videoRenderSettingsKeyframesByPhoto, setVideoRenderSettingsKeyframesByPhoto] = useState<Record<string, VideoRenderSettingsKeyframe[]>>({})
+  const lastVideoRenderSettingsRef = useRef<{ photoId: string | null; signature: string; settings: VideoRenderSettings } | null>(null)
   const [videoDistortPreviewVisible, setVideoDistortPreviewVisible] = useState(false)
   const activeVideoRef = useRef<HTMLVideoElement | null>(null)
   const videoDistortPreviewCanvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -333,6 +439,7 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
     setVideoMaskDrawActive(false)
     setVideoMaskShape('rectangle')
     setVideoDraftZone(null)
+    lastVideoRenderSettingsRef.current = null
     if (pendingVideoSeekRef.current == null) {
       setActiveVideoTime(0)
     }
@@ -415,12 +522,115 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
     () => activePhotoId ? (videoFrameOverridesByPhoto[activePhotoId] ?? []) : [],
     [activePhotoId, videoFrameOverridesByPhoto],
   )
+  const activeVideoRenderSettingsKeyframes = useMemo(
+    () => activePhotoId ? (videoRenderSettingsKeyframesByPhoto[activePhotoId] ?? []) : [],
+    [activePhotoId, videoRenderSettingsKeyframesByPhoto],
+  )
+  const currentVideoRenderSettings = useMemo<VideoRenderSettings>(() => {
+    const activeDistorts = getActiveDistorts()
+    const distort = activeDistorts.length > 0
+      ? {
+          enabled: activeDistorts,
+          strengths: { ...distortStrengthByEffect } as Record<DistortEffectId, number>,
+          params: { ...adjTransformParams },
+          pixelShiftType: adjPixelShiftType,
+        }
+      : undefined
+    return {
+      effect: selectedEffect,
+      strength: brushStrength,
+      fixedEmoji: (!emojiRandom && selectedEmoji) ? selectedEmoji : undefined,
+      fixedCustomImageId: (!customImageRandom && selectedCustomImageId) ? selectedCustomImageId : undefined,
+      customImageSource,
+      customImages: customImageAssetsRef.current.length > 0 ? [...customImageAssetsRef.current] : undefined,
+      colorAdj: !isColorAdjNoop(colorAdj) ? { ...colorAdj } : undefined,
+      distort,
+    }
+  }, [
+    adjPixelShiftType,
+    adjTransformParams,
+    brushStrength,
+    colorAdj,
+    customImageRandom,
+    customImageAssetsSignature,
+    customImageSource,
+    distortStrengthByEffect,
+    emojiRandom,
+    getActiveDistorts,
+    selectedCustomImageId,
+    selectedEffect,
+    selectedEmoji,
+  ])
+  const currentVideoRenderSettingsSignature = useMemo(
+    () => videoRenderSettingsSignature(currentVideoRenderSettings),
+    [currentVideoRenderSettings],
+  )
+  useEffect(() => {
+    if (!activePhoto?.isVideo || !activePhotoId) {
+      lastVideoRenderSettingsRef.current = null
+      return
+    }
+    const previous = lastVideoRenderSettingsRef.current
+    if (!previous || previous.photoId !== activePhotoId) {
+      lastVideoRenderSettingsRef.current = {
+        photoId: activePhotoId,
+        signature: currentVideoRenderSettingsSignature,
+        settings: cloneVideoRenderSettings(currentVideoRenderSettings),
+      }
+      return
+    }
+    if (previous.signature === currentVideoRenderSettingsSignature) return
+
+    const rawCurrentTime = activeVideoRef.current?.currentTime ?? activeVideoTimeRef.current
+    const duration = Number.isFinite(activePhoto.videoDuration) ? (activePhoto.videoDuration ?? 0) : rawCurrentTime
+    const currentTime = clamp(rawCurrentTime, 0, Math.max(0, duration))
+    setVideoRenderSettingsKeyframesByPhoto((cur) => {
+      const existing = cur[activePhotoId] ?? []
+      const tolerance = 1 / 120
+      const baseline = existing.length > 0
+        ? existing
+        : [{ timeSec: 0, settings: cloneVideoRenderSettings(previous.settings) }]
+      const next = baseline
+        .filter((keyframe) => Math.abs(keyframe.timeSec - currentTime) > tolerance)
+        .concat({ timeSec: currentTime, settings: cloneVideoRenderSettings(currentVideoRenderSettings) })
+        .sort((a, b) => a.timeSec - b.timeSec)
+      return { ...cur, [activePhotoId]: next }
+    })
+    lastVideoRenderSettingsRef.current = {
+      photoId: activePhotoId,
+      signature: currentVideoRenderSettingsSignature,
+      settings: cloneVideoRenderSettings(currentVideoRenderSettings),
+    }
+    setNotice('Video render settings keyframe saved.')
+  }, [
+    activePhoto?.isVideo,
+    activePhoto?.videoDuration,
+    activePhotoId,
+    currentVideoRenderSettings,
+    currentVideoRenderSettingsSignature,
+    setNotice,
+  ])
   const visibleVideoTimedZones = useMemo(
-    () => activeVideoTimedZones.filter((item) => activeVideoTime >= item.startSec && activeVideoTime <= item.endSec),
+    () => activeVideoTimedZones
+      .filter((item) => activeVideoTime >= item.startSec && activeVideoTime <= item.endSec)
+      .map((item) => ({ ...item, zone: { ...resolveTimedZoneAtTime(item, activeVideoTime), id: item.id } })),
     [activeVideoTime, activeVideoTimedZones],
+  )
+  const hasPendingVideoResize = Boolean(
+    activePhoto?.isVideo
+    && videoExportSize
+    && (videoExportSize.width !== activePhoto.videoWidth || videoExportSize.height !== activePhoto.videoHeight),
+  )
+  const hasPendingVideoAudio = Boolean(
+    activePhoto?.isVideo
+    && activePhotoId
+    && audioSettings.mode !== (videoExportedAudioModeByPhoto[activePhotoId] ?? 'keep_original'),
   )
   const hasPendingVideoEdits = activeVideoTimedZones.length > 0
     || activeVideoFrameOverrides.length > 0
+    || activeVideoRenderSettingsKeyframes.length > 0
+    || hasPendingVideoResize
+    || hasPendingVideoAudio
     || (Boolean(activePhoto?.isVideo && activePhotoId)
       && distortPipelineKey(enabledDistorts, distortStrengthByEffect, adjTransformParams, adjPixelShiftType)
         !== (videoExportedDistortKeyByPhoto[activePhotoId ?? ''] ?? ''))
@@ -513,24 +723,89 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
     setNotice(`Timeline mask added for ${formatVideoTime(timedZone.startSec)}–${formatVideoTime(timedZone.endSec)}. Re-run video anonymization to bake it in.`)
   }, [activePhoto, activeVideoTime, selectedEffect, videoDraftZone, videoMaskDrawActive, videoMaskRangeSec, videoMaskShape, setNotice])
 
+  const handleVideoTimedZonePointerDown = useCallback((id: string, mode: VideoMaskEditMode, event: ReactPointerEvent<HTMLElement>) => {
+    if (!activePhoto?.isVideo) return
+    const mapped = mapPointerToVideo(event)
+    const timedZone = (videoTimedZonesByPhoto[activePhoto.id] ?? []).find((item) => item.id === id)
+    if (!mapped || !timedZone) return
+    event.stopPropagation()
+    event.preventDefault()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    const timeSec = activeVideoRef.current?.currentTime ?? activeVideoTime
+    videoTimedZoneEditRef.current = {
+      id,
+      mode,
+      startPointer: mapped,
+      startZone: { ...resolveTimedZoneAtTime(timedZone, timeSec), id },
+      timeSec,
+    }
+  }, [activePhoto, activeVideoTime, mapPointerToVideo, videoTimedZonesByPhoto])
+
+  const handleVideoTimedZonePointerMove = useCallback((event: ReactPointerEvent<HTMLElement>) => {
+    const edit = videoTimedZoneEditRef.current
+    if (!edit || !activePhoto?.isVideo) return
+    const mapped = mapPointerToVideo(event)
+    if (!mapped) return
+    event.stopPropagation()
+    const nextZone = transformZoneForMaskEdit(
+      edit.startZone,
+      edit.mode,
+      mapped.x - edit.startPointer.x,
+      mapped.y - edit.startPointer.y,
+    )
+    setVideoTimedZonesByPhoto((cur) => ({
+      ...cur,
+      [activePhoto.id]: (cur[activePhoto.id] ?? []).map((item) => (
+        item.id === edit.id ? withTimedZoneKeyframe(item, edit.timeSec, nextZone) : item
+      )),
+    }))
+  }, [activePhoto, mapPointerToVideo])
+
+  const handleVideoTimedZonePointerUp = useCallback((event: ReactPointerEvent<HTMLElement>) => {
+    if (!videoTimedZoneEditRef.current) return
+    event.stopPropagation()
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+    videoTimedZoneEditRef.current = null
+    setNotice('Timeline mask keyframe updated.')
+  }, [setNotice])
+
+  const removeVideoTimedZoneFromCurrentFrame = useCallback((id: string) => {
+    if (!activePhoto?.isVideo) return
+    const fps = resolveVideoFps(activePhoto.videoFps)
+    const currentTime = activeVideoRef.current?.currentTime ?? activeVideoTime
+    const endSec = Math.max(0, currentTime - (0.5 / fps))
+    setVideoTimedZonesByPhoto((cur) => {
+      const nextZones = (cur[activePhoto.id] ?? [])
+        .map((item) => {
+          if (item.id !== id) return item
+          return { ...item, endSec: Math.min(item.endSec, endSec) }
+        })
+        .filter((item) => item.endSec > item.startSec + 0.01)
+      return { ...cur, [activePhoto.id]: nextZones }
+    })
+    setNotice('Timeline mask stopped from this frame onward.')
+  }, [activePhoto, activeVideoTime, setNotice])
+
   const clearVideoDistortPreview = useCallback(() => {
     if (videoDistortPreviewCanvasRef.current) videoDistortPreviewCanvasRef.current.width = 0
     setVideoDistortPreviewVisible(false)
   }, [])
 
   const processActiveVideo = useCallback(async () => {
-    if (!activePhoto?.isVideo) return
-    if (videoAbortRef.current) return
+    if (!activePhoto?.isVideo) return null
+    if (videoAbortRef.current) return null
     const exportEffect = selectedEffectRef.current
     const exportAssets = customImageAssetsRef.current ?? []
     if (exportEffect === 'custom-image' && exportAssets.filter((a) => a.imageBitmap).length === 0) {
       setNotice('Load a custom image library before anonymizing video.')
-      return
+      return null
     }
     const selectedContainer = videoExportOptions.find((opt) => opt.id === videoExportFormat)
     if (!selectedContainer?.supported) {
       setNotice(`Video format ${videoExportFormat.toUpperCase()} is not supported in this browser.`)
-      return
+      return null
     }
     const abort = new AbortController()
     videoAbortRef.current = abort
@@ -552,6 +827,7 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
       const sourceVideoBlob = originalBlobByPhoto[activePhoto.id] ?? activePhoto.blob
       const manualOverrides = videoFrameOverridesByPhoto[activePhoto.id] ?? []
       const timedZones = videoTimedZonesByPhoto[activePhoto.id] ?? []
+      const renderSettingsKeyframes = videoRenderSettingsKeyframesByPhoto[activePhoto.id] ?? []
       const videoDistort: VideoDistortOptions | undefined = activeDistorts.length > 0
         ? {
             enabled: activeDistorts,
@@ -572,8 +848,10 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
         customImages: customImageAssetsRef.current ?? undefined,
         customImageSource,
         outputFormat: videoExportFormat,
+        targetSize: videoExportSize,
         frameOverrides: manualOverrides,
         timedZones,
+        renderSettingsKeyframes,
         colorAdj: videoColorAdj,
         distort: videoDistort,
         audioPrivacyMode: audioSettings.mode,
@@ -627,6 +905,7 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
       const manualSummary = [
         manualOverrides.length > 0 ? `${manualOverrides.length} frame override${manualOverrides.length === 1 ? '' : 's'}` : '',
         timedZones.length > 0 ? `${timedZones.length} timeline mask${timedZones.length === 1 ? '' : 's'}` : '',
+        renderSettingsKeyframes.length > 0 ? `${renderSettingsKeyframes.length} render setting keyframe${renderSettingsKeyframes.length === 1 ? '' : 's'}` : '',
         videoColorAdj ? 'color adjust' : '',
         videoDistort ? `${videoDistort.enabled.length} distort effect${videoDistort.enabled.length === 1 ? '' : 's'}` : '',
       ].filter(Boolean).join(' and ')
@@ -643,6 +922,10 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
         ...cur,
         [activePhoto.id]: colorAdjExportKey(exportColorAdj),
       }))
+      setVideoExportedAudioModeByPhoto((cur) => ({
+        ...cur,
+        [activePhoto.id]: audioSettings.mode,
+      }))
       setActiveVideoTime(0)
       setVideoPreviewFaceZones([])
       setAutoDetect(false)
@@ -650,6 +933,7 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
       setProcessedVideoEpoch((epoch) => epoch + 1)
       setVideoReadyTick((tick) => tick + 1)
       setNotice(`Video processed successfully as ${selectedContainer.label}. ${manualSummary ? `${manualSummary} baked in.` : 'Preview updated.'}`)
+      return resultBlob
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') {
         setNotice('Video processing cancelled.')
@@ -657,6 +941,7 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
         setNotice('Video processing failed.')
         console.error('Video processing error:', err)
       }
+      return null
     } finally {
       setVideoProcessing(false)
       setVideoProgress(null)
@@ -669,6 +954,7 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
     adjTransformParams,
     clearVideoDistortPreview,
     colorAdj,
+    audioSettings.mode,
     customImageAssetsRef,
     customImageRandomRef,
     customImageSource,
@@ -687,7 +973,10 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
     setShowBoxes,
     videoExportFormat,
     videoExportOptions,
+    videoExportSize,
+    videoExportedAudioModeByPhoto,
     videoFrameOverridesByPhoto,
+    videoRenderSettingsKeyframesByPhoto,
     videoTimedZonesByPhoto,
     brushStrengthRef,
   ])
@@ -753,6 +1042,7 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
   const openCurrentVideoFrameAsSnapshot = useCallback(async () => {
     if (!activePhoto?.isVideo || !activeVideoRef.current) return
     const video = activeVideoRef.current
+    const fps = resolveVideoFps(activePhoto.videoFps)
     const width = video.videoWidth || activePhoto.videoWidth || 0
     const height = video.videoHeight || activePhoto.videoHeight || 0
     if (width <= 0 || height <= 0) {
@@ -766,7 +1056,16 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
       frameCanvas.height = height
       const frameCtx = frameCanvas.getContext('2d')
       if (!frameCtx) throw new Error('2D context unavailable')
-      frameCtx.drawImage(video, 0, 0, width, height)
+      const savedOverride = findFrameOverrideAtTime(videoFrameOverridesByPhoto[activePhoto.id] ?? [], video.currentTime, fps)
+      if (savedOverride) {
+        const bitmap = await createImageBitmap(savedOverride.frameBlob)
+        frameCanvas.width = bitmap.width
+        frameCanvas.height = bitmap.height
+        frameCtx.drawImage(bitmap, 0, 0)
+        bitmap.close()
+      } else {
+        frameCtx.drawImage(video, 0, 0, width, height)
+      }
       const blob = await canvasToBlob(frameCanvas, 'image/png')
       const previewUrl = URL.createObjectURL(blob)
       const baseName = activePhoto.name.replace(/\.[^.]+$/, '')
@@ -776,17 +1075,18 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
         blob, previewUrl, source: 'upload' satisfies SourceType, edited: false,
         derivedFromVideoId: activePhoto.id,
         derivedFromVideoTime: video.currentTime,
+        isVideoFrameEdit: true,
       }
       setPhotos((cur) => [...cur, newPhoto])
       setOriginalBlobByPhoto((cur) => ({ ...cur, [newPhoto.id]: blob }))
       setActivePhotoId(newPhoto.id)
-      setNotice('Current video frame opened as a snapshot for brush edits.')
+      setNotice('Frame opened for video edit.')
     } catch (err) {
       setNotice(err instanceof Error ? `Frame snapshot failed: ${err.message}` : 'Frame snapshot failed.')
     } finally {
       setIsBusy(false)
     }
-  }, [activePhoto, setActivePhotoId, setIsBusy, setNotice, setOriginalBlobByPhoto, setPhotos])
+  }, [activePhoto, setActivePhotoId, setIsBusy, setNotice, setOriginalBlobByPhoto, setPhotos, videoFrameOverridesByPhoto])
 
   const stepEditFrameAdjacent = useCallback(async (direction: -1 | 1) => {
     if (!activePhoto || activePhoto.isVideo || !activePhoto.derivedFromVideoId || activePhoto.derivedFromVideoTime == null) return
@@ -805,31 +1105,41 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
 
     setIsBusy(true)
     try {
-      const sourceBlob = originalBlobByPhoto[source.id] ?? source.blob
-      const objectUrl = URL.createObjectURL(sourceBlob)
-      const video = document.createElement('video')
-      video.muted = true
-      video.playsInline = true
-      video.preload = 'auto'
-
-      await new Promise<void>((resolve, reject) => {
-        const onErr = () => reject(new Error('Video load failed'))
-        video.onerror = onErr
-        video.onloadedmetadata = () => { video.currentTime = newTime }
-        video.onseeked = () => resolve()
-        video.src = objectUrl
-      })
-
-      const width = video.videoWidth || source.videoWidth || 0
-      const height = video.videoHeight || source.videoHeight || 0
-      if (width <= 0 || height <= 0) throw new Error('Frame not ready')
-
       const frameCanvas = document.createElement('canvas')
-      frameCanvas.width = width
-      frameCanvas.height = height
       const frameCtx = frameCanvas.getContext('2d')
       if (!frameCtx) throw new Error('2D context unavailable')
-      frameCtx.drawImage(video, 0, 0, width, height)
+      const savedOverride = findFrameOverrideAtTime(videoFrameOverridesByPhoto[source.id] ?? [], newTime, fps)
+      if (savedOverride) {
+        const bitmap = await createImageBitmap(savedOverride.frameBlob)
+        frameCanvas.width = bitmap.width
+        frameCanvas.height = bitmap.height
+        frameCtx.drawImage(bitmap, 0, 0)
+        bitmap.close()
+      } else {
+        const sourceBlob = originalBlobByPhoto[source.id] ?? source.blob
+        const objectUrl = URL.createObjectURL(sourceBlob)
+        const video = document.createElement('video')
+        video.muted = true
+        video.playsInline = true
+        video.preload = 'auto'
+
+        await new Promise<void>((resolve, reject) => {
+          const onErr = () => reject(new Error('Video load failed'))
+          video.onerror = onErr
+          video.onloadedmetadata = () => { video.currentTime = newTime }
+          video.onseeked = () => resolve()
+          video.src = objectUrl
+        })
+
+        const width = video.videoWidth || source.videoWidth || 0
+        const height = video.videoHeight || source.videoHeight || 0
+        if (width <= 0 || height <= 0) throw new Error('Frame not ready')
+
+        frameCanvas.width = width
+        frameCanvas.height = height
+        frameCtx.drawImage(video, 0, 0, width, height)
+        URL.revokeObjectURL(objectUrl)
+      }
       const blob = await canvasToBlob(frameCanvas, 'image/png')
       const nextUrl = URL.createObjectURL(blob)
       const baseName = source.name.replace(/\.[^.]+$/, '')
@@ -845,6 +1155,7 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
           previewUrl: nextUrl,
           derivedFromVideoTime: newTime,
           edited: false,
+          isVideoFrameEdit: true,
         }
       }))
       setOriginalBlobByPhoto((cur) => ({ ...cur, [snapshotId]: blob }))
@@ -854,21 +1165,20 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
 
       const wc = workCanvasRef.current
       if (wc) {
-        wc.width = width
-        wc.height = height
+        wc.width = frameCanvas.width
+        wc.height = frameCanvas.height
         workCtxRef.current = null
         const wCtx = getWorkCtx()
         if (wCtx) {
-          wCtx.clearRect(0, 0, width, height)
+          wCtx.clearRect(0, 0, frameCanvas.width, frameCanvas.height)
           wCtx.drawImage(frameCanvas, 0, 0)
         }
-        setActiveImageSize({ width, height })
+        setActiveImageSize({ width: frameCanvas.width, height: frameCanvas.height })
         renderCanvasRef.current?.()
       }
 
       showVideoFrameLabel(frameIndex + 1, totalFrames)
       setNotice(`Frame ${formatVideoTime(newTime)}`)
-      URL.revokeObjectURL(objectUrl)
     } catch (err) {
       setNotice(err instanceof Error ? err.message : 'Frame step failed.')
     } finally {
@@ -888,6 +1198,7 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
     setPhotos,
     setZonesAnonymized,
     setZonesByPhoto,
+    videoFrameOverridesByPhoto,
     showVideoFrameLabel,
     workCanvasRef,
     workCtxRef,
@@ -1066,21 +1377,22 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
         videoFaceDetectCanvasRef.current = document.createElement('canvas')
       }
       const capture = videoFaceDetectCanvasRef.current
-      const playbackMode = videoPlayingRef.current
       const srcW = video.videoWidth
       const srcH = video.videoHeight
-      const maxDim = playbackMode ? 640 : Math.max(srcW, srcH)
-      const scale = Math.min(1, maxDim / Math.max(srcW, srcH))
-      capture.width = Math.max(1, Math.round(srcW * scale))
-      capture.height = Math.max(1, Math.round(srcH * scale))
+      const playbackMode = videoPlayingRef.current
+      const previewSize = getVideoPreviewDetectionSize(srcW, srcH)
+      capture.width = previewSize.width
+      capture.height = previewSize.height
       const captureCtx = capture.getContext('2d')
       if (!captureCtx) return
       captureCtx.drawImage(video, 0, 0, capture.width, capture.height)
-      const { confidence, thorough } = getVideoDetectSettings(
+      const { confidence } = getVideoDetectSettings(
         detectSensitivity,
         playbackMode ? 0 : passIndex,
       )
-      const boxes = await detectFaces(capture, playbackMode ? false : thorough, confidence)
+      // The preview is already one 640px YuNet frame. Tiled "thorough" scans
+      // only duplicate the same inference here and can stall WebGPU on video.
+      const boxes = await detectFaces(capture, false, confidence)
       if (gen !== videoFaceDetectGenRef.current) return
       if (Math.abs(video.currentTime - targetTime) > 0.12) return
       const W = capture.width
@@ -1099,6 +1411,7 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
         targetTime,
         selectedEffect,
         nextEmoji,
+        confidence,
       )
       const frameKey = Math.round(targetTime * 1000)
       const dismissed = videoDismissedFacesByPhotoRef.current[activePhotoId ?? '']?.[frameKey] ?? []
@@ -1121,11 +1434,10 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
         }
       })
       setVideoPreviewFaceZones(filterDismissedFaceZones(zones, dismissed))
-      void refreshVideoFramePreview()
     } catch {
       if (gen === videoFaceDetectGenRef.current && passIndex === 0) setVideoPreviewFaceZones([])
     }
-  }, [activePhotoId, detectSensitivity, refreshVideoFramePreview, resolveCustomImageAssetId, selectedEffect, emojiRandomRef, selectedEmojiRef])
+  }, [activePhotoId, detectSensitivity, resolveCustomImageAssetId, selectedEffect, emojiRandomRef, selectedEmojiRef])
 
   useEffect(() => {
     const video = activeVideoRef.current
@@ -1175,6 +1487,8 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
     videoFaceScanTimersRef.current = []
     if (videoFaceDetectDebounceRef.current) clearTimeout(videoFaceDetectDebounceRef.current)
 
+    const gen = ++videoFaceDetectGenRef.current
+
     if (!activePhoto?.isVideo || !autoDetect || activePhoto.edited || detector.mode === 'unavailable') {
       videoPreviewStabilizerRef.current.reset()
       setVideoPreviewFaceZones([])
@@ -1187,22 +1501,22 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
 
     const targetTime = activeVideoTimeRef.current
     const frameKey = Math.round(targetTime * 1000)
-    const gen = ++videoFaceDetectGenRef.current
 
-    void runVideoFaceDetectPass(0, targetTime, gen)
-
-    if (!videoPlayingRef.current) {
-      for (let passIndex = 1; passIndex <= VIDEO_FACE_SCAN_MAX_PASSES; passIndex += 1) {
-        const timer = setTimeout(() => {
-          if (gen !== videoFaceDetectGenRef.current) return
-          if (Math.round(activeVideoTimeRef.current * 1000) !== frameKey) return
-          void runVideoFaceDetectPass(passIndex, targetTime, gen)
-        }, passIndex * 1000)
-        videoFaceScanTimersRef.current.push(timer)
-      }
+    const runPass = (passIndex: number) => {
+      if (gen !== videoFaceDetectGenRef.current) return
+      if (Math.round(activeVideoTimeRef.current * 1000) !== frameKey) return
+      void runVideoFaceDetectPass(passIndex, targetTime, gen).finally(() => {
+        if (videoPlayingRef.current || passIndex >= VIDEO_FACE_SCAN_MAX_PASSES) return
+        if (gen !== videoFaceDetectGenRef.current) return
+        const timer = setTimeout(() => runPass(passIndex + 1), 1000)
+        videoFaceScanTimersRef.current = [timer]
+      })
     }
 
+    runPass(0)
+
     return () => {
+      if (videoFaceDetectGenRef.current === gen) videoFaceDetectGenRef.current += 1
       videoFaceScanTimersRef.current.forEach(clearTimeout)
       videoFaceScanTimersRef.current = []
     }
@@ -1325,6 +1639,7 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
     setProcessedVideoEpoch,
     activeVideoTimedZones,
     activeVideoFrameOverrides,
+    activeVideoRenderSettingsKeyframes,
     visibleVideoTimedZones,
     hasPendingVideoEdits,
     videoDismissedAtFrame,
@@ -1332,6 +1647,10 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
     handleVideoMaskPointerDown,
     handleVideoMaskPointerMove,
     handleVideoMaskPointerUp,
+    handleVideoTimedZonePointerDown,
+    handleVideoTimedZonePointerMove,
+    handleVideoTimedZonePointerUp,
+    removeVideoTimedZoneFromCurrentFrame,
     clearVideoTimedZones,
     processActiveVideo,
     cancelVideoProcessing,

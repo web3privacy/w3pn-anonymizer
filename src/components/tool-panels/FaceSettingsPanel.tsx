@@ -48,6 +48,20 @@ export function FaceSettingsPanel({
   const [classesOpen, setClassesOpen] = useState(false)
   return (
     <div className={`tool-panel tool-panel--face${compact ? ' tool-panel--compact' : ''}`}>
+      {!liveMode && (
+        <label className="detect-boxes-primary-toggle">
+          <span className="detect-boxes-primary-copy">
+            <Icon name="select_all" size={18} />
+            <span>Show detection boxes</span>
+          </span>
+          <span className={`mobile-switch${showBoxes ? ' on' : ''}`}>
+            <input type="checkbox" checked={showBoxes} onChange={(e) => onShowBoxesChange(e.target.checked)} />
+            <span className="mobile-switch-track" />
+            <span className="mobile-switch-knob" />
+          </span>
+        </label>
+      )}
+
       {onToggleCategory && detectionConfig.length > 0 && (
         <PrimaryTargetsToggles
           detectionConfig={detectionConfig}
@@ -95,6 +109,7 @@ export function FaceSettingsPanel({
           label="Sensitivity"
           min={0}
           max={100}
+          defaultValue={25}
           value={sensitivity}
           format={(v) => `${v}%`}
           onChange={onSensitivityChange}
@@ -104,19 +119,13 @@ export function FaceSettingsPanel({
           label="Face offset"
           min={0}
           max={100}
+          defaultValue={40}
           value={faceOffset}
           format={(v) => `+${v}%`}
           onChange={onFaceOffsetChange}
           hint={FACE_OFFSET_HINT}
         />
       </div>
-
-      {!liveMode && (
-        <label className="detect-settings-toggle">
-          <input type="checkbox" checked={showBoxes} onChange={(e) => onShowBoxesChange(e.target.checked)} />
-          <span>Show detection boxes</span>
-        </label>
-      )}
     </div>
   )
 }

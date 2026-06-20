@@ -9,6 +9,8 @@ import { nmsPrivacyDetections, dedupeOverlappingDetections } from './detectors/d
 import { yoloDetector, probeAllYoloModels, checkYoloNeeded } from './detectors/yoloDetector'
 import { yunetFaceDetector, buildDetectorInputFromSource } from './detectors/yunetFaceDetector'
 
+const DEFAULT_OBJECT_CLASS_CONFIDENCE = 0.9
+
 export type PrivacyPipelineResult = DetectorOutput & {
   counts: Partial<Record<string, number>>
 }
@@ -19,7 +21,7 @@ function applyThresholds(
 ): PrivacyDetection[] {
   return detections.filter((d) => {
     const cat = getCategoryConfig(config, d.type)
-    const threshold = cat?.confidenceThreshold ?? 0.5
+    const threshold = cat?.confidenceThreshold ?? (d.type === 'object' ? DEFAULT_OBJECT_CLASS_CONFIDENCE : 0.5)
     return d.confidence >= threshold
   })
 }

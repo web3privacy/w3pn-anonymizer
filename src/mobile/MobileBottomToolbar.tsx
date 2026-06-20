@@ -1,6 +1,6 @@
 import { Icon } from '../components/Icon'
 import { memo } from 'react'
-import { EFFECTS, getMobileStrengthLabel } from '../lib/effects'
+import { EFFECTS, getMobileStrengthLabel, mapPixelateBlockSize, pixelateStrengthForBlockSize } from '../lib/effects'
 import type { AppMobileBindings } from './bindings'
 import { MobileRangeWithThumb } from './MobileRangeWithThumb'
 import { isCategoryEffectActive } from './categoryActivity'
@@ -29,7 +29,10 @@ export const MobileBottomToolbar = memo(function MobileBottomToolbar({
   b, liveMode = false, liveFaceCount = 0,
   liveVoiceRunning = false, liveVoiceOpen = false, onToggleVoice,
 }: MobileBottomToolbarProps) {
-  const strVal = Math.min(100, Math.max(1, Math.round(b.brushStrength * 100)))
+  const pixelateActive = b.selectedEffect === 'pixelate'
+  const strVal = pixelateActive
+    ? mapPixelateBlockSize(b.brushStrength)
+    : Math.min(100, Math.max(1, Math.round(b.brushStrength * 100)))
   const sizeVal = Math.min(99, Math.max(0, Math.round(b.brushSize)))
   const isVideoEditor = !liveMode && Boolean(b.activePhoto?.isVideo)
   const detMode = b.detector.mode
@@ -78,10 +81,10 @@ export const MobileBottomToolbar = memo(function MobileBottomToolbar({
         <div className="mobile-slider-group">
           <span className="mobile-slider-label">{strLabel}</span>
           <MobileRangeWithThumb
-            min={1}
-            max={100}
+            min={pixelateActive ? 4 : 1}
+            max={pixelateActive ? 52 : 100}
             value={strVal}
-            onChange={(v) => b.setBrushStrength(v / 100)}
+            onChange={(v) => b.setBrushStrength(pixelateActive ? pixelateStrengthForBlockSize(v) : v / 100)}
             ariaLabel="Strength"
           />
         </div>

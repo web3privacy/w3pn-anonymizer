@@ -1,4 +1,4 @@
-import { getMobileStrengthLabel } from '../../lib/effects'
+import { getMobileStrengthLabel, mapPixelateBlockSize, pixelateStrengthForBlockSize } from '../../lib/effects'
 import type { AnonymizeEffectId } from '../../types'
 import { ToolSliderRow } from '../ToolSliderRow'
 
@@ -17,7 +17,10 @@ export function BrushToolPanel({
   onBrushStrengthChange,
   selectedEffect,
 }: BrushToolPanelProps) {
-  const strVal = Math.min(100, Math.max(1, Math.round(brushStrength * 100)))
+  const pixelateActive = selectedEffect === 'pixelate'
+  const strVal = pixelateActive
+    ? mapPixelateBlockSize(brushStrength)
+    : Math.min(100, Math.max(1, Math.round(brushStrength * 100)))
   const strLabel = getMobileStrengthLabel(selectedEffect)
 
   return (
@@ -31,10 +34,10 @@ export function BrushToolPanel({
       />
       <ToolSliderRow
         label={strLabel}
-        min={1}
-        max={100}
+        min={pixelateActive ? 4 : 1}
+        max={pixelateActive ? 52 : 100}
         value={strVal}
-        onChange={(v) => onBrushStrengthChange(v / 100)}
+        onChange={(v) => onBrushStrengthChange(pixelateActive ? pixelateStrengthForBlockSize(v) : v / 100)}
       />
     </div>
   )

@@ -44,6 +44,8 @@ export interface EffectRenderOptions {
   seed?: string | number
   /** ASCII effect: which glyph pool to render from (default 'all'). */
   asciiCharset?: AsciiCharset
+  /** ASCII effect: glyph color as a CSS hex color. */
+  asciiColor?: string
 }
 
 export interface EffectParamMeta {
@@ -199,6 +201,8 @@ export interface PhotoItem {
   videoFps?: number
   derivedFromVideoId?: string
   derivedFromVideoTime?: number
+  /** Hidden working item used when editing a single video frame in the photo editor. */
+  isVideoFrameEdit?: boolean
   isAudio?: boolean
   audioDuration?: number
   isDocument?: boolean

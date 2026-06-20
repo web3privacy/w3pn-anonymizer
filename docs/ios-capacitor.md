@@ -31,3 +31,6 @@ npm run ios:open
 - The wrapper uses the local `dist` build, so run `npm run ios:sync` after frontend changes.
 - The current project uses the Capacitor SPM iOS template to avoid requiring CocoaPods for the first device test.
 - Camera, microphone, photo library, model loading, WebAssembly, and memory usage should be tested on real devices before any store submission.
+- Optional YOLO/OCR assets load only after their target is enabled; test these flows separately from the face-only startup path.
+- The iOS wrapper uses the same blackout document defaults, local feedback endpoint, button system, and responsive editor as the web build.
+- See [`DEPENDENCIES.md`](./DEPENDENCIES.md) for the full Capacitor and browser-runtime inventory.

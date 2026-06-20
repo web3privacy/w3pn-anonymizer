@@ -5,6 +5,11 @@ export const mapPixelateBlockSize = (strength: number): number => {
   return Math.max(4, Math.round(4 + Math.pow(s, 1.7) * 48))
 }
 
+export const pixelateStrengthForBlockSize = (blockSize: number): number => {
+  const normalized = Math.min(1, Math.max(0, (blockSize - 4) / 48))
+  return Math.pow(normalized, 1 / 1.7)
+}
+
 export const PIXELATE_FRAG = `#version 300 es
 precision highp float;
 uniform sampler2D u_image;

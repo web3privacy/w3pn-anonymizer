@@ -425,6 +425,7 @@ export function AudioModeViewer({
   }
 
   const activeCatMeta = CATEGORY_META.find((c) => c.id === activeCat) ?? null
+  const presetOptions = settings.preset === 'custom' ? [...PRESETS, 'custom' as AudioEffectPreset] : PRESETS
 
   // Standalone audio on mobile shows its primary actions (A/B compare, level
   // meter, info + download) consolidated in a row under the waveform.
@@ -445,6 +446,17 @@ export function AudioModeViewer({
         <span className="audio-ab-switch-label audio-ab-switch-label--anon">{compact ? 'Anon' : 'Anonymized'}</span>
       </button>
     ) : null
+
+  const presetButtons = presetOptions.map((p) => (
+    <button
+      key={p}
+      type="button"
+      className={`btn btn-sm audio-preset-chip${settings.preset === p ? ' active' : ''}`}
+      onClick={() => setPreset(p)}
+    >
+      {AUDIO_PRESET_LABELS[p]}
+    </button>
+  ))
 
   const transport = (
     <div className="audio-toolbar-row audio-transport">
@@ -567,40 +579,31 @@ export function AudioModeViewer({
         {!showFootActions && transport}
 
         {(allowTrackModes || (distort && !showFootActions)) && (
-          <div className="audio-toolbar-row audio-toolbar-modes">
+          <div className={`audio-toolbar-row audio-toolbar-modes${isVideo ? ' audio-toolbar-modes--video' : ''}`}>
             {allowTrackModes && (
-              <div className="audio-seg">
-                {(['keep_original', 'remove_audio', 'distort_voice'] as AudioPrivacyMode[]).map((mode) => (
+              <div className="audio-seg audio-seg--tabs">
+                {(['keep_original', 'distort_voice'] as AudioPrivacyMode[]).map((mode) => (
                   <button
                     key={mode}
                     type="button"
                     className={`btn btn-sm${settings.mode === mode ? ' active' : ''}`}
                     onClick={() => setMode(mode)}
                   >
-                    {mode === 'keep_original' ? 'Keep' : mode === 'remove_audio' ? 'Remove track' : 'Distort'}
+                    {mode === 'keep_original' ? 'Keep' : 'Distort'}
                   </button>
                 ))}
               </div>
             )}
 
-            {distort && !showFootActions && renderAbToggle()}
+            {isVideo && allowTrackModes && distort && <span className="audio-toolbar-dot" aria-hidden="true" />}
+            {isVideo && distort && <div className="audio-presets-inline">{presetButtons}</div>}
+            {!isVideo && distort && !showFootActions && renderAbToggle()}
           </div>
         )}
 
         {distort && (
           <>
-            <div className="audio-toolbar-row audio-presets-row">
-              {(settings.preset === 'custom' ? [...PRESETS, 'custom' as AudioEffectPreset] : PRESETS).map((p) => (
-                <button
-                  key={p}
-                  type="button"
-                  className={`btn btn-sm audio-preset-chip${settings.preset === p ? ' active' : ''}`}
-                  onClick={() => setPreset(p)}
-                >
-                  {AUDIO_PRESET_LABELS[p]}
-                </button>
-              ))}
-            </div>
+            {!isVideo && <div className="audio-toolbar-row audio-presets-row">{presetButtons}</div>}
 
             <div className="audio-toolbar-row audio-intensity-row">
               <ToolSliderRow

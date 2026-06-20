@@ -50,7 +50,7 @@ export function DocumentMode({ activePhoto, onCommitAnonymized }: DocumentModePr
   const [activeSpanId, setActiveSpanId] = useState<string | null>(null)
   const [detectOpen, setDetectOpen] = useState(false)
   const [copied, setCopied] = useState(false)
-  const [showRedacted, setShowRedacted] = useState(false)
+  const [showRedacted, setShowRedacted] = useState(true)
   const reqRef = useRef(0)
 
   const isPdf = activePhoto.documentKind === 'pdf'
@@ -62,8 +62,8 @@ export function DocumentMode({ activePhoto, onCommitAnonymized }: DocumentModePr
     setParsed(null)
     setSpans([])
     setErrorMsg('')
-    setShowRedacted(false)
-    setEffect(kind === 'pdf' ? 'pixelate' : 'token')
+    setShowRedacted(kind !== 'pdf')
+    setEffect(DEFAULT_REDACTION_EFFECT)
     void parseDocument(activePhoto.blob, kind)
       .then((doc) => {
         if (req !== reqRef.current) return

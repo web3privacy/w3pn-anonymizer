@@ -64,7 +64,11 @@ void main() {
 
   float vignette = mix(0.72, 1.08, 1.0 - smoothstep(0.22, 0.78, length(centered)));
   float grain = (hash(gl_FragCoord.xy) - 0.5) * (0.025 + u_strength * 0.055);
-  fragColor = vec4(clamp(color * vignette + grain, 0.0, 1.0), src.a);
+  vec3 ballColor = clamp(color * vignette + grain, 0.0, 1.0);
+  float edgeDistance = min(min(p.x, 1.0 - p.x), min(p.y, 1.0 - p.y));
+  float feather = mix(0.14, 0.06, u_strength);
+  float edgeMix = smoothstep(0.0, feather, edgeDistance);
+  fragColor = vec4(mix(src.rgb, ballColor, edgeMix), src.a);
 }`
 
 export function glApplyThermalRect(

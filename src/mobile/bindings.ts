@@ -112,8 +112,11 @@ export interface AppMobileBindings {
   applySnapshotToSourceVideo: () => void
   jumpToSourceVideoFromSnapshot: () => void
   sourceVideoPhoto: PhotoItem | null
+  activeFrameEditDirty: boolean
+  activeFrameSavedToVideo: boolean
   activeVideoFrameOverrides: { timeSec: number; frameBlob: Blob }[]
   activeVideoTimedZones: import('../lib/video').VideoTimedZone[]
+  activeVideoRenderSettingsKeyframes: import('../lib/video').VideoRenderSettingsKeyframe[]
   clearVideoTimedZones: () => void
   activeVideoTime: number
   activeVideoFrameLabel: string | null

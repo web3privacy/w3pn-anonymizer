@@ -13,7 +13,7 @@ const STORAGE_KEY = 'anonymizer-privacy-settings'
 // curated defaults (faces, people, SPZ, documents, sensitive text) and clears
 // any extra "All classes" toggles. v6/v7 switch the default back to face-only
 // so heavy YOLO/OCR models lazy-load only after a user enables those targets.
-const SETTINGS_VERSION = 7
+const SETTINGS_VERSION = 8
 // Types enabled by default per DEFAULT_DETECTION_CONFIG (kept in sync there).
 const DEFAULT_ENABLED_TYPES = new Set<DetectionCategoryConfig['type']>(
   DEFAULT_DETECTION_CONFIG.filter((c) => c.enabled).map((c) => c.type),
@@ -65,6 +65,13 @@ function migrateDetectionConfig(
   }
   if (savedVersion < 7) {
     next = next.map((c) => ({ ...c, enabled: DEFAULT_ENABLED_TYPES.has(c.type) }))
+  }
+  // v8: align every category with the documented product sensitivity defaults.
+  if (savedVersion < 8) {
+    next = next.map((c) => {
+      const fresh = DEFAULT_DETECTION_CONFIG.find((def) => def.type === c.type)
+      return fresh ? { ...c, confidenceThreshold: fresh.confidenceThreshold } : c
+    })
   }
   return next
 }

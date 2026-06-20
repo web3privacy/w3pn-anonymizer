@@ -70,6 +70,21 @@ export const videoOverlayLayerStyle = (layout: VideoContentLayout | null): CSSPr
 /** Progressive video face scan: default 10%, then +4%/s → 14/18/22%. */
 export const VIDEO_FACE_SCAN_SENSITIVITY_STEP = 4
 export const VIDEO_FACE_SCAN_MAX_PASSES = 3
+export const VIDEO_PREVIEW_DETECT_MAX_DIM = 640
+
+/** Keep interactive video detection to one YuNet-sized frame without tiled scans. */
+export const getVideoPreviewDetectionSize = (
+  sourceWidth: number,
+  sourceHeight: number,
+  maxDimension = VIDEO_PREVIEW_DETECT_MAX_DIM,
+) => {
+  if (sourceWidth <= 0 || sourceHeight <= 0 || maxDimension <= 0) return { width: 0, height: 0 }
+  const scale = Math.min(1, maxDimension / Math.max(sourceWidth, sourceHeight))
+  return {
+    width: Math.max(1, Math.round(sourceWidth * scale)),
+    height: Math.max(1, Math.round(sourceHeight * scale)),
+  }
+}
 
 export const getVideoFaceScanSensitivity = (userSensitivity: number, passIndex: number) =>
   clamp(userSensitivity + passIndex * VIDEO_FACE_SCAN_SENSITIVITY_STEP, 0, 100)

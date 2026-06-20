@@ -1,6 +1,7 @@
 import { Icon } from '../Icon'
-import { EFFECTS } from '../../lib/effects'
+import { EFFECTS, getDefaultEffectStrength, mapPixelateBlockSize, pixelateStrengthForBlockSize } from '../../lib/effects'
 import type {
+  AnonymizeEffectId,
   BatchTaskId,
   ColorAdjustments,
   ColorPresetId,
@@ -290,15 +291,19 @@ export function BatchTaskSections(props: BatchTaskSectionsProps) {
         <>
           <div>
             <label className="field-label">Effect</label>
-            <select className="field-select" value={normalizeSettings.batchAnonymizeEffect} onChange={(e) => updateNormalizeSetting('batchAnonymizeEffect', e.target.value)} disabled={isNormalizing}>
+            <select className="field-select" value={normalizeSettings.batchAnonymizeEffect} onChange={(e) => {
+              const effect = e.target.value as AnonymizeEffectId
+              updateNormalizeSetting('batchAnonymizeEffect', effect)
+              updateNormalizeSetting('batchAnonymizeStrength', Math.round(getDefaultEffectStrength(effect) * 100))
+            }} disabled={isNormalizing}>
               {EFFECTS.map((ef) => (
                 <option key={ef.id} value={ef.id}>{ef.label}</option>
               ))}
             </select>
           </div>
           <div>
-            <span className="field-label">Strength: {normalizeSettings.batchAnonymizeStrength}%</span>
-            <input type="range" className="field-range" min={10} max={100} value={normalizeSettings.batchAnonymizeStrength} onChange={(e) => updateNormalizeSetting('batchAnonymizeStrength', Number(e.target.value))} disabled={isNormalizing} />
+            <span className="field-label">Strength: {normalizeSettings.batchAnonymizeEffect === 'pixelate' ? `${mapPixelateBlockSize(normalizeSettings.batchAnonymizeStrength / 100)} px` : `${normalizeSettings.batchAnonymizeStrength}%`}</span>
+            <input type="range" className="field-range" min={normalizeSettings.batchAnonymizeEffect === 'pixelate' ? 4 : 10} max={normalizeSettings.batchAnonymizeEffect === 'pixelate' ? 52 : 100} value={normalizeSettings.batchAnonymizeEffect === 'pixelate' ? mapPixelateBlockSize(normalizeSettings.batchAnonymizeStrength / 100) : normalizeSettings.batchAnonymizeStrength} onChange={(e) => updateNormalizeSetting('batchAnonymizeStrength', normalizeSettings.batchAnonymizeEffect === 'pixelate' ? Math.round(pixelateStrengthForBlockSize(Number(e.target.value)) * 100) : Number(e.target.value))} disabled={isNormalizing} />
           </div>
         </>
       ))}

@@ -37,6 +37,22 @@
   margin-top: 0.15rem;
 }
 
+.ts-flyout .tool-panel--adjust .color-preset-btn {
+  font-size: 8px;
+}
+
+.ts-flyout .tool-panel--adjust .tool-panel-actions,
+.ts-flyout .tool-panel-actions--distort {
+  width: 100%;
+  flex-wrap: nowrap;
+}
+
+.ts-flyout .tool-panel--adjust .tool-panel-actions .btn,
+.ts-flyout .tool-panel-actions--distort .btn {
+  flex: 1 1 0;
+  justify-content: center;
+}
+
 .tool-panel-actions--distort {
   margin-top: 0.35rem;
 }
@@ -173,6 +189,10 @@
   grid-template-rows: auto auto;
   align-items: center;
   gap: 0.15rem 0.35rem;
+}
+
+.ts-flyout .mobile-distort-list-row.active .mobile-distort-name {
+  color: var(--accent);
 }
 
 .ts-flyout .tool-distort-settings-inline {

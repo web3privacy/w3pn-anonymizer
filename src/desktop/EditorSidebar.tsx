@@ -44,7 +44,8 @@ export function EditorSidebar(props: EditorSidebarProps) {
   const processablePhotos = photos.filter(isBatchProcessablePhoto)
   const processablePhotoIds = new Set(processablePhotos.map((photo) => photo.id))
   const selectedProcessableCount = processablePhotos.filter((photo) => selectedForBatch.has(photo.id)).length
-  const skippedMediaCount = photos.length - processablePhotos.length
+  const visiblePhotos = photos.filter((photo) => !photo.isVideoFrameEdit)
+  const skippedMediaCount = visiblePhotos.length - processablePhotos.length
   const toggleBatchPanel = () => {
     const opening = !batchPanelOpen
     if (opening) setSelectedForBatch(new Set(processablePhotoIds))
@@ -55,7 +56,7 @@ export function EditorSidebar(props: EditorSidebarProps) {
     <aside
       className="sidebar"
       style={{
-        width: photos.length === 1 && !batchPanelOpen ? 0 : sidebarWidth,
+        width: visiblePhotos.length === 1 && !batchPanelOpen ? 0 : sidebarWidth,
         flexShrink: 0,
         overflow: 'hidden',
         transition: 'width 0.18s cubic-bezier(0.4,0,0.2,1)',
@@ -179,6 +180,13 @@ export function EditorSidebar(props: EditorSidebarProps) {
           const isAnonymized = anonymizedPhotoIds.has(photo.id)
           const canBatchProcess = isBatchProcessablePhoto(photo)
           const isBatchSelected = batchPanelOpen && canBatchProcess && selectedForBatch.has(photo.id)
+          const mediaBadge = photo.isVideo
+            ? '▶'
+            : photo.isDocument
+              ? (photo.documentKind ?? 'doc').toUpperCase()
+              : photo.isAudio
+                ? 'AUD'
+                : null
           return (
             <div
               key={photo.id}
@@ -201,28 +209,27 @@ export function EditorSidebar(props: EditorSidebarProps) {
               {isEdited && (
                 <div className="photo-edited-badge" title="Edited">✓</div>
               )}
-              {photo.isVideo && (
-                <div className="photo-video-badge" title="Video">▶</div>
-              )}
-              {photo.isDocument && (
-                <div className="photo-video-badge" title="Document">{(photo.documentKind ?? 'doc').toUpperCase()}</div>
-              )}
-              {photo.isDocument || photo.isAudio ? (
-                <div className={`photo-item-media-placeholder${sidebarView === 'grid' ? '' : ' photo-item-thumb'}`}>
-                  <Icon name={photo.isDocument ? 'description' : 'graphic_eq'} size={sidebarView === 'grid' ? 30 : 20} />
-                </div>
-              ) : sidebarView === 'grid' ? (
-                <div className="photo-item-grid-thumb">
-                  <img src={photo.previewUrl} alt={photo.name} loading="lazy" />
-                </div>
-              ) : (
-                <img
-                  src={photo.previewUrl}
-                  alt={photo.name}
-                  loading="lazy"
-                  className="photo-item-thumb"
-                />
-              )}
+              <div className="photo-item-media-wrap">
+                {mediaBadge && (
+                  <div className="photo-video-badge" title={photo.isVideo ? 'Video' : photo.isAudio ? 'Audio' : 'Document'}>{mediaBadge}</div>
+                )}
+                {photo.isDocument || photo.isAudio ? (
+                  <div className={`photo-item-media-placeholder${sidebarView === 'grid' ? '' : ' photo-item-thumb'}`}>
+                    <Icon name={photo.isDocument ? 'description' : 'graphic_eq'} size={sidebarView === 'grid' ? 30 : 20} />
+                  </div>
+                ) : sidebarView === 'grid' ? (
+                  <div className="photo-item-grid-thumb">
+                    <img src={photo.previewUrl} alt={photo.name} loading="lazy" />
+                  </div>
+                ) : (
+                  <img
+                    src={photo.previewUrl}
+                    alt={photo.name}
+                    loading="lazy"
+                    className="photo-item-thumb"
+                  />
+                )}
+              </div>
               <div className="photo-item-info">
                 <span className="photo-item-name">{photo.name.split('/').pop()}</span>
                 <span className="photo-item-meta">
@@ -259,8 +266,8 @@ export function EditorSidebar(props: EditorSidebarProps) {
           )
         })}
         {hasMorePhotosToRender && (
-          <button type="button" className="load-more-btn" onClick={() => setPhotoListLimit((cur) => Math.min(photos.length, cur + 250))}>
-            + {photos.length - displayedPhotos.length} more
+          <button type="button" className="load-more-btn" onClick={() => setPhotoListLimit((cur) => Math.min(visiblePhotos.length, cur + 250))}>
+            + {visiblePhotos.length - displayedPhotos.length} more
           </button>
         )}
       </div>

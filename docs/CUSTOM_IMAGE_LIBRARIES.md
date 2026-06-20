@@ -90,18 +90,14 @@ export type CustomImageSource =
   | 'my-library'
 ```
 
-### 4. Desktop picker (if used)
-
-Search for `loadCustomImagePreset` / custom image `<select>` in `App.tsx` and ensure the new id appears in any hardcoded option lists (mobile picker reads from `CUSTOM_IMAGE_PRESETS` automatically).
-
-### 5. Build & verify
+### 4. Build & verify
 
 ```bash
 npm run build
 npm run dev
 ```
 
-Open **Effects → Custom Image**, pick **My Library**, confirm thumbnails load.
+Open **Effects → Custom Image**, pick **My Library**, confirm thumbnails load. On desktop, verify horizontal touchpad/wheel scrolling while the pointer is directly over a thumbnail; mobile keeps native touch scrolling.
 
 ---
 
@@ -133,7 +129,7 @@ Users can upload their own images in-app (**Custom uploads**). These are kept in
 
 ## Future: registry-only UI
 
-The central registry (`src/lib/custom-image-presets.ts`) is the single source of truth for labels and folder mapping. New libraries only need:
+The central registry (`src/lib/custom-image-presets.ts`) is the single source of truth for labels and folder mapping on desktop and mobile. New libraries only need:
 
 1. Assets in `public/custom-images/`
 2. One registry entry + type union entry

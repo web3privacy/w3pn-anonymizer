@@ -1,6 +1,6 @@
 import { useRef, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
 import { Icon } from '../components/Icon'
-import { EFFECTS } from '../lib/effects'
+import { EFFECTS, getDefaultEffectStrength, mapPixelateBlockSize, pixelateStrengthForBlockSize } from '../lib/effects'
 import { fmtBytes } from '../lib/media-files'
 import { DEFAULT_CUSTOM_IMAGE_PRESET_ID } from '../lib/custom-image-presets'
 import {
@@ -137,6 +137,10 @@ export function EditorBatchPanel(props: EditorBatchPanelProps) {
   const batchEffect = normalizeSettings.batchAnonymizeEffect as AnonymizeEffectId
   const batchEffectMeta = EFFECTS.find((effect) => effect.id === batchEffect)
   const batchEffectStrengthLabel = batchEffectMeta?.strengthLabel ?? 'Intensity'
+  const batchPixelate = batchEffect === 'pixelate'
+  const batchStrengthValue = batchPixelate
+    ? mapPixelateBlockSize(normalizeSettings.batchAnonymizeStrength / 100)
+    : normalizeSettings.batchAnonymizeStrength
   const batchEffectPickerKind =
     batchEffect === 'emoji' || batchEffect === 'custom-image' || batchEffect === 'ascii'
       ? batchEffect
@@ -499,6 +503,7 @@ export function EditorBatchPanel(props: EditorBatchPanelProps) {
                         onChange={(e) => {
                           const effect = e.target.value as AnonymizeEffectId
                           updateNormalizeSetting('batchAnonymizeEffect', effect)
+                          updateNormalizeSetting('batchAnonymizeStrength', Math.round(getDefaultEffectStrength(effect) * 100))
                           if (effect === 'emoji' || effect === 'custom-image' || effect === 'ascii') {
                             setEffectPickerOpen(effect)
                             if (effect === 'custom-image' && customImageAssets.length === 0) {
@@ -531,10 +536,10 @@ export function EditorBatchPanel(props: EditorBatchPanelProps) {
                       </button>
                     )}
                     <div>
-                      <span className="field-label">{batchEffectStrengthLabel}: {normalizeSettings.batchAnonymizeStrength}%</span>
+                      <span className="field-label">{batchEffectStrengthLabel}: {batchStrengthValue}{batchPixelate ? ' px' : '%'}</span>
                       <div className="tb-quality-wrap" style={{ marginTop: '0.25rem' }}>
-                        <input className="tb-quality-slider" type="range" min={1} max={100} value={normalizeSettings.batchAnonymizeStrength} onChange={(e) => updateNormalizeSetting('batchAnonymizeStrength', Number(e.target.value))} disabled={isNormalizing} />
-                        <input className="tb-quality-num" type="number" min={1} max={100} value={normalizeSettings.batchAnonymizeStrength} onChange={(e) => updateNormalizeSetting('batchAnonymizeStrength', Math.min(100, Math.max(1, Number(e.target.value))))} disabled={isNormalizing} />
+                        <input className="tb-quality-slider" type="range" min={batchPixelate ? 4 : 1} max={batchPixelate ? 52 : 100} value={batchStrengthValue} onChange={(e) => updateNormalizeSetting('batchAnonymizeStrength', Math.round((batchPixelate ? pixelateStrengthForBlockSize(Number(e.target.value)) : Number(e.target.value) / 100) * 100))} disabled={isNormalizing} />
+                        <input className="tb-quality-num" type="number" min={batchPixelate ? 4 : 1} max={batchPixelate ? 52 : 100} value={batchStrengthValue} onChange={(e) => updateNormalizeSetting('batchAnonymizeStrength', Math.round((batchPixelate ? pixelateStrengthForBlockSize(Number(e.target.value)) : Math.min(100, Math.max(1, Number(e.target.value))) / 100) * 100))} disabled={isNormalizing} />
                       </div>
                     </div>
                     <p style={{ fontSize: '0.65rem', color: 'var(--text-muted)', margin: '0.25rem 0 0' }}>

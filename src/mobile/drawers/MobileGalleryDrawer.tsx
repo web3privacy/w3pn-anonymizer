@@ -28,12 +28,13 @@ interface MobileGalleryDrawerProps {
 }
 
 function mediaCounts(photos: PhotoItem[]) {
-  const videos = photos.filter((p) => p.isVideo).length
-  const audio = photos.filter((p) => p.isAudio).length
-  const docs = photos.filter((p) => p.isDocument).length
-  const images = photos.length - videos - audio - docs
+  const libraryPhotos = photos.filter((p) => !p.isVideoFrameEdit)
+  const videos = libraryPhotos.filter((p) => p.isVideo).length
+  const audio = libraryPhotos.filter((p) => p.isAudio).length
+  const docs = libraryPhotos.filter((p) => p.isDocument).length
+  const images = libraryPhotos.length - videos - audio - docs
   const kinds = [videos, audio, docs].filter((n) => n > 0).length + (images > 0 ? 1 : 0)
-  if (kinds > 1) return `${photos.length} FILES`
+  if (kinds > 1) return `${libraryPhotos.length} FILES`
   if (videos > 0) return `${videos} VIDEO${videos !== 1 ? 'S' : ''}`
   if (audio > 0) return `${audio} AUDIO`
   if (docs > 0) return `${docs} DOC${docs !== 1 ? 'S' : ''}`
@@ -93,8 +94,9 @@ export function MobileGalleryDrawer({
     onClose()
   }
 
-  const imageCount = photos.filter(isBatchProcessablePhoto).length
-  const skippedMediaCount = photos.length - imageCount
+  const libraryPhotos = photos.filter((p) => !p.isVideoFrameEdit)
+  const imageCount = libraryPhotos.filter(isBatchProcessablePhoto).length
+  const skippedMediaCount = libraryPhotos.length - imageCount
   const selectedCount = batchSelectMode
     ? photos.filter((p) => isBatchProcessablePhoto(p) && selectedForBatch.has(p.id)).length
     : 0

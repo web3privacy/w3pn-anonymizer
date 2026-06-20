@@ -8,7 +8,7 @@ import { RangeWithThumb } from '../components/RangeWithThumb'
 import { DEFAULT_CUSTOM_IMAGE_PRESET_ID } from '../lib/custom-image-presets'
 import type { DistortEffectId } from '../lib/distort-effects'
 import { EFFECT_ICONS, DEFAULT_ADJ_TRANSFORM_PARAMS } from '../lib/editor-constants'
-import { EFFECTS, getMobileStrengthLabel } from '../lib/effects'
+import { EFFECTS, getDefaultEffectStrength, getMobileStrengthLabel, mapPixelateBlockSize, pixelateStrengthForBlockSize } from '../lib/effects'
 import type { PixelShiftType } from '../lib/effects'
 import type {
   AnonymizeEffectId,
@@ -171,6 +171,15 @@ export function EditorToolStrip(props: EditorToolStripProps) {
     brushStrength,
     setBrushStrength,
   } = props
+  const strengthMin = selectedEffect === 'pixelate' ? 4 : 1
+  const strengthMax = selectedEffect === 'pixelate' ? 52 : 100
+  const strengthValue = selectedEffect === 'pixelate'
+    ? mapPixelateBlockSize(brushStrength)
+    : Math.min(100, Math.max(1, Math.round(brushStrength * 100)))
+  const updateStrength = (value: number) => setBrushStrength(
+    selectedEffect === 'pixelate' ? pixelateStrengthForBlockSize(value) : value / 100,
+  )
+  const isVideoMode = Boolean(activePhoto?.isVideo)
 
   return (
     <div className="tool-strip">
@@ -343,6 +352,7 @@ export function EditorToolStrip(props: EditorToolStripProps) {
             onReset={resetAdjTransformPreview}
             onApply={() => { void applyAdjTransformToCanvas() }}
             canApply={Boolean(activePhoto && enabledDistorts.length > 0)}
+            multiExpand
           />
         </div>,
         document.body
@@ -351,19 +361,21 @@ export function EditorToolStrip(props: EditorToolStripProps) {
       <div className="ts-sep" />
 
       {/* Crop + Adjustments — grouped together */}
-      <div className="ts-tooltip-wrap">
-        <button
-          className={`ts-btn${toolMode === 'crop' ? ' active' : ''}`}
-          type="button"
-          disabled={!activePhoto}
-          onClick={() => { setToolMode((m) => m === 'crop' ? 'brush' : 'crop'); setCropDraft(null) }}
-          title="Crop tool — draw a region and confirm in viewer"
-          aria-label="Crop tool"
-        >
-          <Icon name="crop" size={18} />
-        </button>
-        <span className="ts-tooltip">Crop</span>
-      </div>
+      {!isVideoMode && (
+        <div className="ts-tooltip-wrap">
+          <button
+            className={`ts-btn${toolMode === 'crop' ? ' active' : ''}`}
+            type="button"
+            disabled={!activePhoto}
+            onClick={() => { setToolMode((m) => m === 'crop' ? 'brush' : 'crop'); setCropDraft(null) }}
+            title="Crop tool — draw a region and confirm in viewer"
+            aria-label="Crop tool"
+          >
+            <Icon name="crop" size={18} />
+          </button>
+          <span className="ts-tooltip">Crop</span>
+        </div>
+      )}
 
       <div className="ts-tooltip-wrap">
         <button
@@ -454,6 +466,7 @@ export function EditorToolStrip(props: EditorToolStripProps) {
             orientation="vertical"
             min={4}
             max={100}
+            defaultValue={52}
             value={Math.min(brushSize, 100)}
             onChange={handleBrushSizeChange}
             ariaLabel="Brush size"
@@ -463,10 +476,13 @@ export function EditorToolStrip(props: EditorToolStripProps) {
           <span className="ts-slider-label">{getMobileStrengthLabel(selectedEffect)}</span>
           <RangeWithThumb
             orientation="vertical"
-            min={1}
-            max={100}
-            value={Math.min(100, Math.max(1, Math.round(brushStrength * 100)))}
-            onChange={(v) => setBrushStrength(v / 100)}
+            min={strengthMin}
+            max={strengthMax}
+            defaultValue={selectedEffect === 'pixelate'
+              ? mapPixelateBlockSize(getDefaultEffectStrength(selectedEffect))
+              : Math.round(getDefaultEffectStrength(selectedEffect) * 100)}
+            value={strengthValue}
+            onChange={updateStrength}
             ariaLabel="Effect strength"
           />
         </div>

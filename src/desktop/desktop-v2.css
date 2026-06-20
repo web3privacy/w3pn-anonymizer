@@ -22,6 +22,8 @@
 
 .app-shell-desktop-v2 .topbar {
   flex-shrink: 0;
+  min-height: 52px;
+  padding-block: 4px;
   background: rgba(0, 0, 0, 0.88);
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   backdrop-filter: blur(12px);
@@ -421,10 +423,19 @@
   grid-template-columns: 34px minmax(0, 1fr) 34px;
   gap: 8px;
   align-items: center;
-  padding: 0.35rem 0 0;
+  padding: 0.2rem 0 0;
   pointer-events: auto;
   z-index: 5;
-  min-height: 48px;
+  min-height: 44px;
+}
+
+.app-shell-desktop-v2--video .mobile-video-bottom-controls__action {
+  min-height: 44px;
+}
+
+.app-shell-desktop-v2--video .mobile-video-bottom-controls__mask--reserved {
+  min-height: 0;
+  height: 0;
 }
 
 .app-shell-desktop-v2--video .video-action-row .mobile-canvas-action-cluster,
@@ -461,6 +472,62 @@
   opacity: 0.45;
 }
 
+@media (min-width: 769px) {
+  .effect-picker-positioner.effect-picker-positioner--ascii {
+    width: min(460px, calc(100vw - 32px));
+  }
+
+  .effect-picker-dialog--ascii .ascii-charset-picker {
+    padding: 0.65rem 0.75rem 0.75rem;
+    gap: 0.5rem;
+  }
+
+  .effect-picker-dialog--ascii .ascii-charset-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.4rem;
+  }
+
+  .effect-picker-dialog--ascii .ascii-charset-chip {
+    min-height: 58px;
+    padding: 0.4rem 0.25rem;
+    gap: 0.2rem;
+  }
+
+  .effect-picker-dialog--ascii .ascii-charset-sample {
+    font-size: 0.88rem;
+  }
+
+  .effect-picker-dialog--ascii .ascii-charset-name {
+    font-size: 0.62rem;
+  }
+
+  .effect-picker-positioner {
+    width: min(780px, calc(100vw - 32px));
+  }
+
+  .effect-picker-dialog {
+    max-height: min(76vh, 720px);
+    overflow: visible;
+  }
+
+  .effect-picker-dialog .mobile-custom-image-picker {
+    min-height: 380px;
+  }
+
+  .effect-picker-dialog .mobile-custom-image-grid {
+    grid-template-rows: repeat(4, 72px);
+    grid-auto-columns: 72px;
+    min-height: 312px;
+    max-height: 312px;
+    gap: 8px;
+  }
+
+  .effect-picker-dialog .mobile-custom-image-thumb {
+    width: 72px;
+    height: 72px;
+  }
+}
+
 .app-shell-desktop-v2--video .mobile-canvas-secondary-btn {
   height: 40px;
   min-height: 40px;
@@ -489,7 +556,7 @@
 }
 
 .app-shell-desktop-v2--video .video-timeline-row {
-  padding-top: 0.25rem;
+  padding-top: 0.05rem;
   padding-bottom: 8px;
 }
 

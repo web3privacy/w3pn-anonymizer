@@ -3,6 +3,8 @@ import type { AsciiCharset } from '../types'
 export interface AsciiCharsetPickerProps {
   charset: AsciiCharset
   onChange: (charset: AsciiCharset) => void
+  color?: string
+  onColorChange?: (color: string) => void
   className?: string
 }
 
@@ -14,7 +16,9 @@ const OPTIONS: { id: AsciiCharset; label: string; sample: string; hint: string }
 ]
 
 /** Selects which glyph family the ASCII anonymization effect renders from. */
-export function AsciiCharsetPicker({ charset, onChange, className }: AsciiCharsetPickerProps) {
+const ASCII_COLORS = ['#ffffff', '#72ff9f', '#ffd166', '#56d8ff', '#ff70c8']
+
+export function AsciiCharsetPicker({ charset, onChange, color, onColorChange, className }: AsciiCharsetPickerProps) {
   return (
     <div className={`ascii-charset-picker${className ? ` ${className}` : ''}`}>
       <p className="ascii-charset-label">Characters</p>
@@ -34,6 +38,27 @@ export function AsciiCharsetPicker({ charset, onChange, className }: AsciiCharse
           </button>
         ))}
       </div>
+      {color && onColorChange && (
+        <div className="ascii-color-row">
+          <p className="ascii-charset-label">Text color</p>
+          <div className="ascii-color-swatches">
+            {ASCII_COLORS.map((option) => (
+              <button
+                key={option}
+                type="button"
+                className={`ascii-color-swatch${color.toLowerCase() === option ? ' active' : ''}`}
+                style={{ backgroundColor: option }}
+                onClick={() => onColorChange(option)}
+                aria-label={`Set ASCII color ${option}`}
+              />
+            ))}
+            <label className="ascii-color-custom" title="Choose custom ASCII color">
+              <input type="color" value={color} onChange={(event) => onColorChange(event.target.value)} />
+              <span>Custom</span>
+            </label>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

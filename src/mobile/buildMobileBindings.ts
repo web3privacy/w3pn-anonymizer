@@ -63,8 +63,11 @@ export interface MobileBindingsSource {
   applySnapshotToSourceVideo: AppMobileBindings['applySnapshotToSourceVideo']
   jumpToSourceVideoFromSnapshot: AppMobileBindings['jumpToSourceVideoFromSnapshot']
   sourceVideoPhoto: AppMobileBindings['sourceVideoPhoto']
+  activeFrameEditDirty: boolean
+  activeFrameSavedToVideo: boolean
   activeVideoFrameOverrides: AppMobileBindings['activeVideoFrameOverrides']
   activeVideoTimedZones: AppMobileBindings['activeVideoTimedZones']
+  activeVideoRenderSettingsKeyframes: AppMobileBindings['activeVideoRenderSettingsKeyframes']
   clearVideoTimedZones: AppMobileBindings['clearVideoTimedZones']
   activeVideoTime: number
   activeVideoFrameLabel: AppMobileBindings['activeVideoFrameLabel']

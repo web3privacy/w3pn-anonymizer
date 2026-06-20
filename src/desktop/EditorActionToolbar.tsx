@@ -25,9 +25,6 @@ interface EditorActionToolbarProps {
   previewFileSizeKb: number | null
   vectorizePanelOpen: boolean
   onToggleVectorize: () => void
-  hasSourceVideo: boolean
-  onApplyFrameToVideo: () => void
-  onOpenSourceVideo: () => void
   busy: boolean
   videoProcessing: boolean
   videoExportFormat: VideoExportFormatId
@@ -50,7 +47,7 @@ export function EditorActionToolbar(props: EditorActionToolbarProps) {
   const {
     activePhoto, photosCount, resEditW, resEditH, setResEditW, setResEditH, activeImageSize, onResize,
     exportFormat, setExportFormat, hasSvgPreview, exportPngDepth, setExportPngDepth, exportQuality, setExportQuality,
-    previewFileSizeKb, vectorizePanelOpen, onToggleVectorize, hasSourceVideo, onApplyFrameToVideo, onOpenSourceVideo,
+    previewFileSizeKb, vectorizePanelOpen, onToggleVectorize,
     busy, videoProcessing, videoExportFormat, videoExportOptions, setVideoExportFormat,
     onExportVideo, onExportSvg, onExportPhoto,
     audioExportFormats, audioExportFormatId, onExportAudio, audioExporting,
@@ -66,6 +63,21 @@ export function EditorActionToolbar(props: EditorActionToolbarProps) {
     if (audioMenuPos) { setAudioMenuPos(null); return }
     const r = audioBtnRef.current?.getBoundingClientRect()
     if (r) setAudioMenuPos({ top: r.bottom + 6, right: Math.max(8, window.innerWidth - r.right) })
+  }
+  const baseW = activeImageSize?.width ?? 0
+  const baseH = activeImageSize?.height ?? 0
+  const displayW = resEditW > 0 ? resEditW : baseW
+  const displayH = resEditH > 0 ? resEditH : baseH
+  const aspect = baseW > 0 && baseH > 0 ? baseW / baseH : 1
+  const setWidthKeepingAspect = (value: number) => {
+    const nextW = Number.isFinite(value) ? Math.max(1, Math.round(value)) : baseW
+    setResEditW(nextW)
+    if (aspect > 0) setResEditH(Math.max(1, Math.round(nextW / aspect)))
+  }
+  const setHeightKeepingAspect = (value: number) => {
+    const nextH = Number.isFinite(value) ? Math.max(1, Math.round(value)) : baseH
+    setResEditH(nextH)
+    if (aspect > 0) setResEditW(Math.max(1, Math.round(nextH * aspect)))
   }
 
   return (
@@ -150,27 +162,27 @@ export function EditorActionToolbar(props: EditorActionToolbarProps) {
           {/* Accent outline only when value differs from actual image size */}
           <div className="tb-res-edit">
             <input
-              className={`tb-res-input${resEditW > 0 && resEditW !== (activeImageSize?.width ?? 0) ? ' tb-res-input--dirty' : ''}`}
+              className={`tb-res-input${resEditW > 0 && resEditW !== baseW ? ' tb-res-input--dirty' : ''}`}
               type="number"
-              value={resEditW > 0 ? resEditW : (activeImageSize?.width ?? 0)}
+              value={displayW}
               min={1}
               max={25000}
-              title="Width — press Enter or Tab to resize"
-              onChange={(e) => setResEditW(Number(e.target.value))}
-              onFocus={() => { setResEditW(activeImageSize?.width ?? 0); setResEditH(activeImageSize?.height ?? 0) }}
+              title="Width — height follows the original aspect ratio"
+              onChange={(e) => setWidthKeepingAspect(Number(e.target.value))}
+              onFocus={() => { setResEditW(displayW); setResEditH(displayH) }}
               onBlur={() => { if (resEditW > 0 && resEditH > 0) onResize() }}
               onKeyDown={(e) => { if (e.key === 'Enter') onResize() }}
             />
             <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>×</span>
             <input
-              className={`tb-res-input${resEditH > 0 && resEditH !== (activeImageSize?.height ?? 0) ? ' tb-res-input--dirty' : ''}`}
+              className={`tb-res-input${resEditH > 0 && resEditH !== baseH ? ' tb-res-input--dirty' : ''}`}
               type="number"
-              value={resEditH > 0 ? resEditH : (activeImageSize?.height ?? 0)}
+              value={displayH}
               min={1}
               max={25000}
-              title="Height — press Enter or Tab to resize"
-              onChange={(e) => setResEditH(Number(e.target.value))}
-              onFocus={() => { setResEditW(activeImageSize?.width ?? 0); setResEditH(activeImageSize?.height ?? 0) }}
+              title="Height — width follows the original aspect ratio"
+              onChange={(e) => setHeightKeepingAspect(Number(e.target.value))}
+              onFocus={() => { setResEditW(displayW); setResEditH(displayH) }}
               onBlur={() => { if (resEditW > 0 && resEditH > 0) onResize() }}
               onKeyDown={(e) => { if (e.key === 'Enter') onResize() }}
             />
@@ -264,33 +276,10 @@ export function EditorActionToolbar(props: EditorActionToolbarProps) {
               type="button"
               onClick={onToggleVectorize}
               title="Vectorize image to SVG"
-              style={{ fontSize: '0.62rem' }}
+              style={{ fontSize: '0.74rem' }}
             >
               <Icon name="polyline" size={13} /> Vectorize
             </button>
-          )}
-
-          {!activePhoto.isVideo && hasSourceVideo && (
-            <>
-              <button
-                className="tb-btn"
-                type="button"
-                onClick={onApplyFrameToVideo}
-                disabled={busy}
-                title="Attach the current edited frame back to its source video for the next video render"
-              >
-                <Icon name="movie_edit" size={13} /> Apply Frame To Video
-              </button>
-              <button
-                className="tb-btn"
-                type="button"
-                onClick={onOpenSourceVideo}
-                disabled={busy}
-                title="Jump back to the source video for this frame snapshot"
-              >
-                <Icon name="videocam" size={13} /> Open Source Video
-              </button>
-            </>
           )}
 
           {/* Download — anonymized file (local, no server / disk write) */}

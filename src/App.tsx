@@ -100,10 +100,11 @@ import {
   DEFAULT_DISTORT_STRENGTHS,
   type DistortEffectId,
 } from './lib/distort-effects'
-import { applyColorAdjustments, applyEffectRect, applyGlitchEffect, isColorAdjNoop, pickEmojiFromSeed, pickRandomEmoji, pickUniqueEmojis, setAsciiCharsetDefault } from './lib/effects'
+import { applyColorAdjustments, applyEffectRect, applyGlitchEffect, colorAdjExportKey, getDefaultEffectStrength, isColorAdjNoop, pickEmojiFromSeed, pickRandomEmoji, pickUniqueEmojis, setAsciiCharsetDefault, setAsciiColorDefault } from './lib/effects'
 import { selectBaseDrawSource, shouldShowZoneOverlays, viewerBackgroundColor } from './lib/canvas-render'
 import {
   DEFAULT_ADJ_TRANSFORM_PARAMS,
+  DEMO_MEDIA,
   DEFAULT_NORMALIZE_SETTINGS,
   EMPTY_VIDEO_DISTORT_SETTINGS,
   type VideoDistortSettingsSnapshot,
@@ -115,6 +116,7 @@ import {
   getCropRectNormalized,
   suggestContentAwareCropFromBlob,
 } from './lib/normalize'
+import { mimeTypeToVideoExtension, resolveVideoExportSize, type VideoExportSize } from './lib/video'
 import type {
   AnonymizeEffectId,
   AsciiCharset,
@@ -165,7 +167,16 @@ function App() {
     setAsciiCharsetDefault(charset)
     setAsciiCharsetState(charset)
   }, [])
+  const [asciiColor, setAsciiColorState] = useState('#72ff9f')
+  const setAsciiColor = useCallback((color: string) => {
+    setAsciiColorDefault(color)
+    setAsciiColorState(color)
+  }, [])
   const [customImageAssets, setCustomImageAssets] = useState<CustomImageAsset[]>([])
+  const customImageAssetsSignature = useMemo(
+    () => customImageAssets.map((asset) => asset.id).join('|'),
+    [customImageAssets],
+  )
   const [customImagePresetLoading, setCustomImagePresetLoading] = useState(false)
   const customImageAssetsRef = useRef<CustomImageAsset[]>([])
   // Emoji / custom-image picker dialog + chosen-vs-random selection.
@@ -194,7 +205,7 @@ function App() {
       : pickCustomImageAssetId(customImageAssetsRef.current, seed)
   ), [])
   const [brushSize, setBrushSize] = useState(52)
-  const [brushStrength, setBrushStrength] = useState(0.48)
+  const [brushStrength, setBrushStrength] = useState(() => getDefaultEffectStrength('pixelate'))
   const brushStrengthRef = useRef(brushStrength)
   brushStrengthRef.current = brushStrength
   // Tracks whether the anonymization effect is currently baked onto the work
@@ -232,7 +243,7 @@ function App() {
     setModelStatus((prev) => ({ ...prev, 'yunet-face': yunetStatus }))
   }, [detector.mode, detectorLoading, setModelStatus])
 
-  const [detectSensitivity, setDetectSensitivity] = useState(10) // 0..100 — small default headroom catches a few more faces
+  const [detectSensitivity, setDetectSensitivity] = useState(25) // 0..100 — default face sensitivity
   const [videoAudioPanelOpen, setVideoAudioPanelOpen] = useState(false) // collapsible audio tools in the video editor
   // How far the anonymization box is grown around the detected face. The slider
   // reads 0–100 % but maps to a 0…0.5 padding fraction (see faceOffsetPads), so
@@ -252,6 +263,7 @@ function App() {
   // resEditOpen removed — inputs are always visible now
   const [resEditW, setResEditW] = useState(0)
   const [resEditH, setResEditH] = useState(0)
+  const [videoExportSizeByPhoto, setVideoExportSizeByPhoto] = useState<Record<string, VideoExportSize>>({})
   const [mobileExportDraft, setMobileExportDraft] = useState<{
     width: number
     height: number
@@ -497,6 +509,20 @@ function App() {
     () => activePhoto?.derivedFromVideoId ? (photos.find((p) => p.id === activePhoto.derivedFromVideoId) ?? null) : null,
     [activePhoto, photos],
   )
+  const activeVideoSourceSize = useMemo<VideoExportSize | null>(() => {
+    if (!activePhoto?.isVideo || !activePhoto.videoWidth || !activePhoto.videoHeight) return null
+    return resolveVideoExportSize(activePhoto.videoWidth, activePhoto.videoHeight)
+  }, [activePhoto?.isVideo, activePhoto?.videoWidth, activePhoto?.videoHeight])
+  const activeVideoExportSize = activePhoto?.isVideo
+    ? (videoExportSizeByPhoto[activePhoto.id] ?? activeVideoSourceSize)
+    : null
+  const activeActionMediaSize = activePhoto?.isVideo ? activeVideoExportSize : activeImageSize
+  const activeFrameEditDirty = activePhotoId ? Boolean(dirtyByPhoto[activePhotoId] || zonesAnonymized) : false
+
+  useEffect(() => {
+    setResEditW(0)
+    setResEditH(0)
+  }, [activePhotoId])
 
   // Stable blob URL for video playback — avoids leak from inline createObjectURL in render
   const activeVideoUrl = useMemo(() => {
@@ -517,11 +543,12 @@ function App() {
   // When a subfolder is selected in the desktop folder tree, scope the visible
   // library to just that folder's contents (recursively). Root-level files and
   // an empty prefix show everything.
+  const libraryPhotos = useMemo(() => photos.filter((p) => !p.isVideoFrameEdit), [photos])
   const folderFilteredPhotos = useMemo(() => {
-    if (!currentFolderPrefix) return photos
+    if (!currentFolderPrefix) return libraryPhotos
     const prefix = currentFolderPrefix + '/'
-    return photos.filter((p) => p.name.startsWith(prefix))
-  }, [photos, currentFolderPrefix])
+    return libraryPhotos.filter((p) => p.name.startsWith(prefix))
+  }, [libraryPhotos, currentFolderPrefix])
   const displayedPhotos = useMemo(
     () => folderFilteredPhotos.slice(0, photoListLimit),
     [photoListLimit, folderFilteredPhotos],
@@ -593,10 +620,19 @@ function App() {
     setPhotos((cur) => cur.map((p) => (p.id === id ? { ...p, trackMode: mode } : p)))
     // Keep the export's audio handling in sync with the chosen tracks.
     if (mode === 'video') setAudioSettings((s) => ({ ...s, mode: 'remove_audio' }))
-    // Both / Audio-only must leave the removed state so the audio is editable
-    // again (audio-only switches to the full audio editor for the track).
-    else setAudioSettings((s) => (s.mode === 'remove_audio' ? { ...s, mode: 'keep_original' } : s))
+    // Both / Audio-only keep the track; default to distortion because the
+    // dropdown already handles removing audio by switching to Video only.
+    else setAudioSettings((s) => (s.mode === 'distort_voice' ? s : { ...s, mode: 'distort_voice' }))
   }, [activePhotoId, setPhotos, setAudioSettings])
+
+  useEffect(() => {
+    if (!activePhoto?.isVideo) return
+    const mode = activePhoto.trackMode ?? 'both'
+    setAudioSettings((settings) => {
+      if (mode === 'video') return settings.mode === 'remove_audio' ? settings : { ...settings, mode: 'remove_audio' }
+      return settings.mode === 'distort_voice' ? settings : { ...settings, mode: 'distort_voice' }
+    })
+  }, [activePhoto?.id])
 
   const setActiveZones = useCallback((updater: (zones: Zone[]) => Zone[]) => {
     if (!activePhotoId) return
@@ -627,7 +663,8 @@ function App() {
     zoneId: zone?.id,
     seed: seed ?? zone?.id ?? activePhotoId ?? 'custom-image',
     asciiCharset,
-  }), [activePhotoId, customImageAssets, customImageSource, asciiCharset])
+    asciiColor,
+  }), [activePhotoId, customImageAssets, customImageSource, asciiCharset, asciiColor])
 
   const resolveBrushStamp = useCallback((pointer: PointerMap): BrushStamp => {
     const photoId = activePhotoIdRef.current ?? 'photo'
@@ -641,7 +678,7 @@ function App() {
     return { seed, emoji, customImageAssetId }
   }, [resolveCustomImageAssetId])
 
-  const createCustomImageAssets = useCallback(async (files: File[] | Blob[], names?: string[]) => {
+  const createCustomImageAssets = useCallback(async (files: File[] | Blob[], names?: string[], replace = false) => {
     const accepted = files.filter((file) => file.type.startsWith('image/'))
     if (accepted.length === 0) {
       setNotice('No usable images selected.')
@@ -667,7 +704,14 @@ function App() {
     }))
     const ready = assets.filter(Boolean) as CustomImageAsset[]
     if (ready.length > 0) {
-      setCustomImageAssets((cur) => [...cur, ...ready])
+      setCustomImageAssets((cur) => {
+        if (!replace) return [...cur, ...ready]
+        cur.forEach((asset) => {
+          URL.revokeObjectURL(asset.objectUrl)
+          try { asset.imageBitmap?.close() } catch { /* ignore */ }
+        })
+        return ready
+      })
       setNotice(`Loaded ${ready.length} custom image${ready.length === 1 ? '' : 's'}.`)
     }
     return ready
@@ -689,6 +733,7 @@ function App() {
   const loadCustomImagePreset = useCallback(async (source: CustomImageSource) => {
     setCustomImageSource(source)
     if (source === 'custom') {
+      customImageAssetsRef.current = []
       setCustomImageAssets((cur) => {
         cur.forEach((a) => {
           URL.revokeObjectURL(a.objectUrl)
@@ -720,8 +765,19 @@ function App() {
         const blob = await res.blob()
         return new File([blob], file, { type: blob.type || 'image/png' })
       }))
-      const ready = await createCustomImageAssets(fetched)
+      const ready = await createCustomImageAssets(fetched, undefined, true)
       if (ready.length === 0) throw new Error('No preset images loaded.')
+      customImageAssetsRef.current = ready
+      const fixedAssetId = customImageRandomRef.current ? null : ready[0].id
+      if (fixedAssetId) {
+        setSelectedCustomImageId(fixedAssetId)
+        selectedCustomImageIdRef.current = fixedAssetId
+      }
+      updateActiveZoneFields((zones) => zones.map((zone) => (
+        zone.effect === 'custom-image'
+          ? { ...zone, customImageAssetId: fixedAssetId ?? pickCustomImageAssetId(ready, zone.id) }
+          : zone
+      )))
       setCustomImageSource(source)
     } catch (err) {
       console.warn('Custom image preset failed:', err)
@@ -729,7 +785,7 @@ function App() {
     } finally {
       setCustomImagePresetLoading(false)
     }
-  }, [createCustomImageAssets])
+  }, [createCustomImageAssets, updateActiveZoneFields])
 
   // ── Emoji / custom-image picker dialog handlers ──────────────────
   const handleToggleEmojiRandom = useCallback((random: boolean) => {
@@ -1045,6 +1101,7 @@ function App() {
     customImageRandomRef,
     selectedCustomImageIdRef,
     customImageAssetsRef,
+    customImageAssetsSignature,
     customImageSource,
     colorAdj,
     getActiveDistorts,
@@ -1060,6 +1117,7 @@ function App() {
     autoDetect,
     detector,
     audioSettings,
+    videoExportSize: activePhoto?.isVideo ? activeVideoExportSize : null,
     resolveEmoji,
     resolveCustomImageAssetId,
     customEffectOptions,
@@ -1078,6 +1136,7 @@ function App() {
     videoPipelineCapabilities,
     videoExportFormat,
     setVideoExportFormat,
+    videoFrameOverridesByPhoto,
     setVideoFrameOverridesByPhoto,
     setVideoTimedZonesByPhoto,
     videoMaskDrawActive,
@@ -1106,12 +1165,17 @@ function App() {
     setVideoReadyTick,
     activeVideoTimedZones,
     activeVideoFrameOverrides,
+    activeVideoRenderSettingsKeyframes,
     visibleVideoTimedZones,
     hasPendingVideoEdits,
     videoDismissedAtFrame,
     handleVideoMaskPointerDown,
     handleVideoMaskPointerMove,
     handleVideoMaskPointerUp,
+    handleVideoTimedZonePointerDown,
+    handleVideoTimedZonePointerMove,
+    handleVideoTimedZonePointerUp,
+    removeVideoTimedZoneFromCurrentFrame,
     clearVideoTimedZones,
     processActiveVideo,
     cancelVideoProcessing,
@@ -1129,6 +1193,18 @@ function App() {
     restoreVideoPreviewFaceZone,
     clearVideoDistortPreview,
   } = video
+
+  const activeFrameSavedToVideo = useMemo(() => {
+    if (!activePhoto?.isVideoFrameEdit || !activePhoto.derivedFromVideoId || activePhoto.derivedFromVideoTime == null) return false
+    const overrides = videoFrameOverridesByPhoto[activePhoto.derivedFromVideoId] ?? []
+    const tolerance = 1 / 30
+    return overrides.some((item) => Math.abs(item.timeSec - activePhoto.derivedFromVideoTime!) <= tolerance)
+  }, [
+    activePhoto?.derivedFromVideoId,
+    activePhoto?.derivedFromVideoTime,
+    activePhoto?.isVideoFrameEdit,
+    videoFrameOverridesByPhoto,
+  ])
 
   const { undoCount, pushUndo, undo, resetUndo } = useUndoStack({
     workCanvasRef,
@@ -1655,28 +1731,49 @@ function App() {
       setActiveDirty(false)
       const msg = 'Frame saved to source video.'
       setNotice(msg)
-      if (isMobile && activePhoto.derivedFromVideoId) {
-        const sourceId = activePhoto.derivedFromVideoId
-        void selectPhoto(sourceId)
-        setMobileMode('video')
-        setMobileToast({ message: msg })
-      }
+      if (isMobile) setMobileToast({ message: msg })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       setNotice(`Could not attach snapshot to source video: ${msg}`)
     } finally {
       setIsBusy(false)
     }
-  }, [activePhoto, isMobile, selectPhoto, setMobileMode])
+  }, [activePhoto, isMobile])
 
   const jumpToSourceVideoFromSnapshot = useCallback(() => {
     if (!sourceVideoPhoto) return
     const frameTime = activePhoto?.derivedFromVideoTime
+    const frameEditId = activePhoto?.isVideoFrameEdit ? activePhoto.id : null
     if (frameTime != null) pendingVideoSeekRef.current = frameTime
     void selectPhoto(sourceVideoPhoto.id)
+    if (frameEditId) {
+      setPhotos((cur) => {
+        const p = cur.find((item) => item.id === frameEditId)
+        if (p) window.setTimeout(() => URL.revokeObjectURL(p.previewUrl), 0)
+        return cur.filter((item) => item.id !== frameEditId)
+      })
+      setOriginalBlobByPhoto((cur) => { const next = { ...cur }; delete next[frameEditId]; return next })
+      setZonesByPhoto((cur) => { const next = { ...cur }; delete next[frameEditId]; return next })
+      setDirtyByPhoto((cur) => { const next = { ...cur }; delete next[frameEditId]; return next })
+      setColorAdjByPhoto((cur) => { const next = { ...cur }; delete next[frameEditId]; return next })
+      setAppliedByPhoto((cur) => { const next = { ...cur }; delete next[frameEditId]; return next })
+    }
     if (isMobile) setMobileMode('video')
     setNotice(`Returned to source video: ${sourceVideoPhoto.name.split('/').pop()}`)
-  }, [activePhoto?.derivedFromVideoTime, isMobile, selectPhoto, setMobileMode, sourceVideoPhoto])
+  }, [
+    activePhoto?.derivedFromVideoTime,
+    activePhoto?.id,
+    activePhoto?.isVideoFrameEdit,
+    isMobile,
+    selectPhoto,
+    setAppliedByPhoto,
+    setColorAdjByPhoto,
+    setMobileMode,
+    setOriginalBlobByPhoto,
+    setPhotos,
+    setZonesByPhoto,
+    sourceVideoPhoto,
+  ])
 
 
   // Vectorize panel (SVG live preview + export) — see useVectorize
@@ -1717,14 +1814,40 @@ function App() {
   ])
 
   const handleResetPhotoToOriginal = useCallback(async () => {
+    const resetVideoId = activePhoto?.isVideo ? activePhoto.id : null
     clearVectorizePreview()
     setVectorizePanelOpen(false)
     await resetPhotoToOriginal()
-  }, [clearVectorizePreview, resetPhotoToOriginal, setVectorizePanelOpen])
+    if (resetVideoId) {
+      setVideoExportSizeByPhoto((cur) => {
+        const next = { ...cur }
+        delete next[resetVideoId]
+        return next
+      })
+      setResEditW(0)
+      setResEditH(0)
+    }
+  }, [activePhoto, clearVectorizePreview, resetPhotoToOriginal, setVectorizePanelOpen])
+
+  const downloadActiveVideo = useCallback(async () => {
+    if (!activePhoto?.isVideo) return
+    const selectedFormat = videoExportOptions.find((opt) => opt.id === videoExportFormat)
+    const selectedExt = selectedFormat?.ext ?? videoExportFormat
+    const currentMime = activePhoto.mimeType || activePhoto.blob.type
+    const fileExt = activePhoto.name.split('.').pop()?.toLowerCase() ?? ''
+    const currentExt = currentMime ? mimeTypeToVideoExtension(currentMime) : fileExt
+    const needsProcessing = hasPendingVideoEdits || currentExt !== selectedExt
+    const blob = needsProcessing ? await processActiveVideo() : activePhoto.blob
+    if (!blob) return
+    const baseName = activePhoto.name.split('/').pop() ?? activePhoto.name
+    const outName = baseName.replace(/\.[^.]+$/, '') + `-anon.${selectedExt}`
+    saveAs(blob, outName)
+    setNotice(`Exported: ${outName}`)
+  }, [activePhoto, hasPendingVideoEdits, processActiveVideo, setNotice, videoExportFormat, videoExportOptions])
 
   const exportZip = useCallback(async () => {
     if (photos.length === 0) return
-    const images = photos.filter((p) => !p.isVideo)
+    const images = photos.filter((p) => !p.isVideo && !p.isVideoFrameEdit)
     const skippedVideos = photos.length - images.length
     if (images.length === 0) {
       setNotice('No photos to export. Use video export for videos.')
@@ -1861,7 +1984,10 @@ function App() {
       return
     }
     const saved = activePhotoId ? colorAdjByPhoto[activePhotoId] : undefined
-    setColorAdj(saved ? { ...saved } : DEFAULT_COLOR_ADJUSTMENTS)
+    const next = saved ?? DEFAULT_COLOR_ADJUSTMENTS
+    setColorAdj((current) => (
+      colorAdjExportKey(current) === colorAdjExportKey(next) ? current : { ...next }
+    ))
   }, [activePhotoId, adjFlyoutOpen, colorAdjByPhoto])
 
   const applyAdjTransformToCanvas = useCallback(async () => {
@@ -1927,7 +2053,7 @@ function App() {
 
   const computePreviewFileSize = useCallback(() => {
     const wc = workCanvasRef.current
-    if (!wc || wc.width === 0 || !activePhoto) {
+    if (!wc || wc.width === 0 || !activePhoto || activePhoto.isVideo || activePhoto.isAudio || activePhoto.isDocument) {
       setPreviewFileSizeKb(null); setPreviewRendering(false)
       if (qualityPreviewCanvasRef.current) { qualityPreviewCanvasRef.current.width = 0 }
       return
@@ -2156,10 +2282,11 @@ function App() {
 
   useEffect(() => {
     if (!activePhotoId || !activePhoto?.isVideo) return
-    setColorAdjByPhoto((cur) => ({
-      ...cur,
-      [activePhotoId]: { ...colorAdj },
-    }))
+    setColorAdjByPhoto((cur) => {
+      const saved = cur[activePhotoId]
+      if (saved && colorAdjExportKey(saved) === colorAdjExportKey(colorAdj)) return cur
+      return { ...cur, [activePhotoId]: { ...colorAdj } }
+    })
   }, [activePhoto?.isVideo, activePhotoId, colorAdj])
 
   const loadedVideoDistortPhotoRef = useRef<string | null>(null)
@@ -2177,6 +2304,12 @@ function App() {
   // Recompute preview file size debounced whenever quality/format/depth/photo changes
   useEffect(() => {
     if (qualityDebounceRef.current) clearTimeout(qualityDebounceRef.current)
+    if (!activePhoto || activePhoto.isVideo || activePhoto.isAudio || activePhoto.isDocument) {
+      setPreviewFileSizeKb(null)
+      setPreviewRendering(false)
+      if (qualityPreviewCanvasRef.current) qualityPreviewCanvasRef.current.width = 0
+      return
+    }
     setPreviewRendering(true)
     const delay = mobileExportDraft ? 60 : 300
     qualityDebounceRef.current = setTimeout(() => { computePreviewFileSize() }, delay)
@@ -2274,6 +2407,25 @@ function App() {
     finally { setIsBusy(false) }
   }, [activePhoto, getWorkCtx, renderCanvas, resEditH, resEditW, setActiveDirty])
 
+  const resizeActiveMedia = useCallback(async () => {
+    if (activePhoto?.isVideo) {
+      if (!activeVideoSourceSize) {
+        setNotice('Video dimensions are still loading.')
+        return
+      }
+      const next = resolveVideoExportSize(activeVideoSourceSize.width, activeVideoSourceSize.height, {
+        width: resEditW,
+        height: resEditH,
+      })
+      setVideoExportSizeByPhoto((cur) => ({ ...cur, [activePhoto.id]: next }))
+      setResEditW(next.width)
+      setResEditH(next.height)
+      setNotice(`Video export size set to ${next.width} × ${next.height}. Run Anonymize to bake it into the video.`)
+      return
+    }
+    await resizeWorkCanvas()
+  }, [activePhoto, activeVideoSourceSize, resEditH, resEditW, resizeWorkCanvas, setNotice])
+
   // Sidebar resize handlers
   const handleResizerPointerDown = useCallback((e: React.PointerEvent) => {
     e.preventDefault()
@@ -2367,14 +2519,14 @@ function App() {
     selectedEffectRef.current = effect
     setSelectedEffectState(effect)
     setEffectPickerOpen((open) => (open == null ? open : effectPickerKindForEffect(effect)))
-    if (effect === 'custom-image') setBrushStrength(1)
+    setBrushStrength(getDefaultEffectStrength(effect))
   }, [])
 
   const updateSelectedZoneEffect = useCallback((effect: AnonymizeEffectId) => {
     selectedEffectRef.current = effect
     setSelectedEffectState(effect)
     setEffectPickerOpen((open) => (open == null ? open : effectPickerKindForEffect(effect)))
-    if (effect === 'custom-image') setBrushStrength(1)
+    setBrushStrength(getDefaultEffectStrength(effect))
     setEraserActive(false)
     setEffectFlyoutOpen(false)
     setToolMode(lastZoneTool === 'rectangle' ? 'zone' : 'brush')
@@ -2479,7 +2631,6 @@ function App() {
     ).join('|'),
     [activeZones],
   )
-
   // Re-bake zone effects when face-offset / strength / zone geometry changes,
   // but only while a preview is actually baked on the canvas.
   const zonePreviewDebounceRef = useRef<ReturnType<typeof setTimeout>>()
@@ -2496,7 +2647,7 @@ function App() {
     }, isMobile && mobilePanel === 'tool-effects' ? 0 : isMobile ? 120 : 90)
     return () => { if (zonePreviewDebounceRef.current) clearTimeout(zonePreviewDebounceRef.current) }
    
-  }, [brushStrength, detectFaceOffset, zoneBakeSignature, activePhoto?.id, zonesAnonymized, isMobile, mobilePanel, asciiCharset, batchPanelOpen])
+  }, [brushStrength, detectFaceOffset, zoneBakeSignature, activePhoto?.id, zonesAnonymized, isMobile, mobilePanel, asciiCharset, asciiColor, customImageSource, customImageAssetsSignature, batchPanelOpen])
 
   // Sync brushSizeRef when slider changes
   useEffect(() => { brushSizeRef.current = brushSize }, [brushSize])
@@ -2509,6 +2660,12 @@ function App() {
     setBrushSize(v)
   }, [])
   useEffect(() => { toolModeRef.current = toolMode }, [toolMode])
+  useEffect(() => {
+    if (activePhoto?.isVideo && toolMode === 'crop') {
+      setToolMode('zone')
+      setCropDraft(null)
+    }
+  }, [activePhoto?.isVideo, toolMode])
 
   // Sync photosRef for cleanup
   useEffect(() => { photosRef.current = photos }, [photos])
@@ -2524,6 +2681,14 @@ function App() {
   // cmd/ctrl+S — save active photo; Delete/Backspace — remove selected zone
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null
+      const tag = target?.tagName
+      const isEditableTarget = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || Boolean(target?.isContentEditable)
+      if (e.key === ' ' && activePhoto?.isVideo && !isEditableTarget && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        e.preventDefault()
+        toggleVideoPlayback()
+        return
+      }
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 's') {
         e.preventDefault()
         saveAllPhotos()
@@ -2541,8 +2706,7 @@ function App() {
       }
       if ((e.key === 'Delete' || e.key === 'Backspace') && selectedZoneId) {
         // Only if not focused on an input
-        const tag = (e.target as HTMLElement).tagName
-        if (tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT') {
+        if (!isEditableTarget) {
           removeSelectedZone()
         }
       }
@@ -2558,7 +2722,7 @@ function App() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [clearZones, exportZip, removeSelectedZone, saveActivePhoto, saveAllPhotos, selectedZoneId, undo])
+  }, [activePhoto?.isVideo, clearZones, exportZip, removeSelectedZone, saveActivePhoto, saveAllPhotos, selectedZoneId, toggleVideoPlayback, undo])
 
   // Prevent browser zoom (ctrl/cmd+wheel or pinch) so brush-size wheel doesn't zoom the page
   useEffect(() => {
@@ -2732,7 +2896,7 @@ function App() {
   // Folder tree derived from photo names
   const folderTree = useMemo(() => {
     const folders = new Map<string, string[]>()
-    photos.forEach((p) => {
+    libraryPhotos.forEach((p) => {
       const parts = p.name.split('/')
       if (parts.length > 1) {
         const folder = parts.slice(0, -1).join('/')
@@ -2742,7 +2906,7 @@ function App() {
       }
     })
     return folders
-  }, [photos])
+  }, [libraryPhotos])
 
   const toggleBatchTask = (taskId: BatchTaskId) => {
     setNormalizeResults({})
@@ -3021,7 +3185,7 @@ function App() {
   }, [])
 
   const stepAdjacentLibraryPhoto = useCallback((dir: -1 | 1) => {
-    const library = photos.filter((p) => !p.isVideo)
+    const library = photos.filter((p) => !p.isVideo && !p.isVideoFrameEdit)
     const idx = library.findIndex((p) => p.id === activePhotoId)
     if (idx < 0) return
     const next = library[idx + dir]
@@ -3171,8 +3335,11 @@ function App() {
     applySnapshotToSourceVideo,
     jumpToSourceVideoFromSnapshot,
     sourceVideoPhoto,
+    activeFrameEditDirty,
+    activeFrameSavedToVideo,
     activeVideoFrameOverrides,
     activeVideoTimedZones,
+    activeVideoRenderSettingsKeyframes,
     clearVideoTimedZones,
     activeVideoTime,
     activeVideoFrameLabel,
@@ -3346,7 +3513,7 @@ function App() {
     mobileMode, mobilePanel, mobilePanelReturnTo, mobileEditorReturnTo, galleryBatchSelect,
     videoProcessing, videoProgress, videoExportFormat, videoExportOptions,
     videoMaskDrawActive, videoMaskShape, imageMaskDrawActive, videoMaskRangeSec,
-    sourceVideoPhoto, activeVideoFrameOverrides, activeVideoTimedZones, activeVideoTime,
+    sourceVideoPhoto, activeFrameEditDirty, activeFrameSavedToVideo, activeVideoFrameOverrides, activeVideoTimedZones, activeVideoRenderSettingsKeyframes, activeVideoTime,
     activeVideoFrameLabel, hasPendingVideoEdits, videoPipelineCapabilities,
     exportFormat, exportQuality, previewFileSizeKb, previewRendering, activeImageSize,
     resEditW, resEditH, mobileExportDraft, vectorizePanelOpen, vectorizeParams, vectorizing,
@@ -3551,12 +3718,12 @@ function App() {
             own minimal header (W3PN logo + "WHAT IS THIS?"). ──────────────── */}
       {!isMobile && photos.length > 0 && (
         <DesktopTopBar
-          theme={theme}
           busy={isBusy}
           onAbout={() => setAboutOpen(true)}
           onLoadDemo={loadDemoPhotos}
+          showDemo={!photos.some((photo) => DEMO_MEDIA.some((url) => url.endsWith(`/${photo.name}`)))}
           onLiveCamera={() => setDesktopLiveOpen(true)}
-          onToggleTheme={() => setTheme((t) => t === 'dark' ? 'light' : 'dark')}
+          onFeedback={() => setFeedbackOpen(true)}
         />
       )}
 
@@ -3805,8 +3972,8 @@ function App() {
             resEditH={resEditH}
             setResEditW={setResEditW}
             setResEditH={setResEditH}
-            activeImageSize={activeImageSize}
-            onResize={resizeWorkCanvas}
+            activeImageSize={activeActionMediaSize}
+            onResize={resizeActiveMedia}
             exportFormat={exportFormat}
             setExportFormat={setExportFormat}
             hasSvgPreview={!!svgPreview}
@@ -3817,15 +3984,12 @@ function App() {
             previewFileSizeKb={previewFileSizeKb}
             vectorizePanelOpen={vectorizePanelOpen}
             onToggleVectorize={() => setVectorizePanelOpen((v) => !v)}
-            hasSourceVideo={!!sourceVideoPhoto}
-            onApplyFrameToVideo={applySnapshotToSourceVideo}
-            onOpenSourceVideo={jumpToSourceVideoFromSnapshot}
             busy={isBusy}
             videoProcessing={videoProcessing}
             videoExportFormat={videoExportFormat}
             videoExportOptions={videoExportOptions}
             setVideoExportFormat={setVideoExportFormat}
-            onExportVideo={exportActiveVideo}
+            onExportVideo={() => { void downloadActiveVideo() }}
             onExportSvg={exportAsSvg}
             onExportPhoto={exportActivePhoto}
             audioExportFormats={audioExportFormats}
@@ -3837,31 +4001,38 @@ function App() {
           )}
 
           {activePhoto?.isVideo && (
-            <div className="video-audio-panel">
-              <VideoTrackModeSelect mode={videoTrackMode} onChange={setVideoTrackMode} />
-              {videoTrackMode === 'both' && (
-                <>
-                  <button
-                    type="button"
-                    className={`video-audio-toggle${videoAudioPanelOpen ? ' open' : ''}`}
-                    onClick={() => setVideoAudioPanelOpen((o) => !o)}
-                    aria-expanded={videoAudioPanelOpen}
-                  >
-                    <span>{videoAudioPanelOpen ? 'Hide audio tools' : 'Audio tools'}</span>
-                    <span className="video-audio-toggle-chevron" aria-hidden="true">
-                      {videoAudioPanelOpen ? '×' : '▾'}
-                    </span>
-                  </button>
-                  {videoAudioPanelOpen && (
-                    <AudioModeViewer
-                      activePhoto={activePhoto}
-                      settings={audioSettings}
-                      onChangeSettings={setAudioSettings}
-                      originalBlob={originalBlobByPhoto[activePhoto.id]}
-                      isVideo
-                    />
-                  )}
-                </>
+            <div className={`video-audio-panel${videoTrackMode === 'video' ? ' video-audio-panel--trackless' : ''}`}>
+              <div className="video-audio-row">
+                <button
+                  type="button"
+                  className={`video-audio-toggle${videoAudioPanelOpen ? ' open' : ''}`}
+                  onClick={() => {
+                    if (videoTrackMode !== 'both') return
+                    setVideoAudioPanelOpen((o) => !o)
+                  }}
+                  disabled={videoTrackMode === 'video'}
+                  aria-expanded={videoTrackMode === 'both' && videoAudioPanelOpen}
+                >
+                  <span className="video-audio-toggle-chevron" aria-hidden="true">{videoAudioPanelOpen ? '▴' : '▾'}</span>
+                  <span>Audio tools</span>
+                </button>
+                <VideoTrackModeSelect
+                  mode={videoTrackMode}
+                  onChange={(mode) => {
+                    setVideoTrackMode(mode)
+                    if (mode !== 'both') setVideoAudioPanelOpen(false)
+                  }}
+                  showLabel={false}
+                />
+              </div>
+              {videoTrackMode === 'both' && videoAudioPanelOpen && (
+                <AudioModeViewer
+                  activePhoto={activePhoto}
+                  settings={audioSettings}
+                  onChangeSettings={setAudioSettings}
+                  originalBlob={originalBlobByPhoto[activePhoto.id]}
+                  isVideo
+                />
               )}
             </div>
           )}
@@ -3944,6 +4115,7 @@ function App() {
             activeVideoFrameLabel={activeVideoFrameLabel}
             activeVideoTime={activeVideoTime}
             activeVideoFrameOverrides={activeVideoFrameOverrides}
+            activeVideoRenderSettingsKeyframes={activeVideoRenderSettingsKeyframes}
             viewportRef={viewportRef}
             canvasRef={canvasRef}
             overlayCanvasRef={overlayCanvasRef}
@@ -3967,6 +4139,10 @@ function App() {
             onVideoMaskPointerDown={handleVideoMaskPointerDown}
             onVideoMaskPointerMove={handleVideoMaskPointerMove}
             onVideoMaskPointerUp={handleVideoMaskPointerUp}
+            onVideoTimedZonePointerDown={handleVideoTimedZonePointerDown}
+            onVideoTimedZonePointerMove={handleVideoTimedZonePointerMove}
+            onVideoTimedZonePointerUp={handleVideoTimedZonePointerUp}
+            onRemoveVideoTimedZoneFromCurrentFrame={removeVideoTimedZoneFromCurrentFrame}
             onRemoveVideoPreviewFaceZone={removeVideoPreviewFaceZone}
             onRestoreVideoPreviewFaceZone={restoreVideoPreviewFaceZone}
             onSetVideoMaskDrawActive={setVideoMaskDrawActive}
@@ -3985,10 +4161,15 @@ function App() {
             onExportAsSvg={exportAsSvg}
             onApplyVectorizePreview={() => { void commitVectorizePreview() }}
             onSaveSnapshot={() => { void saveSnapshot() }}
+            onApplyFrameToVideo={() => { void applySnapshotToSourceVideo() }}
+            onBackToSourceVideo={jumpToSourceVideoFromSnapshot}
+            onStepEditFrameAdjacent={(direction) => { void stepEditFrameAdjacent(direction) }}
             onUndo={undo}
             onResetPhotoToOriginal={() => { void handleResetPhotoToOriginal() }}
             onCropToSelection={cropToSelection}
             onApplyZones={() => { void applyZones() }}
+            activeFrameEditDirty={activeFrameEditDirty}
+            activeFrameSavedToVideo={activeFrameSavedToVideo}
           />
           )}
 
@@ -4030,6 +4211,8 @@ function App() {
         onUploadCustomImages={openCustomImagePicker}
         asciiCharset={asciiCharset}
         onChangeAsciiCharset={setAsciiCharset}
+        asciiColor={asciiColor}
+        onChangeAsciiColor={setAsciiColor}
       />
 
       {/* The home default screen has its own integrated, inline preloader, so we

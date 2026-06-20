@@ -11,9 +11,10 @@ A free, open-source tool by [Web3Privacy Now](https://www.web3privacy.info) for 
 ## Features
 
 ### Anonymization
-- **12+ effects** — blur, zoom blur, pixelate, blackout, emoji, custom image, ASCII art, glitch, Color Ball, noise, contour, and more
+- **10 effects** — blur, zoom blur, pixelate, blackout, emoji, custom image, ASCII art, glitch, animated Color Ball, and noise
 - **Modular privacy detection** — faces (YuNet, on by default) plus optional YOLO targets: people, license plates, screens, documents, signs, tattoos
-- **Sensitive text on photos** — on-device OCR (Tesseract.js, EN + CS) finds emails, phone numbers, payment cards, IBANs, national IDs, crypto addresses, secrets/keys, and more, then boxes and redacts them (on by default)
+- **Sensitive text on photos** — opt-in on-device OCR (Tesseract.js, EN + CS) finds emails, phone numbers, payment cards, IBANs, national IDs, crypto addresses, secrets/keys, and more, then boxes and redacts them
+- **Purposeful sensitivity defaults** — faces 25%, people 25%, plates 50%, documents/IDs and sensitive text 100%, vehicles and extra classes 10%
 - **Progressive detection** — face boxes appear immediately while YOLO/OCR scans continue in the background
 - **All YOLO classes** — an optional sheet exposes every raw class the object model supports for power users, beyond the featured targets
 - **Tiny detection labels** — each detected region gets a small caption of its type (faces stay label-free), toggleable in settings
@@ -23,7 +24,7 @@ A free, open-source tool by [Web3Privacy Now](https://www.web3privacy.info) for 
 - **Brush tool** — variable-size brush with real-time preview
 
 ### Image editing
-- **Color adjustments** — brightness, contrast, saturation, shadows, highlights, temperature + presets
+- **Color adjustments** — brightness, contrast, saturation, shadows, highlights + presets
 - **Transform effects** — halftone, glitch, pixel shift (wave/zoom/shear/ripple/mirror), color shift
 - **Snapshot system** — save intermediate versions as new images in the explorer
 
@@ -52,7 +53,7 @@ A free, open-source tool by [Web3Privacy Now](https://www.web3privacy.info) for 
 - **Formats** — PDF, TXT, and MD (DOCX import is on the [roadmap](./ROADMAP.md))
 - **Local PII detection** — regex + checksum recognizers (Luhn cards, IBAN mod-97, Czech rodné číslo mod-11, emails, phones, IPs, crypto, secrets/keys)
 - **Review UI** — colored highlights over text and PDF page renders; toggle individual detections, draw manual redaction boxes
-- **Redaction styles** — blackout/blur/pixelate on PDFs; blackout/token replace on plain text
+- **Redaction styles** — PDFs open with blackout selected; TXT/MD open directly in the anonymized blackout preview; blur/pixelate remain available for PDFs and token replacement for text
 - **Safe export** — flattened PDF, ZIP of page images, or token-replaced TXT; Copy/Save for text documents
 
 ### Export & batch
@@ -70,7 +71,7 @@ A free, open-source tool by [Web3Privacy Now](https://www.web3privacy.info) for 
 
 ### Performance / loading
 - **Lean first load** — only face detection (YuNet) and live mode load on boot
-- **Background prefetch** — heavier optional assets (YOLO models, OCR engine + language data) warm the browser cache while the user is idle on the home / hypno screen, behind an unobtrusive progress pill; respects Save-Data and slow connections
+- **On-demand privacy models** — heavier YOLO/OCR assets start loading only after the user enables a target that needs them; one progress surface reports the complete model load and respects Save-Data / slow connections
 - **Hypnotic home screen** — a high-detail, dotted multi-layer GPU spiral illusion (WebGL fragment shader, pixel-by-pixel, high FPS) that reacts to pointer/touch and morphs from the logo, with a `prefers-reduced-motion` / no-WebGL SVG fallback
 
 ### Desktop shell
@@ -140,7 +141,8 @@ Local macOS builds created without an Apple Developer ID are unsigned and not no
 w3pn-anonymizer/
 ├── src/
 │   ├── App.tsx                # Main React application
-│   ├── App.css / index.css    # Styles + CSS variables (dark + light themes)
+│   ├── App.css / index.css    # Core styles + CSS variables
+│   ├── button-system.css      # Shared button typography and geometry
 │   ├── main.tsx               # React entry point
 │   ├── types.ts               # Shared TypeScript types
 │   ├── components/            # UI (incl. document/ viewers, tool-panels/, batch/)
@@ -181,7 +183,7 @@ npm run build
 # Output → dist/
 ```
 
-The `dist/` folder is a static SPA deployable to any web server or CDN (Vercel, Netlify, nginx, Caddy, etc.).
+The `dist/` folder is a static SPA deployable to nginx, Caddy, Apache, or another static host. Production currently serves it from nginx on the W3PN VPS.
 
 For the optional Python backend, keep it bound to `127.0.0.1:7865` and place it behind a same-host reverse proxy only if you fully trust the runtime environment.
 
@@ -190,8 +192,10 @@ For the optional Python backend, keep it bound to `127.0.0.1:7865` and place it 
 ## Prerequisites
 
 ### Frontend
-- **Node.js** ≥ 18 — [nodejs.org](https://nodejs.org)
-- **npm** ≥ 9 (bundled with Node.js)
+- **Node.js** ≥ 20.19 — [nodejs.org](https://nodejs.org)
+- **npm** ≥ 10 (bundled with current Node.js)
+
+See [Dependencies and integrated runtimes](./docs/DEPENDENCIES.md) for the complete package, browser API, model, worker, desktop, iOS, and optional server inventory.
 
 ### Python backend (optional)
 - **Python** ≥ 3.9 — [python.org](https://python.org)
@@ -212,7 +216,7 @@ The YuNet ONNX model is downloaded automatically from [OpenCV Zoo](https://githu
 ## Detection (in-browser)
 
 - **Faces (YuNet)** — the browser loads `public/models/face_detection_yunet_2023mar.onnx` and runs it via ONNX Runtime Web (WebAssembly). Large images are scanned full-frame plus 640 px tiles; video samples are downscaled to 1280 px on the long edge first.
-- **Objects (YOLO, optional)** — when a non-face target or a raw class is enabled, the matching YOLO ONNX model in `public/models/privacy/` lazy-loads through ORT. Outputs are filtered, NMS'd, and cross-type de-duplicated so each region yields a single effect.
+- **Objects (YOLO, optional)** — when a non-face target or a raw class is enabled, the matching YOLO ONNX model in `public/models/privacy/` lazy-loads through ORT. Outputs are thresholded using the per-target defaults, NMS'd, and cross-type de-duplicated so each region yields a single effect.
 - **Sensitive text (OCR)** — when the *Sensitive text* target is on, Tesseract.js (self-hosted under `public/tesseract/`, EN + CS) recognizes words with bounding boxes; the document PII recognizers then locate matches and box them for redaction. Runs on still images only.
 - No image, video, audio, or document pixels/text leave the browser.
 

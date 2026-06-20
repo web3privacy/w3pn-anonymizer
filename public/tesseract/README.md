@@ -14,6 +14,8 @@ creates the Tesseract worker with `workerPath`, `corePath`, and `langPath` point
 
 The worker runs in OEM mode 1 (LSTM only), so only the `-lstm` cores are vendored.
 
+OCR is opt-in and starts only when **Sensitive text** is enabled. That target defaults to 100% sensitivity once enabled; face-only startup does not download these assets.
+
 ## Regenerating
 
 ```bash

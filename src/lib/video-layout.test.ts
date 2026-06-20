@@ -5,6 +5,7 @@ import {
   videoOverlayLayerStyle,
   getVideoFaceScanSensitivity,
   getVideoDetectSettings,
+  getVideoPreviewDetectionSize,
   faceRectsSimilar,
   filterDismissedFaceZones,
 } from './video-layout'
@@ -66,6 +67,17 @@ describe('progressive face-scan sensitivity', () => {
     expect(s0.thorough).toBe(false)
     expect(s0.confidence).toBeCloseTo(0.7 - 0.1 * 0.4, 6)
     expect(getVideoDetectSettings(10, 1).thorough).toBe(true)
+  })
+})
+
+describe('video preview detection dimensions', () => {
+  it('downscales landscape and portrait video to one 640px detector frame', () => {
+    expect(getVideoPreviewDetectionSize(1920, 1080)).toEqual({ width: 640, height: 360 })
+    expect(getVideoPreviewDetectionSize(1080, 1920)).toEqual({ width: 360, height: 640 })
+  })
+
+  it('keeps already-small frames unchanged', () => {
+    expect(getVideoPreviewDetectionSize(480, 270)).toEqual({ width: 480, height: 270 })
   })
 })
 

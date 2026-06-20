@@ -198,6 +198,14 @@
     transform: translate(-50%, -50%);
   }
 
+  .app-shell-mobile .range-with-thumb .range-progress {
+    left: 50%;
+    top: calc(100% - var(--range-fill-end, 0%));
+    width: var(--mobile-slider-track-h, 4px);
+    height: var(--range-fill-size, 0%);
+    transform: translateX(-50%);
+  }
+
   .app-shell-mobile .mobile-tool-categories {
     flex: 1;
     min-height: 0;
@@ -388,6 +396,14 @@
       + ((100 - var(--mobile-range-pct, 0)) / 100) * (100% - var(--mobile-thumb-size))
     );
     transform: translate(-50%, -50%);
+  }
+
+  .mobile-shell-live .range-with-thumb .range-progress {
+    left: 50%;
+    top: calc(100% - var(--range-fill-end, 0%));
+    width: var(--mobile-slider-track-h, 4px);
+    height: var(--range-fill-size, 0%);
+    transform: translateX(-50%);
   }
 
   .mobile-shell-live .mobile-tool-categories {

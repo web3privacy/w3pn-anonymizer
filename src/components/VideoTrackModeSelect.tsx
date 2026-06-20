@@ -11,15 +11,16 @@ const OPTIONS: { id: VideoTrackMode; label: string; icon: string; hint: string }
 interface VideoTrackModeSelectProps {
   mode: VideoTrackMode
   onChange: (mode: VideoTrackMode) => void
+  showLabel?: boolean
 }
 
 /** Dropdown that picks which tracks of a captured video to keep / edit. */
-export function VideoTrackModeSelect({ mode, onChange }: VideoTrackModeSelectProps) {
+export function VideoTrackModeSelect({ mode, onChange, showLabel = true }: VideoTrackModeSelectProps) {
   const active = OPTIONS.find((o) => o.id === mode) ?? OPTIONS[0]
   return (
     <label className="video-track-mode" title={active.hint}>
-      <Icon name={active.icon} size={16} />
-      <span className="video-track-mode-label">Tracks</span>
+      {showLabel && <Icon name={active.icon} size={16} />}
+      {showLabel && <span className="video-track-mode-label">Tracks</span>}
       <select
         className="video-track-mode-select"
         value={mode}

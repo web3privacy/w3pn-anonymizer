@@ -20,9 +20,11 @@ import {
 import { MobileDrawMaskPanel } from '../mobile/MobileDrawMaskPanel'
 import { MobileVideoProgress } from '../mobile/MobileVideoProgress'
 import { VECTORIZE_PRESETS, type VectorizeParams, type VectorizePreset } from '../lib/vectorize'
+import type { VideoMaskEditMode } from '../hooks/useVideoController'
 import type {
   VideoFrameOverride,
   VideoProcessingPhase,
+  VideoRenderSettingsKeyframe,
   VideoTimedZone,
 } from '../lib/video'
 import type { PhotoItem, ToolMode, Zone } from '../types'
@@ -98,6 +100,7 @@ export interface CanvasViewerProps {
   activeVideoFrameLabel: string | null
   activeVideoTime: number
   activeVideoFrameOverrides: VideoFrameOverride[]
+  activeVideoRenderSettingsKeyframes: VideoRenderSettingsKeyframe[]
   viewportRef: RefObject<HTMLDivElement>
   canvasRef: RefObject<HTMLCanvasElement>
   overlayCanvasRef: RefObject<HTMLCanvasElement>
@@ -121,6 +124,10 @@ export interface CanvasViewerProps {
   onVideoMaskPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void
   onVideoMaskPointerMove: (event: ReactPointerEvent<HTMLDivElement>) => void
   onVideoMaskPointerUp: (event: ReactPointerEvent<HTMLDivElement>) => void
+  onVideoTimedZonePointerDown: (id: string, mode: VideoMaskEditMode, event: ReactPointerEvent<HTMLElement>) => void
+  onVideoTimedZonePointerMove: (event: ReactPointerEvent<HTMLElement>) => void
+  onVideoTimedZonePointerUp: (event: ReactPointerEvent<HTMLElement>) => void
+  onRemoveVideoTimedZoneFromCurrentFrame: (id: string) => void
   onRemoveVideoPreviewFaceZone: (zoneId: string) => void
   onRestoreVideoPreviewFaceZone: (rect: NormalizedFaceRect) => void
   onSetVideoMaskDrawActive: (updater: (cur: boolean) => boolean) => void
@@ -139,10 +146,15 @@ export interface CanvasViewerProps {
   onExportAsSvg: () => void
   onApplyVectorizePreview: () => void
   onSaveSnapshot: () => void
+  onApplyFrameToVideo: () => void
+  onBackToSourceVideo: () => void
+  onStepEditFrameAdjacent: (direction: -1 | 1) => void
   onUndo: () => void
   onResetPhotoToOriginal: () => void
   onCropToSelection: () => void
   onApplyZones: () => void
+  activeFrameEditDirty: boolean
+  activeFrameSavedToVideo: boolean
 }
 
 /** Desktop/mobile editor canvas viewer: drop hints, video player, image canvas, vectorize flyout, corner controls. */
@@ -193,6 +205,7 @@ export function CanvasViewer(props: CanvasViewerProps) {
     activeVideoFrameLabel,
     activeVideoTime,
     activeVideoFrameOverrides,
+    activeVideoRenderSettingsKeyframes,
     viewportRef,
     canvasRef,
     overlayCanvasRef,
@@ -216,6 +229,10 @@ export function CanvasViewer(props: CanvasViewerProps) {
     onVideoMaskPointerDown,
     onVideoMaskPointerMove,
     onVideoMaskPointerUp,
+    onVideoTimedZonePointerDown,
+    onVideoTimedZonePointerMove,
+    onVideoTimedZonePointerUp,
+    onRemoveVideoTimedZoneFromCurrentFrame,
     onRemoveVideoPreviewFaceZone,
     onRestoreVideoPreviewFaceZone,
     onSetVideoMaskDrawActive,
@@ -234,11 +251,17 @@ export function CanvasViewer(props: CanvasViewerProps) {
     onExportAsSvg,
     onApplyVectorizePreview,
     onSaveSnapshot,
+    onApplyFrameToVideo,
+    onBackToSourceVideo,
+    onStepEditFrameAdjacent,
     onUndo,
     onResetPhotoToOriginal,
     onCropToSelection,
     onApplyZones,
+    activeFrameEditDirty,
+    activeFrameSavedToVideo,
   } = props
+  const isVideoFrameEdit = Boolean(activePhoto && !activePhoto.isVideo && activePhoto.isVideoFrameEdit)
 
   return (
     <div
@@ -431,18 +454,73 @@ export function CanvasViewer(props: CanvasViewerProps) {
                     </span>
                   </button>
                 ))}
-                {[...visibleVideoTimedZones.map((item) => item.zone), ...(videoDraftZone ? [videoDraftZone] : [])].map((zone) => (
+                {visibleVideoTimedZones.map((item) => {
+                  const zone = item.zone
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={`video-mask-rect video-mask-rect--editable video-mask-rect--${zone.maskShape ?? 'rectangle'}`}
+                      style={{
+                        left: `${zone.x * 100}%`,
+                        top: `${zone.y * 100}%`,
+                        width: `${zone.width * 100}%`,
+                        height: `${zone.height * 100}%`,
+                      }}
+                      onPointerDown={(event) => onVideoTimedZonePointerDown(item.id, 'move', event)}
+                      onPointerMove={onVideoTimedZonePointerMove}
+                      onPointerUp={onVideoTimedZonePointerUp}
+                      onPointerCancel={onVideoTimedZonePointerUp}
+                      title="Drag to move this timeline mask"
+                      aria-label="Move timeline mask"
+                    >
+                      <span
+                        className="video-mask-remove-btn zone-delete-btn"
+                        role="button"
+                        tabIndex={0}
+                        title="Stop this mask from this frame onward"
+                        aria-label="Stop this mask from this frame onward"
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          onRemoveVideoTimedZoneFromCurrentFrame(item.id)
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault()
+                            event.stopPropagation()
+                            onRemoveVideoTimedZoneFromCurrentFrame(item.id)
+                          }
+                        }}
+                      >
+                        <Icon name="close" size={12} />
+                      </span>
+                      {(['nw', 'ne', 'sw', 'se'] as const).map((handle) => (
+                        <span
+                          key={handle}
+                          className={`video-mask-resize-handle video-mask-resize-handle--${handle}`}
+                          role="presentation"
+                          onPointerDown={(event) => onVideoTimedZonePointerDown(item.id, handle, event)}
+                          onPointerMove={onVideoTimedZonePointerMove}
+                          onPointerUp={onVideoTimedZonePointerUp}
+                          onPointerCancel={onVideoTimedZonePointerUp}
+                        />
+                      ))}
+                    </button>
+                  )
+                })}
+                {videoDraftZone && (
                   <div
-                    key={zone.id}
-                    className={`video-mask-rect video-mask-rect--${zone.maskShape ?? 'rectangle'}${zone.id === 'draft-video-mask' ? ' draft' : ''}`}
+                    key={videoDraftZone.id}
+                    className={`video-mask-rect video-mask-rect--${videoDraftZone.maskShape ?? 'rectangle'} draft`}
                     style={{
-                      left: `${zone.x * 100}%`,
-                      top: `${zone.y * 100}%`,
-                      width: `${zone.width * 100}%`,
-                      height: `${zone.height * 100}%`,
+                      left: `${videoDraftZone.x * 100}%`,
+                      top: `${videoDraftZone.y * 100}%`,
+                      width: `${videoDraftZone.width * 100}%`,
+                      height: `${videoDraftZone.height * 100}%`,
                     }}
                   />
-                ))}
+                )}
               </div>
             </div>
             <div className="mobile-video-bottom-controls">
@@ -541,12 +619,19 @@ export function CanvasViewer(props: CanvasViewerProps) {
                   aria-label="Video timeline"
                   onChange={(event) => onSeekActiveVideo(parseFloat(event.target.value))}
                 />
-                {activeVideoFrameOverrides.length > 0 && Number.isFinite(activePhoto.videoDuration) && (activePhoto.videoDuration ?? 0) > 0 && (
+                {(activeVideoFrameOverrides.length > 0 || activeVideoRenderSettingsKeyframes.length > 0) && Number.isFinite(activePhoto.videoDuration) && (activePhoto.videoDuration ?? 0) > 0 && (
                   <div className="video-frame-marker-layer" aria-hidden="true">
                     {activeVideoFrameOverrides.map((item) => (
                       <span
-                        key={`${item.timeSec}`}
+                        key={`frame-${item.timeSec}`}
                         className="video-frame-marker"
+                        style={{ left: `${clamp((item.timeSec / (activePhoto.videoDuration ?? 1)) * 100, 0, 100)}%` }}
+                      />
+                    ))}
+                    {activeVideoRenderSettingsKeyframes.map((item) => (
+                      <span
+                        key={`settings-${item.timeSec}`}
+                        className="video-frame-marker video-frame-marker--settings"
                         style={{ left: `${clamp((item.timeSec / (activePhoto.videoDuration ?? 1)) * 100, 0, 100)}%` }}
                       />
                     ))}
@@ -650,6 +735,57 @@ export function CanvasViewer(props: CanvasViewerProps) {
           )
         })()}
       </div>
+
+      {isVideoFrameEdit && !isMobile && (
+        <>
+          <button
+            className="video-frame-back-btn"
+            type="button"
+            onClick={onBackToSourceVideo}
+            disabled={isBusy}
+            title="Return to the source video with saved frame edits preserved"
+          >
+            Back to video <Icon name="arrow_forward" size={14} />
+          </button>
+          <div className="video-frame-edit-control" aria-label="Video frame edit controls">
+            <button
+              className="video-frame-nav-btn"
+              type="button"
+              onClick={() => onStepEditFrameAdjacent(-1)}
+              disabled={isBusy}
+              aria-label="Previous frame"
+              title="Previous frame"
+            >
+              <Icon name="skip_previous" size={18} />
+            </button>
+            <button
+              className={`video-frame-save-btn${!activeFrameEditDirty && activeFrameSavedToVideo ? ' saved' : ''}`}
+              type="button"
+              onClick={onApplyFrameToVideo}
+              disabled={isBusy || !activeFrameEditDirty}
+              title={activeFrameEditDirty
+                ? 'Save this edited frame into the video render'
+                : activeFrameSavedToVideo
+                  ? 'This frame is saved into the video render'
+                  : 'Make an edit before saving this frame'}
+            >
+              {!activeFrameEditDirty && activeFrameSavedToVideo
+                ? <><Icon name="check" size={15} /> Saved</>
+                : <><Icon name="movie_edit" size={15} /> Save to video</>}
+            </button>
+            <button
+              className="video-frame-nav-btn"
+              type="button"
+              onClick={() => onStepEditFrameAdjacent(1)}
+              disabled={isBusy}
+              aria-label="Next frame"
+              title="Next frame"
+            >
+              <Icon name="skip_next" size={18} />
+            </button>
+          </div>
+        </>
+      )}
 
       {/* Vectorize panel — flyout from toolbar */}
       {vectorizePanelOpen && activePhoto && !activePhoto.isVideo && !isMobile && (
@@ -797,9 +933,9 @@ export function CanvasViewer(props: CanvasViewerProps) {
         </div>
       )}
       {activePhoto && toolMode !== 'crop' && activeZones.length > 0 && !zonesAnonymized && (
-        <div className="viewer-corner">
+        <div className={`viewer-corner${isVideoFrameEdit ? ' viewer-corner--video-frame-edit' : ''}`}>
           <button
-            className="corner-btn corner-btn-primary"
+            className="corner-btn corner-btn-primary corner-btn-anonymize"
             type="button"
             onClick={onApplyZones}
             disabled={isBusy}

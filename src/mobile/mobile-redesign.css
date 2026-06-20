@@ -679,6 +679,38 @@
   margin-bottom: 12px;
 }
 
+.mobile-about-actions {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.mobile-about-donate {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 0 13px;
+  border: 1px solid var(--mobile-accent, #00ff78);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--mobile-accent, #00ff78);
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.055em;
+  text-decoration: none;
+  text-transform: uppercase;
+  margin-bottom: 0;
+}
+
+.mobile-about-donate:hover {
+  background: rgba(0, 255, 120, 0.1);
+  color: #fff;
+}
+
 .mobile-about-w3pn {
   height: 26px;
   width: auto;
@@ -1160,6 +1192,10 @@
   letter-spacing: 0.06em;
   padding: 2px 5px;
   border-radius: 3px;
+}
+
+.mobile-gallery-item-thumb .mobile-gallery-video-badge {
+  bottom: 20px;
 }
 
 .mobile-gallery-item-thumb {
@@ -2719,7 +2755,7 @@
   }
 
   .mobile-drawer-side--solid {
-    background: rgba(6, 6, 6, 0.96);
+    background: #070707;
   }
 
   .mobile-drawer-header {
@@ -3089,7 +3125,7 @@
 
 .mobile-gallery-item-shell.selected .mobile-gallery-item {
   border-color: var(--mobile-accent);
-  box-shadow: 0 0 0 1px var(--mobile-accent);
+  box-shadow: none;
 }
 
 .mobile-gallery-list-shell.selected .mobile-gallery-list-item {
@@ -3104,7 +3140,12 @@
 }
 .mobile-gallery-item-shell.anonymized.selected .mobile-gallery-item,
 .mobile-gallery-list-shell.anonymized.selected .mobile-gallery-list-item {
-  box-shadow: 0 0 0 1px var(--mobile-accent), 0 0 0 3px rgba(34, 197, 94, 0.5);
+  box-shadow: none;
+}
+
+.mobile-gallery-item-shell.anonymized.selected .mobile-gallery-item-thumb,
+.mobile-gallery-list-shell.anonymized.selected .mobile-gallery-list-thumb {
+  box-shadow: none;
 }
 
 .mobile-gallery-check {
@@ -3425,7 +3466,7 @@
   font-size: 0.58rem;
   font-weight: 700;
   letter-spacing: 0.055em;
-  margin-bottom: 14px;
+  margin-bottom: 0;
   box-shadow: 0 0 18px rgba(129, 255, 107, 0.22);
 }
 
@@ -3590,11 +3631,11 @@
 
 /* ── Desktop About ───────────────────────────────────────────── */
 .app-shell-desktop-v2 .mobile-about {
-  --about-pad-x: 40px;
-  --about-pad-y: 36px;
-  --about-band-max: 840px;
-  --about-rule-gap: 40px;
-  --about-logo-gap: 32px;
+  --about-pad-x: clamp(46px, 5vw, 96px);
+  --about-pad-y: 41px;
+  --about-band-max: min(1480px, calc(100vw - 160px));
+  --about-rule-gap: 46px;
+  --about-logo-gap: 37px;
 }
 
 .app-shell-desktop-v2 .mobile-about-header {
@@ -3614,30 +3655,31 @@
 }
 
 .app-shell-desktop-v2 .mobile-about-hero-logo {
-  height: 21px;
+  height: 24px;
 }
 
 .app-shell-desktop-v2 .mobile-about-intro {
-  font-size: 0.8rem;
+  font-size: 0.92rem;
   line-height: 1.5;
-  max-width: 560px;
+  max-width: 644px;
 }
 
 .app-shell-desktop-v2 .mobile-about-desc {
-  font-size: 0.72rem;
+  font-size: 0.83rem;
   line-height: 1.55;
-  max-width: 580px;
+  max-width: 667px;
 }
 
 .app-shell-desktop-v2 .mobile-about-section-title {
-  font-size: 0.68rem;
+  font-size: 0.9rem;
   letter-spacing: 0.12em;
   margin: 0 0 30px;
 }
 
 .app-shell-desktop-v2 .mobile-about-features {
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 24px 28px;
+  column-gap: clamp(56px, 7vw, 150px);
+  row-gap: clamp(30px, 4.2vw, 64px);
   max-width: none;
   width: 100%;
 }
@@ -3654,36 +3696,51 @@
 }
 
 .app-shell-desktop-v2 .mobile-about-feature-icon .material-symbols-outlined {
-  font-size: 22px !important;
+  font-size: 25px !important;
 }
 
 .app-shell-desktop-v2 .mobile-about-feature-title,
 .app-shell-desktop-v2 .mobile-about-local-title {
-  font-size: 0.66rem;
+  font-size: 0.76rem;
   font-weight: 500;
 }
 
 .app-shell-desktop-v2 .mobile-about-feature-desc,
 .app-shell-desktop-v2 .mobile-about-local-desc {
-  font-size: 0.6rem;
+  font-size: 0.69rem;
   line-height: 1.45;
 }
 
 .app-shell-desktop-v2 .mobile-about-local {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 22px 28px;
+  column-gap: clamp(56px, 7vw, 150px);
+  row-gap: clamp(28px, 4vw, 58px);
   max-width: none;
   width: 100%;
   text-align: center;
 }
 
 .app-shell-desktop-v2 .mobile-about-footer-text {
-  font-size: 0.64rem;
+  font-size: 0.74rem;
 }
 
 .app-shell-desktop-v2 .mobile-about-w3pn {
   height: 28px;
+}
+
+.app-shell-mobile .mobile-about-actions,
+.app-shell-desktop-v2 .mobile-about-actions {
+  flex-direction: row;
+  justify-content: center;
+  gap: 8px;
+}
+
+.app-shell-mobile .mobile-about-feedback,
+.app-shell-desktop-v2 .mobile-about-feedback,
+.app-shell-mobile .mobile-about-donate,
+.app-shell-desktop-v2 .mobile-about-donate {
+  margin: 0;
 }
 
 /* ── Short viewports on regular-width phones — shrink spiral, keep wordmark

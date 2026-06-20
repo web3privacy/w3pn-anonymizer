@@ -152,7 +152,19 @@ export function CustomImagePickerPanel({
           : createPortal(sourceMenu, document.body))}
       </div>
 
-      <div className="mobile-custom-image-grid" role="listbox" aria-label="Choose image">
+      <div
+        className="mobile-custom-image-grid"
+        role="listbox"
+        aria-label="Choose image"
+        onWheel={(event) => {
+          const grid = event.currentTarget
+          if (grid.scrollWidth <= grid.clientWidth) return
+          const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY
+          if (delta === 0) return
+          grid.scrollLeft += delta
+          event.preventDefault()
+        }}
+      >
         {loading ? (
           <div className="mobile-custom-image-loading" aria-busy="true" aria-live="polite">
             <span className="mobile-face-loader mobile-face-loader-lg" aria-hidden="true" />

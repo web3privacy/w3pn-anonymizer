@@ -187,9 +187,9 @@ export function MobileEditorToolbar({ b }: MobileEditorToolbarProps) {
               <div className="mobile-tb-v2-field-row mobile-tb-v2-field-row--meta">
                 <span className="mobile-tb-v2-field-label">Edits</span>
                 <div className="mobile-tb-v2-meta-value">
-                  <span>{b.activeVideoFrameOverrides.length + b.activeVideoTimedZones.length}</span>
+                  <span>{b.activeVideoFrameOverrides.length + b.activeVideoTimedZones.length + b.activeVideoRenderSettingsKeyframes.length}</span>
                   <span className="mobile-tb-v2-meta-sub">
-                    {b.activeVideoFrameOverrides.length} frames · {b.activeVideoTimedZones.length} masks
+                    {b.activeVideoFrameOverrides.length} frames · {b.activeVideoTimedZones.length} masks · {b.activeVideoRenderSettingsKeyframes.length} settings
                   </span>
                 </div>
               </div>
