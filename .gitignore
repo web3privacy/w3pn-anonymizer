@@ -6,6 +6,11 @@ __pycache__/
 *.pyc
 .DS_Store
 release/
+build/
 anonymizer-github-ready/
 ai-source-export/
 .playwright-cli/
+.native-cache/
+ios/App/CapApp-SPM/Vendor/
+ios/App/CapApp-SPM/Package.resolved
+ios/App/App.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/

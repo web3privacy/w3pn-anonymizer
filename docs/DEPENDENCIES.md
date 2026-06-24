@@ -20,7 +20,7 @@ This document is the dependency inventory for W3PN Anonymizer. The public app is
 | `@9am/img-halftone` | Halftone transform support |
 | `mp4-muxer`, `webm-muxer`, `webm-duration-fix` | Browser-side video container output and WebM duration repair |
 | `@fontsource-variable/archivo` | Bundled Archivo variable UI font |
-| `@capacitor/core`, `@capacitor/ios` | iOS WebView wrapper and native project bridge |
+| `@capacitor/core`, `@capacitor/ios`, `@capacitor/android` | iOS/Android WebView wrappers and native project bridge |
 
 The `protobufjs` override pins the transitive protobuf runtime used by model tooling to the audited 7.x line.
 
@@ -62,7 +62,7 @@ Optional models are loaded only after their detection target is enabled. Missing
 | `eslint`, `@typescript-eslint/*`, `eslint-plugin-react-hooks`, `eslint-plugin-react-refresh` | Static analysis |
 | `sharp`, `@resvg/resvg-js` | Asset normalization, rasterization, icon generation, and release scripts |
 | `electron`, `electron-builder` | Optional macOS/Windows/Linux desktop packaging |
-| `@capacitor/cli` | Build synchronization and iOS project maintenance |
+| `@capacitor/cli` | Capacitor runtime/template dependency; local native sync is handled by `scripts/sync-native-capacitor.mjs` |
 | `fs-extra` | Build/release filesystem scripts |
 | `@types/*` | TypeScript declarations for React and selected libraries |
 
@@ -80,7 +80,8 @@ The older localhost detection backend is not part of the public web path. Browse
 ## Native wrappers
 
 - Electron packages the already-built `dist/` assets and is currently a source-build option, not a promoted download.
-- Capacitor copies the same static build into the iOS project. A free Apple ID can run a development build on a connected iPhone; App Store/TestFlight distribution requires the paid Apple Developer Program.
+- Capacitor copies the same static build into the iOS and Android projects. The copied `dist/` contains bundled models, ONNX WASM, OCR data, audio worklets, custom images, and demos for offline use after install.
+- A free Apple ID can run a development iPhone build from Xcode; App Store/TestFlight distribution requires the paid Apple Developer Program. Android debug APKs can be built from Android Studio or `npm run android:debug` when the Android SDK is installed.
 
 ## Updating dependencies
 

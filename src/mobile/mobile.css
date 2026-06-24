@@ -5,7 +5,10 @@
   html, body, #root {
     width: 100%;
     max-width: 100%;
+    height: var(--app-viewport-height);
+    min-height: var(--app-viewport-height);
     overflow-x: hidden;
+    background: #000;
   }
 }
 
@@ -22,7 +25,9 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: var(--app-bg);
+  background: #000;
+  min-height: 0;
+  height: 100%;
   --mobile-topbar-h: 44px;
   --mobile-bottom-toolbar-h: 128px;
   --mobile-edge-pad: 10px;
@@ -47,11 +52,13 @@
   flex-direction: column;
   overflow: hidden;
   min-height: 0;
-  height: 100%;
+  height: var(--app-viewport-height);
+  min-height: var(--app-viewport-height);
   color-scheme: dark;
   position: relative;
   touch-action: none;
   overscroll-behavior: none;
+  background: #000;
   --mobile-glass-bg: rgba(10, 10, 12, 0.48);
   --mobile-glass-border: rgba(255, 255, 255, 0.09);
   --mobile-glass-blur: 22px;
@@ -3338,6 +3345,6 @@
   -webkit-appearance: none;
   background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 16 16' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M4 6l4 4 4-4' fill='none' stroke='%23d4d4d4' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
-  background-position: right 8px center;
+  background-position: right 12px center;
   background-size: 12px 12px;
 }

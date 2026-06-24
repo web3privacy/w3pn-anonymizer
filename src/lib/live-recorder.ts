@@ -12,19 +12,21 @@ export class LiveRecorder {
       // is cloned so stopping the recorder never kills the live preview's mic.
       const hasAudio = !!audioTrack && audioTrack.readyState === 'live'
       if (hasAudio) this.stream.addTrack(audioTrack!.clone())
-      const mime = hasAudio
-        ? (MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')
-          ? 'video/webm;codecs=vp9,opus'
-          : MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus')
-            ? 'video/webm;codecs=vp8,opus'
-            : MediaRecorder.isTypeSupported('video/webm')
-              ? 'video/webm'
-              : '')
-        : (MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
-          ? 'video/webm;codecs=vp9'
-          : MediaRecorder.isTypeSupported('video/webm')
-            ? 'video/webm'
-            : '')
+      const candidates = hasAudio
+        ? [
+          'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+          'video/mp4',
+          'video/webm;codecs=vp9,opus',
+          'video/webm;codecs=vp8,opus',
+          'video/webm',
+        ]
+        : [
+          'video/mp4;codecs=avc1.42E01E',
+          'video/mp4',
+          'video/webm;codecs=vp9',
+          'video/webm',
+        ]
+      const mime = candidates.find((candidate) => MediaRecorder.isTypeSupported(candidate)) ?? ''
       this.recorder = mime
         ? new MediaRecorder(this.stream, {
           mimeType: mime,

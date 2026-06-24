@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">W3PN Anonymizer</string>
+    <string name="title_activity_main">W3PN Anonymizer</string>
+    <string name="package_name">info.web3privacy.anonymizer</string>
+    <string name="custom_url_scheme">info.web3privacy.anonymizer</string>
+</resources>

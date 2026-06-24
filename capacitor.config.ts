@@ -5,8 +5,13 @@ const config: CapacitorConfig = {
   appName: 'W3PN Anonymizer',
   webDir: 'dist',
   bundledWebRuntime: false,
+  server: {
+    androidScheme: 'https',
+  },
+  backgroundColor: '#000000',
   ios: {
-    contentInset: 'automatic',
+    contentInset: 'never',
+    backgroundColor: '#000000',
   },
 }
 

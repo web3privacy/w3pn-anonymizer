@@ -2,6 +2,8 @@
 
 This project includes a Capacitor iOS wrapper around the existing Vite app.
 
+For the shared iOS + Android sync flow, offline model packaging, and device-resource notes, see [`native-capacitor.md`](./native-capacitor.md).
+
 ## Local Device Test
 
 1. Install Xcode from the Mac App Store.

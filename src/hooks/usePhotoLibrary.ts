@@ -156,6 +156,35 @@ export interface PhotoLibraryApi {
   exportAllLibraryIndividual: (photoIds?: string[]) => Promise<void>
 }
 
+async function fetchDemoBlob(url: string): Promise<Blob> {
+  const clean = url.replace(/^\.\//, '').replace(/^\//, '')
+  const candidates = Array.from(new Set([
+    url,
+    `./${clean}`,
+    ...safeDemoUrl(clean, document.baseURI || window.location.href),
+    ...safeDemoUrl(clean, window.location.origin || window.location.href),
+  ]))
+  let lastError: unknown = null
+  for (const candidate of candidates) {
+    try {
+      const res = await fetch(candidate, { cache: 'force-cache' })
+      if (res.ok) return res.blob()
+      lastError = new Error(`Demo ${candidate} failed with ${res.status}`)
+    } catch (err) {
+      lastError = err
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(`Demo ${url} failed`)
+}
+
+function safeDemoUrl(path: string, base: string): string[] {
+  try {
+    return [new URL(path, base).toString()]
+  } catch {
+    return []
+  }
+}
+
 export function usePhotoLibrary(options: UsePhotoLibraryOptions): PhotoLibraryApi {
   const {
     isMobile,
@@ -427,10 +456,8 @@ export function usePhotoLibrary(options: UsePhotoLibraryOptions): PhotoLibraryAp
   const loadDemoPhotos = useCallback(async () => {
     setIsBusy(true)
     try {
-      const fetched = await Promise.all(DEMO_MEDIA.map(async (url, i) => {
-        const res = await fetch(url)
-        if (!res.ok) throw new Error(`Demo ${url} failed`)
-        const blob = await res.blob()
+      const fetched = await Promise.allSettled(DEMO_MEDIA.map(async (url, i) => {
+        const blob = await fetchDemoBlob(url)
         const ext = url.split('.').pop() ?? 'jpg'
         const name = url.split('/').pop() ?? `demo-${i + 1}.${ext}`
         const AUDIO_MIME: Record<string, string> = { m4a: 'audio/mp4', mp3: 'audio/mpeg', wav: 'audio/wav', aac: 'audio/aac', ogg: 'audio/ogg', flac: 'audio/flac' }
@@ -438,8 +465,14 @@ export function usePhotoLibrary(options: UsePhotoLibraryOptions): PhotoLibraryAp
         const mime = blob.type || AUDIO_MIME[ext] || DOC_MIME[ext] || (ext === 'webm' ? 'video/webm' : ext === 'webp' ? 'image/webp' : ext === 'png' ? 'image/png' : 'image/jpeg')
         return { file: new File([blob], name, { type: mime }), name, source: 'upload' as const }
       }))
-      addRecords(fetched)
-    } catch { setNotice('Failed to load demo photos.') }
+      const ready = fetched.flatMap((result) => result.status === 'fulfilled' ? [result.value] : [])
+      if (ready.length === 0) {
+        setNotice('Failed to load demo files.')
+        return
+      }
+      addRecords(ready)
+      if (ready.length < DEMO_MEDIA.length) setNotice(`Loaded ${ready.length}/${DEMO_MEDIA.length} demo files.`)
+    } catch { setNotice('Failed to load demo files.') }
     finally { setIsBusy(false) }
   }, [addRecords, setIsBusy, setNotice])
 

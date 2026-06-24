@@ -13,6 +13,7 @@ import { MobileToolDrawers } from './MobileToolDrawers'
 import { MobileTopBar } from './MobileTopBar'
 import { VoiceMaskPanel } from '../components/VoiceMaskPanel'
 import { useVoiceAnonymizer } from '../hooks/useVoiceAnonymizer'
+import { buildNativeCaptureName, saveBlobToNativeMediaLibrary } from '../lib/native-media-library'
 import { saveLiveCapture } from './liveSessionBuffer'
 import type { MobilePanel } from './types'
 
@@ -391,10 +392,13 @@ export function MobileLiveMode({
       setCapturePreviewUrl(url)
       setLastCaptureType('photo')
       saveLiveCapture(blob, 'photo')
+      void saveBlobToNativeMediaLibrary(blob, buildNativeCaptureName('photo', blob.type), 'photo')
+        .then((saved) => { if (saved) b.showMobileToast('Photo saved to device library.') })
+        .catch(() => b.showMobileToast('Photo stayed in app library. Device save failed.'))
       const photoId = onCaptureSavedRef.current?.(blob, 'photo') ?? null
       if (photoId) setLastCapturePhotoId(photoId)
     }
-  }, [])
+  }, [b])
 
   const handleVideoSaved = useCallback((blob: Blob, type: 'photo' | 'video') => {
     if (type === 'video' && blob.size > 0) {
@@ -404,9 +408,14 @@ export function MobileLiveMode({
       setCapturePreviewUrl(url)
       setLastCaptureType('video')
     }
+    if (type === 'video' && blob.size > 0) {
+      void saveBlobToNativeMediaLibrary(blob, buildNativeCaptureName('video', blob.type), 'video')
+        .then((saved) => { if (saved) b.showMobileToast('Video saved to device library.') })
+        .catch(() => b.showMobileToast('Video stayed in app library. Device save failed.'))
+    }
     const photoId = onCaptureSavedRef.current?.(blob, type) ?? null
     if (photoId) setLastCapturePhotoId(photoId)
-  }, [])
+  }, [b])
 
   const canvasFitClass = cameraSettings.displayFit === 'cover'
     ? 'mobile-live-canvas--cover'

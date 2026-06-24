@@ -117,6 +117,7 @@ import {
   suggestContentAwareCropFromBlob,
 } from './lib/normalize'
 import { mimeTypeToVideoExtension, resolveVideoExportSize, type VideoExportSize } from './lib/video'
+import { extensionForMime } from './lib/native-media-library'
 import type {
   AnonymizeEffectId,
   AsciiCharset,
@@ -3127,9 +3128,9 @@ function App() {
 
   const addLiveMediaToLibrary = useCallback((blob: Blob, opts?: { stayInLive?: boolean }): string | null => {
     const isVideo = blob.type.startsWith('video/')
-    const ext = isVideo ? 'webm' : 'jpg'
+    const ext = extensionForMime(blob.type, isVideo ? 'video' : 'photo')
     const name = `live-capture-${Date.now()}.${ext}`
-    const file = new File([blob], name, { type: blob.type || (isVideo ? 'video/webm' : 'image/jpeg') })
+    const file = new File([blob], name, { type: blob.type || (isVideo ? 'video/mp4' : 'image/jpeg') })
     addRecords([{ file, name, source: 'upload' }])
     const id = lastAddedPhotoIdRef.current
     if (id && !isVideo) {

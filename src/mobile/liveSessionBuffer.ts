@@ -1,3 +1,5 @@
+import { extensionForMime } from '../lib/native-media-library'
+
 export interface LiveCaptureEntry {
   id: string
   type: 'photo' | 'video'
@@ -12,7 +14,7 @@ export interface LiveCaptureEntry {
  * The actual blob is delivered to the library via the capture callback.
  */
 export function saveLiveCapture(blob: Blob, type: 'photo' | 'video'): LiveCaptureEntry {
-  const ext = type === 'video' ? 'webm' : 'jpg'
+  const ext = extensionForMime(blob.type, type)
   const filename = `live-capture-${Date.now()}.${ext}`
   const entry: LiveCaptureEntry = {
     id: `live-${Date.now()}`,

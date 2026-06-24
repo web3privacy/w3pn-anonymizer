@@ -195,7 +195,7 @@ For the optional Python backend, keep it bound to `127.0.0.1:7865` and place it 
 - **Node.js** ≥ 20.19 — [nodejs.org](https://nodejs.org)
 - **npm** ≥ 10 (bundled with current Node.js)
 
-See [Dependencies and integrated runtimes](./docs/DEPENDENCIES.md) for the complete package, browser API, model, worker, desktop, iOS, and optional server inventory.
+See [Dependencies and integrated runtimes](./docs/DEPENDENCIES.md) for the complete package, browser API, model, worker, desktop, native iOS/Android, and optional server inventory.
 
 ### Python backend (optional)
 - **Python** ≥ 3.9 — [python.org](https://python.org)

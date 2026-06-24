@@ -57,6 +57,66 @@
     <meta name="theme-color" content="#000000" />
     <meta name="color-scheme" content="dark" />
     <meta name="mobile-web-app-capable" content="yes" />
+    <style>
+      html,
+      body {
+        background: #000;
+      }
+
+      #native-boot {
+        position: fixed;
+        inset: 0;
+        z-index: 2147483647;
+        display: grid;
+        place-items: center;
+        background: #000;
+        color: #fff;
+        font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+      }
+
+      #native-boot .native-boot-mark {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 18px;
+        transform: translateY(-2vh);
+      }
+
+      #native-boot .native-boot-pulse {
+        width: 24px;
+        height: 24px;
+        border-radius: 7px;
+        background: #00ff78;
+        box-shadow: 0 0 28px rgba(0, 255, 120, 0.45);
+        animation: nativeBootPulse 1.25s ease-in-out infinite;
+      }
+
+      #native-boot .native-boot-word {
+        font-size: clamp(18px, 4.4vw, 30px);
+        font-weight: 800;
+      }
+
+      #native-boot.native-boot--hide {
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 180ms ease;
+      }
+
+      @keyframes nativeBootPulse {
+        0%,
+        100% {
+          transform: rotate(0deg) scale(0.82);
+          opacity: 0.68;
+        }
+
+        50% {
+          transform: rotate(9deg) scale(1);
+          opacity: 1;
+        }
+      }
+    </style>
     <!-- Favicons (generated from /brand/favicon-source.png via npm run icons:favicons) -->
     <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
     <link rel="icon" href="./favicon.ico" sizes="any" />
@@ -94,14 +154,20 @@
       "isAccessibleForFree": true
     }
     </script>
-    <script type="module" crossorigin src="./assets/index-kJWDPc3I.js"></script>
+    <script type="module" crossorigin src="./assets/index-C6aREsHt.js"></script>
     <link rel="modulepreload" crossorigin href="./assets/rolldown-runtime-CMxvf4Kt.js">
     <link rel="modulepreload" crossorigin href="./assets/onnx-SA2ijF63.js">
     <link rel="modulepreload" crossorigin href="./assets/zip-Uer3KtZc.js">
     <link rel="modulepreload" crossorigin href="./assets/vendor-CV1S_bb1.js">
-    <link rel="stylesheet" crossorigin href="./assets/index-CcuBE3d-.css">
+    <link rel="stylesheet" crossorigin href="./assets/index-Kaka9dZL.css">
   </head>
   <body>
+    <div id="native-boot" aria-hidden="true">
+      <div class="native-boot-mark">
+        <div class="native-boot-pulse"></div>
+        <div class="native-boot-word">Anonymizer</div>
+      </div>
+    </div>
     <div id="root"></div>
   </body>
 </html>
