@@ -106,7 +106,7 @@
     "browser-image-compression": "^2.0.2",
     "file-saver": "^2.0.5",
     "imagetracerjs": "^1.2.6",
-    "jspdf": "^2.5.2",
+    "jspdf": "^4.2.1",
     "jszip": "^3.10.1",
     "mp4-muxer": "^5.2.2",
     "onnxruntime-web": "^1.25.1",
