@@ -14,7 +14,6 @@ export const AUDIO_EXTENSIONS_SET = new Set(['mp3', 'wav', 'm4a', 'aac', 'ogg', 
 export const DOCUMENT_EXTENSIONS_SET = new Set(['pdf', 'txt', 'md', 'markdown'])
 
 export const MAX_FILE_SIZE = 50 * 1024 * 1024 // 50 MB per image
-export const MAX_VIDEO_FILE_SIZE = 500 * 1024 * 1024 // 500 MB per video
 export const MAX_AUDIO_FILE_SIZE = 100 * 1024 * 1024 // 100 MB per audio
 export const MAX_DOCUMENT_FILE_SIZE = 100 * 1024 * 1024 // 100 MB per document
 export const MAX_TOTAL_PHOTOS = 2000
@@ -40,9 +39,9 @@ export const isDocumentFileCheck = (f: File) => {
 export const isMediaFile = (f: File) => {
   if (f.size === 0) return false
   const ext = f.name.split('.').pop()?.toLowerCase() ?? ''
-  if (f.type?.startsWith('video/') || VIDEO_EXTENSIONS_SET.has(ext)) {
-    return f.size <= MAX_VIDEO_FILE_SIZE
-  }
+  // Video sources remain File-backed; encoded output and work data spool to disk.
+  // Audio-only WebM must retain its separate decode-in-memory size guard.
+  if (isVideoFileCheck(f)) return true
   if (DOCUMENT_EXTENSIONS_SET.has(ext) || DOCUMENT_MIME.has(f.type)) {
     return f.size <= MAX_DOCUMENT_FILE_SIZE
   }

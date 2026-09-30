@@ -76,4 +76,5 @@ export const EFFECT_ICONS: Record<AnonymizeEffectId, string> = {
   thermal:      'bubble_chart',
   ascii:        'data_array',
   'custom-image': 'image',
+  prism: 'diamond',
 }

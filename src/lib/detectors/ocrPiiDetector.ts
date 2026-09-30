@@ -64,7 +64,7 @@ async function getWorker(): Promise<TessWorker | null> {
     } catch (err) {
       console.error('OCR worker init failed', err)
       workerPromise = null
-      return null
+      throw new Error('Sensitive-text engine could not load.')
     }
   })()
   return workerPromise
@@ -341,7 +341,7 @@ export async function detectPiiViaOcr(
   minConfidence = 0.5,
 ): Promise<PrivacyDetection[]> {
   const worker = await getWorker()
-  if (!worker) return []
+  if (!worker) throw new Error('Sensitive-text engine is unavailable.')
 
   report({ phase: 'recognize', label: 'Scanning text…' })
   const work = resizeForOcr(canvas)
@@ -349,9 +349,8 @@ export async function detectPiiViaOcr(
   try {
     const result = await worker.recognize(work, undefined, { text: true, blocks: true })
     data = result.data
-  } catch (err) {
-    console.error('OCR recognize failed', err)
-    return []
+  } catch {
+    throw new Error('Sensitive-text recognition failed. Existing masks were kept.')
   }
 
   const words = flattenWords(data)

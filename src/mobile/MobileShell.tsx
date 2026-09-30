@@ -1,4 +1,4 @@
-import { useCallback, useEffect, type ReactNode } from 'react'
+import { lazy, useCallback, useEffect, type ReactNode } from 'react'
 import { useMobileBindings } from './useMobileBindings'
 import { MobileBatchDrawer } from './drawers/MobileBatchDrawer'
 import { MobileGalleryDrawer } from './drawers/MobileGalleryDrawer'
@@ -6,7 +6,7 @@ import { MobileBottomToolbar } from './MobileBottomToolbar'
 import { MobileEditorLayout } from './MobileEditorLayout'
 import { MobileEditorToolbar } from './MobileEditorToolbar'
 import { MobileHomeDefault } from './MobileHomeDefault'
-import { MobileLiveMode } from './MobileLiveMode'
+const MobileLiveMode = lazy(() => import('./MobileLiveMode').then((module) => ({ default: module.MobileLiveMode })))
 import { MobileToolDrawers } from './MobileToolDrawers'
 import { MobileTopBar } from './MobileTopBar'
 import { isBatchProcessablePhoto } from '../lib/batch-normalize'
@@ -23,6 +23,7 @@ interface MobileShellProps {
   embedEditor?: boolean
   documentViewer?: ReactNode
   audioViewer?: ReactNode
+  statusNotice?: ReactNode
 }
 
 export function MobileShell({
@@ -34,6 +35,7 @@ export function MobileShell({
   embedEditor = false,
   documentViewer,
   audioViewer,
+  statusNotice,
 }: MobileShellProps) {
   const b = useMobileBindings()
   const showHome = b.photos.length === 0 && b.mobileMode !== 'live'
@@ -160,6 +162,7 @@ export function MobileShell({
     return (
       <div className="mobile-shell mobile-shell-live">
         <MobileLiveMode
+          statusNotice={statusNotice}
           onOpenLibrary={openGallery}
           onOpenCapturedPhoto={b.openPhotoInEditor}
           onExitToWorkspace={() => b.exitLiveToWorkspace()}
@@ -188,7 +191,9 @@ export function MobileShell({
       <MobileEditorLayout
         chrome={(
           <MobileTopBar
+            statusNotice={statusNotice}
             onAbout={() => b.setAboutOpen(true)}
+            onFeedback={() => b.setFeedbackOpen(true)}
             showGalleryButton
             onOpenGallery={openGallery}
           />
@@ -207,7 +212,9 @@ export function MobileShell({
       <MobileEditorLayout
         chrome={(
           <MobileTopBar
+            statusNotice={statusNotice}
             onAbout={() => b.setAboutOpen(true)}
+            onFeedback={() => b.setFeedbackOpen(true)}
             showGalleryButton
             onOpenGallery={openGallery}
             showLiveButton
@@ -231,7 +238,9 @@ export function MobileShell({
         chrome={(
           <>
             <MobileTopBar
+              statusNotice={statusNotice}
               onAbout={() => b.setAboutOpen(true)}
+              onFeedback={() => b.setFeedbackOpen(true)}
               showGalleryButton
               onOpenGallery={openGallery}
               showLiveButton

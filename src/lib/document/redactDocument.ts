@@ -3,7 +3,6 @@
  * exports bake destructive redaction (blackout/blur/pixelate) onto rasterized
  * pages and flatten them so no original text layer survives.
  */
-import JSZip from 'jszip'
 import type { DocPage, ParsedDocument, PiiSpan, RedactionEffect } from './documentTypes'
 import { tokenForType } from './piiDetectors'
 
@@ -156,7 +155,7 @@ export async function exportPagesZip(
   baseName: string,
 ): Promise<Blob> {
   if (!parsed.pages || parsed.pages.length === 0) throw new Error('no pages to export')
-  const zip = new JSZip()
+  const zip = new (await import('jszip')).default()
   const stem = baseName.replace(/\.[^.]+$/, '')
   for (const page of parsed.pages) {
     const canvas = await renderRedactedPageCanvas(page, spans, effect)

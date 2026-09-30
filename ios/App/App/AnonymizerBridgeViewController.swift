@@ -57,33 +57,76 @@ class NativeMediaLibraryPlugin: CAPPlugin, CAPBridgedPlugin {
     let identifier = "NativeMediaLibrary"
     let jsName = "NativeMediaLibrary"
     let pluginMethods: [CAPPluginMethod] = [
-        CAPPluginMethod(name: "saveMedia", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "beginExport", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "appendExport", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "finishExport", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "cancelExport", returnType: CAPPluginReturnPromise)
     ]
+    private struct Export { let url: URL; let name: String; let type: String }
+    private var exports: [String: Export] = [:]
+    private let exportRoot = FileManager.default.temporaryDirectory.appendingPathComponent("anonymizer-exports", isDirectory: true)
 
-    @objc func saveMedia(_ call: CAPPluginCall) {
-        guard let rawData = call.getString("data"), !rawData.isEmpty else {
-            call.reject("Missing media data.")
-            return
-        }
-        let mediaType = call.getString("mediaType") ?? "photo"
-        guard mediaType == "photo" || mediaType == "video" else {
-            call.reject("Unsupported media type.")
-            return
-        }
-        let mimeType = call.getString("mimeType") ?? (mediaType == "video" ? "video/mp4" : "image/jpeg")
-        let fileName = sanitizeFileName(call.getString("fileName"), mimeType: mimeType, mediaType: mediaType)
-        let base64 = rawData.components(separatedBy: ",").last ?? rawData
-        guard let data = Data(base64Encoded: base64) else {
-            call.reject("Invalid media data.")
-            return
-        }
+    override func load() {
+        try? FileManager.default.removeItem(at: exportRoot)
+        try? FileManager.default.createDirectory(at: exportRoot, withIntermediateDirectories: true)
+    }
 
-        requestAddOnlyPhotoAccess { [weak self] allowed in
-            guard allowed else {
-                call.reject("Photo library permission was denied.")
-                return
+    @objc func beginExport(_ call: CAPPluginCall) {
+        let id = UUID().uuidString
+        let type = call.getString("mediaType") ?? "file"
+        let name = sanitizeFileName(call.getString("fileName"), mimeType: call.getString("mimeType") ?? "application/octet-stream", mediaType: type)
+        let dir = exportRoot.appendingPathComponent(id, isDirectory: true)
+        let url = dir.appendingPathComponent(name)
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try Data().write(to: url, options: .completeFileProtection)
+            exports[id] = Export(url: url, name: name, type: type)
+            call.resolve(["id": id])
+        } catch { call.reject("Could not prepare export: \(error.localizedDescription)") }
+    }
+
+    @objc func appendExport(_ call: CAPPluginCall) {
+        guard let id = call.getString("id"), let entry = exports[id],
+              let raw = call.getString("data"), raw.count <= 350000,
+              let data = Data(base64Encoded: raw) else { call.reject("Invalid export chunk."); return }
+        do {
+            let handle = try FileHandle(forWritingTo: entry.url)
+            defer { try? handle.close() }
+            try handle.seekToEnd()
+            try handle.write(contentsOf: data)
+            call.resolve()
+        } catch { call.reject("Could not write export: \(error.localizedDescription)") }
+    }
+
+    @objc func cancelExport(_ call: CAPPluginCall) {
+        if let id = call.getString("id"), let entry = exports.removeValue(forKey: id) {
+            try? FileManager.default.removeItem(at: entry.url.deletingLastPathComponent())
+        }
+        call.resolve()
+    }
+
+    @objc func finishExport(_ call: CAPPluginCall) {
+        guard let id = call.getString("id"), let entry = exports[id] else { call.reject("Export expired."); return }
+        if entry.type == "file" {
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self, let presenter = self.bridge?.viewController else { call.reject("Share sheet unavailable."); return }
+                let sheet = UIActivityViewController(activityItems: [entry.url], applicationActivities: nil)
+                if let popover = sheet.popoverPresentationController {
+                    popover.sourceView = presenter.view
+                    popover.sourceRect = CGRect(x: presenter.view.bounds.midX, y: presenter.view.bounds.midY, width: 1, height: 1)
+                }
+                sheet.completionWithItemsHandler = { _, completed, _, error in
+                    if let error = error { call.reject(error.localizedDescription) }
+                    else if !completed { call.reject("Export cancelled.") }
+                    else { call.resolve() }
+                }
+                presenter.present(sheet, animated: true)
             }
-            self?.writeAndSave(data: data, fileName: fileName, mediaType: mediaType, call: call)
+            return
+        }
+        requestAddOnlyPhotoAccess { [weak self] allowed in
+            guard allowed else { call.reject("Photo library permission was denied."); return }
+            self?.saveFile(entry: entry, call: call)
         }
     }
 
@@ -113,17 +156,10 @@ class NativeMediaLibraryPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
-    private func writeAndSave(data: Data, fileName: String, mediaType: String, call: CAPPluginCall) {
-        let tempURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString)
-            .appendingPathExtension((fileName as NSString).pathExtension)
-        do {
-            try data.write(to: tempURL, options: .atomic)
-        } catch {
-            call.reject("Could not prepare media for saving: \(error.localizedDescription)")
-            return
-        }
-
+    private func saveFile(entry: Export, call: CAPPluginCall) {
+        let tempURL = entry.url
+        let fileName = entry.name
+        let mediaType = entry.type
         let options = PHAssetResourceCreationOptions()
         options.originalFilename = fileName
         let resourceType: PHAssetResourceType = mediaType == "video" ? .video : .photo

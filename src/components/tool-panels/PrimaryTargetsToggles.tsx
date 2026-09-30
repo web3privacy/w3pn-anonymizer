@@ -87,7 +87,7 @@ export function PrimaryTargetsToggles({
   const doc = cat('document')
   if (doc) rows.push({
     key: 'document', icon: ICONS.document, label: doc.label,
-    enabled: doc.enabled, status: statusFor('document'),
+    enabled: doc.enabled, status: statusFor('document') ?? (modelStatus['yolo-privacy-custom'] === 'ready' ? null : 'Book-shaped objects only'),
     onToggle: (v) => onToggleCategory('document', v),
   })
 

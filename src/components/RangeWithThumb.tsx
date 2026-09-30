@@ -42,7 +42,7 @@ export function RangeWithThumb({
 
   return (
     <div
-      className={`range-with-thumb mobile-range-with-thumb${orientation === 'vertical' ? ' range-with-thumb--vertical' : ''}${changed ? ' is-modified' : ''}`}
+      className={`range-with-thumb mobile-range-with-thumb${orientation === 'vertical' ? ' range-with-thumb--vertical' : ''}${changed ? ' is-modified' : ''}${label.length > 6 ? ' range-with-thumb--long-value' : label.length > 3 ? ' range-with-thumb--wide-value' : ''}`}
       style={{
         '--mobile-range-pct': pct,
         '--range-fill-start': `${fillStart}%`,

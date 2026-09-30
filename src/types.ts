@@ -16,6 +16,7 @@ export type AnonymizeEffectId =
   | 'ascii'
   | 'zoom-blur'
   | 'custom-image'
+  | 'prism'
 
 export type CustomImageSource =
   | 'custom'
@@ -181,6 +182,7 @@ export interface Zone {
   label?: string
   confidence?: number
   sourceModel?: string
+  userModified?: boolean
   locked?: boolean
   hidden?: boolean
 }
@@ -193,6 +195,7 @@ export interface PhotoItem {
   previewUrl: string
   source: SourceType
   edited: boolean
+  privacyProcessed?: boolean
   fileHandle?: FileSystemFileHandle
   isVideo?: boolean
   videoDuration?: number

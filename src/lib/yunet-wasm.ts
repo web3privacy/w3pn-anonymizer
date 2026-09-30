@@ -9,7 +9,8 @@
  * Output: cls/obj/bbox/kps at strides 8, 16, 32
  */
 
-import * as ort from 'onnxruntime-web'
+import type * as Ort from 'onnxruntime-web/wasm'
+let ort: typeof Ort
 import type { FaceBox } from '../types'
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -22,7 +23,7 @@ const TOP_K = 5000
 
 // ── State ────────────────────────────────────────────────────────────────────
 
-let session: ort.InferenceSession | null = null
+let session: Ort.InferenceSession | null = null
 let initPromise: Promise<boolean> | null = null
 let inferenceTail: Promise<void> = Promise.resolve()
 
@@ -47,13 +48,16 @@ export function setYuNetLoadProgressCallback(cb: ((p: DetectorLoadProgress) => v
 
 const reportLoad = (p: DetectorLoadProgress) => onLoadProgress?.(p)
 
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<T>((_, reject) => {
-      setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
-    }),
-  ])
+function withTimeout<T extends { release(): Promise<void> }>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    let expired = false
+    const timer = setTimeout(() => { expired = true; reject(new Error(`${label} timed out`)) }, ms)
+    promise.then((result) => {
+      clearTimeout(timer)
+      if (expired) void result.release()
+      else resolve(result)
+    }, (error) => { clearTimeout(timer); reject(error) })
+  })
 }
 
 /** Fetch a URL while reporting byte progress; resolves to the downloaded bytes. */
@@ -61,7 +65,8 @@ async function fetchWithProgress(
   url: string,
   onChunk: (deltaBytes: number, totalForThisFile: number) => void,
 ): Promise<ArrayBuffer> {
-  const res = await fetch(url)
+  const res = await fetch(url, { signal: AbortSignal.timeout(30_000) })
+  if (!res.ok) throw new Error(`Model download failed: ${res.status}`)
   if (!res.ok || !res.body) {
     // Fall back to a plain fetch so init still proceeds even without streaming.
     return res.arrayBuffer()
@@ -97,89 +102,20 @@ export async function initYuNet(): Promise<boolean> {
   initPromise = (async () => {
     const base = new URL('.', window.location.href).href
     const modelUrl = `${base}models/face_detection_yunet_2023mar.onnx`
-    const wasmUrl = `${base}onnx/ort-wasm-simd-threaded.wasm`
+    ort = await import('onnxruntime-web/wasm')
     ort.env.wasm.wasmPaths = `${base}onnx/`
-
-    // Pre-fetch model + WASM with combined byte progress. ORT reuses the cached
-    // WASM; session creation / compile is the remaining init step (no bytes).
-    let modelBuffer: ArrayBuffer | null = null
-    let modelLoaded = 0
-    let modelTotal = 0
-    let wasmLoaded = 0
-    let wasmTotal = 0
-    let lastReportedLoaded = 0
-
-    const reportDownload = () => {
-      const total = modelTotal + wasmTotal
-      const loaded = modelLoaded + wasmLoaded
-      lastReportedLoaded = Math.max(lastReportedLoaded, loaded)
-      reportLoad({ loaded: lastReportedLoaded, total: total > 0 ? total : 0, phase: 'download' })
-    }
-
-    try {
-      modelBuffer = await fetchWithProgress(modelUrl, (delta, fileTotal) => {
-        modelLoaded += delta
-        if (fileTotal > 0) modelTotal = fileTotal
-        reportDownload()
-      })
-    } catch {
-      modelBuffer = null
-    }
-
-    try {
-      await fetchWithProgress(wasmUrl, (delta, fileTotal) => {
-        wasmLoaded += delta
-        if (fileTotal > 0) wasmTotal = fileTotal
-        reportDownload()
-      })
-    } catch {
-      // ORT will attempt its own fetch if the warm-cache prefetch fails.
-    }
-
-    const combinedTotal = modelTotal + wasmTotal
-    const combinedLoaded = modelLoaded + wasmLoaded
-    lastReportedLoaded = Math.max(lastReportedLoaded, combinedLoaded)
-    reportLoad({
-      loaded: combinedTotal > 0 ? lastReportedLoaded : lastReportedLoaded,
-      total: combinedTotal > 0 ? combinedTotal : 1,
-      phase: 'init',
-    })
-
-    // Single-thread WASM: reliable and fast to initialize (no SharedArrayBuffer /
-    // cross-origin isolation requirement, no worker-spawn step that can hang).
-    // Inference stays fast because we detect on small frames; live mode further
-    // shrinks the detect resolution. A timeout guards against a stuck compile.
     ort.env.wasm.numThreads = 1
-
-    // Prefer the WebGPU execution provider when the browser exposes it — this
-    // runs inference on the GPU entirely locally (no data leaves the browser),
-    // a big win on the heavy thorough/video detection paths. WASM remains the
-    // fallback if WebGPU is unavailable or session creation fails (mobile Safari
-    // support is still uneven). The JSEP wasm needed for WebGPU ships in onnx/.
-    const modelSource: Uint8Array | string = modelBuffer ? new Uint8Array(modelBuffer) : modelUrl
-    const webgpuAvailable = typeof navigator !== 'undefined' && 'gpu' in navigator
-
-    const createSession = async (): Promise<ort.InferenceSession> => {
-      if (webgpuAvailable) {
-        try {
-          if (import.meta.env.DEV) console.log('[yunet-wasm] Trying WebGPU EP…')
-          return await withTimeout(
-            ort.InferenceSession.create(modelSource as Uint8Array, {
-              executionProviders: ['webgpu', 'wasm'],
-            }),
-            30000,
-            'ONNX session (webgpu)',
-          )
-        } catch (err) {
-          console.warn('[yunet-wasm] WebGPU EP unavailable, falling back to WASM:', err)
-        }
-      }
-      return withTimeout(
-        ort.InferenceSession.create(modelSource as Uint8Array, { executionProviders: ['wasm'] }),
-        30000,
-        'ONNX session (wasm)',
-      )
-    }
+    let loaded = 0
+    const modelBuffer = await fetchWithProgress(modelUrl, (delta, total) => {
+      loaded += delta
+      reportLoad({ loaded, total, phase: 'download' })
+    })
+    const combinedTotal = loaded
+    reportLoad({ loaded, total: loaded, phase: 'init' })
+    const createSession = () => withTimeout(
+      ort.InferenceSession.create(new Uint8Array(modelBuffer), { executionProviders: ['wasm'] }),
+      30000, 'ONNX session (wasm)',
+    )
 
     try {
       if (import.meta.env.DEV) {
@@ -209,7 +145,7 @@ export async function initYuNet(): Promise<boolean> {
     }
   })()
 
-  return initPromise
+  try { return await initPromise } finally { initPromise = null }
 }
 
 export function isYuNetReady(): boolean {
@@ -217,7 +153,9 @@ export function isYuNetReady(): boolean {
 }
 
 export function disposeYuNet(): void {
-  session?.release()
+  if (initPromise) return
+  const previous = session
+  void inferenceTail.then(() => previous?.release())
   session = null
   initPromise = null
 }

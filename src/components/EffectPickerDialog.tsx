@@ -43,6 +43,8 @@ export function EffectPickerDialog(props: EffectPickerDialogProps) {
   const [offset, setOffset] = useState({ x: 0, y: 0 })
   const offsetRef = useRef(offset)
   const dragCleanupRef = useRef<(() => void) | null>(null)
+  const closeRef = useRef(onClose)
+  closeRef.current = onClose
   offsetRef.current = offset
 
   useEffect(() => {
@@ -50,6 +52,20 @@ export function EffectPickerDialog(props: EffectPickerDialogProps) {
   }, [kind, open])
 
   useEffect(() => () => dragCleanupRef.current?.(), [])
+
+  useEffect(() => {
+    if (!open) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return
+      // The nested image-library menu handles its own first Escape.
+      if (document.querySelector('.effect-picker-dialog .mobile-custom-image-source-sheet')) return
+      event.preventDefault()
+      dragCleanupRef.current?.()
+      closeRef.current()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [open])
 
   const startDrag = (event: ReactMouseEvent<HTMLElement>) => {
     if (window.innerWidth <= 768 || event.button !== 0 || (event.target as HTMLElement).closest('button')) return

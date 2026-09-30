@@ -103,7 +103,7 @@ export const initializeDetector = async (): Promise<ExtendedDetectorStatus> => {
     return statusCache
   })()
 
-  return initPromise
+  try { return await initPromise } finally { initPromise = null }
 }
 
 /** Start detector/model download as early as possible (safe to call multiple times). */
@@ -114,6 +114,7 @@ export function preloadDetector(): void {
 export const getDetectorStatus = (): ExtendedDetectorStatus | null => statusCache
 
 export const resetDetectorStatus = (): void => {
+  if (initPromise) return
   statusCache = null
   initPromise = null
   disposeYuNet()
@@ -207,5 +208,5 @@ export const detectFaces = async (
     return await detectViaLocalYuNet(canvas, robust, confidence)
   }
 
-  return []
+  throw new Error('Face detector is unavailable. Retry loading the local model before export.')
 }

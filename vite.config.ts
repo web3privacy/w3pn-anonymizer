@@ -27,11 +27,9 @@ export default defineConfig({
     rolldownOptions: {
       output: {
         manualChunks(id) {
+          if (id.includes('vite/preload-helper')) return 'preload'
           if (id.includes('node_modules/react/') || id.includes('node_modules/react-dom/')) {
             return 'vendor'
-          }
-          if (id.includes('node_modules/onnxruntime-web')) {
-            return 'onnx'
           }
           if (id.includes('node_modules/jszip')) {
             return 'zip'

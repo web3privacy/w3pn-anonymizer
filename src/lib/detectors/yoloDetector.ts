@@ -61,6 +61,7 @@ export function getYoloModelStatus(modelId: string): ModelAvailabilityStatus {
 export async function probeYoloModelAvailability(modelId: string): Promise<ModelAvailabilityStatus> {
   const existing = cache.get(modelId)
   if (existing?.session && existing.metadata) return 'ready'
+  if (existing?.status === 'loading') return 'loading'
 
   const metaPath = METADATA_PATHS[modelId]
   const modelPath = MODEL_PATHS[modelId]
@@ -111,7 +112,16 @@ async function loadMetadata(modelId: string): Promise<YoloModelMetadata | null> 
   }
 }
 
-async function getOrCreateSession(modelId: string): Promise<{
+const loadingSessions = new Map<string, ReturnType<typeof createModelSession>>()
+function getOrCreateSession(modelId: string): ReturnType<typeof createModelSession> {
+  const running = loadingSessions.get(modelId)
+  if (running) return running
+  const pending = createModelSession(modelId).finally(() => loadingSessions.delete(modelId))
+  loadingSessions.set(modelId, pending)
+  return pending
+}
+
+async function createModelSession(modelId: string): Promise<{
   session: import('onnxruntime-web').InferenceSession | null
   metadata: YoloModelMetadata | null
 }> {
@@ -139,7 +149,7 @@ async function getOrCreateSession(modelId: string): Promise<{
   }
 
   try {
-    const ort = await import('onnxruntime-web')
+    const ort = await import('onnxruntime-web/wasm')
     ort.env.wasm.wasmPaths = '/onnx/'
     const session = await ort.InferenceSession.create(MODEL_PATHS[modelId]!, {
       executionProviders: ['wasm'],
@@ -248,10 +258,10 @@ async function runYoloModel(
     config.filter((c) => c.enabled).map((c) => c.type),
   )
   const { session, metadata } = await getOrCreateSession(modelId)
-  if (!session || !metadata || !input.canvas) return []
+  if (!session || !metadata || !input.canvas) throw new Error(`Could not initialize ${modelId}.`)
 
   const { canvas: lbCanvas, meta } = letterboxCanvas(input.canvas, metadata.inputSize)
-  const ort = await import('onnxruntime-web')
+  const ort = await import('onnxruntime-web/wasm')
   const tensorData = new Float32Array(3 * metadata.inputSize * metadata.inputSize)
   const ctx = lbCanvas.getContext('2d')!
   const img = ctx.getImageData(0, 0, metadata.inputSize, metadata.inputSize)
@@ -318,7 +328,12 @@ export const yoloDetector: PrivacyDetector = {
     for (const modelId of modelIds) {
       const status = getYoloModelStatus(modelId)
       if (status === 'missing') {
-        warnings.push(`Model ${modelId} is not bundled yet (coming soon).`)
+        const supportedByReadyModel = (type: PrivacyDetectionType) => Object.entries(MODEL_SUPPORTED_TYPES)
+          .some(([id, types]) => id !== modelId && getYoloModelStatus(id) === 'ready' && types.includes(type))
+        const missingTypes = enabledTypes.filter((type) => MODEL_SUPPORTED_TYPES[modelId]?.includes(type) && !supportedByReadyModel(type))
+        const missingClasses = [...enabledClasses].filter((name) => classesForModel(modelId).some((item) => item.className === name)
+          && !Object.keys(MODEL_SUPPORTED_TYPES).some((id) => id !== modelId && getYoloModelStatus(id) === 'ready' && classesForModel(id).some((item) => item.className === name)))
+        if (missingTypes.length || missingClasses.length) warnings.push(`Unavailable detection targets: ${[...missingTypes, ...missingClasses].join(', ')}.`)
         continue
       }
       const t0 = performance.now()

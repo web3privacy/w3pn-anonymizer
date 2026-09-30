@@ -1,3 +1,5 @@
+import { MediaPlaceholder } from '../../components/MediaPlaceholder'
+import { SelectionMark } from '../../components/SelectionMark'
 import { useEffect, useRef, useState } from 'react'
 import { Icon } from '../../components/Icon'
 import { isBatchProcessablePhoto } from '../../lib/batch-normalize'
@@ -200,16 +202,19 @@ export function MobileGalleryDrawer({
                     <button
                       type="button"
                       className="mobile-gallery-item"
+                      aria-pressed={selected}
                       onClick={() => handleTap(p.id)}
                     >
                       <div className="mobile-gallery-item-thumb">
-                        <img src={p.previewUrl} alt="" loading="lazy" />
+                        {p.isAudio || p.isDocument
+                          ? <MediaPlaceholder kind={p.isAudio ? 'audio' : p.documentKind === 'pdf' ? 'pdf' : 'txt'} />
+                          : <img src={p.previewUrl} alt="" loading="lazy" />}
                         {p.isVideo && <span className="mobile-gallery-video-badge">VIDEO</span>}
                         {p.isAudio && <span className="mobile-gallery-video-badge">AUDIO</span>}
                         {p.isDocument && <span className="mobile-gallery-video-badge">{(p.documentKind ?? 'DOC').toUpperCase()}</span>}
                         {batchSelectMode && canBatchProcess && (
                           <span className={`mobile-gallery-check${selected ? ' checked' : ''}`} aria-hidden="true">
-                            {selected ? <Icon name="check" size={14} /> : null}
+                            <SelectionMark checked={selected} />
                           </span>
                         )}
                       </div>
@@ -241,13 +246,16 @@ export function MobileGalleryDrawer({
                     <button
                       type="button"
                       className="mobile-gallery-list-item"
+                      aria-pressed={selected}
                       onClick={() => handleTap(p.id)}
                     >
                       <div className="mobile-gallery-list-thumb">
-                        <img src={p.previewUrl} alt="" loading="lazy" />
+                        {p.isAudio || p.isDocument
+                          ? <MediaPlaceholder kind={p.isAudio ? 'audio' : p.documentKind === 'pdf' ? 'pdf' : 'txt'} />
+                          : <img src={p.previewUrl} alt="" loading="lazy" />}
                         {batchSelectMode && canBatchProcess && (
                           <span className={`mobile-gallery-check${selected ? ' checked' : ''}`} aria-hidden="true">
-                            {selected ? <Icon name="check" size={14} /> : null}
+                            <SelectionMark checked={selected} />
                           </span>
                         )}
                       </div>

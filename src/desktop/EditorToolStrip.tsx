@@ -1,5 +1,5 @@
 import type { Dispatch, RefObject, SetStateAction } from 'react'
-import { createPortal } from 'react-dom'
+import { ToolFlyout } from '../components/ToolFlyout'
 import { Icon } from '../components/Icon'
 import { AdjustToolPanel } from '../components/tool-panels/AdjustToolPanel'
 import { DistortToolPanel } from '../components/tool-panels/DistortToolPanel'
@@ -239,7 +239,7 @@ export function EditorToolStrip(props: EditorToolStripProps) {
           title={`Effect: ${selectedEffect} — click to change`}
           aria-label={`Effect: ${selectedEffect}`}
         >
-          <Icon name={EFFECT_ICONS[selectedEffect]} size={18} />
+          <Icon name={EFFECT_ICONS[selectedEffect]} size={20} />
         </button>
         <span className="ts-tooltip">Effect: {selectedEffect}</span>
       </div>
@@ -280,13 +280,8 @@ export function EditorToolStrip(props: EditorToolStripProps) {
         <span className="ts-tooltip">Brush</span>
       </div>
 
-      {faceFlyoutOpen && faceFlyoutAnchor && createPortal(
-        <div
-          className="ts-flyout-portal ts-flyout ts-flyout--wide"
-          style={{ position: 'fixed', top: faceFlyoutAnchor.top, left: faceFlyoutAnchor.left, zIndex: 9999 }}
-          onMouseDown={(e) => e.stopPropagation()}
-        >
-          <div className="ts-flyout-title">Face detection</div>
+      {faceFlyoutOpen && faceFlyoutAnchor && (
+        <ToolFlyout anchor={faceFlyoutAnchor} title="Face detection" wide onClose={() => setFaceFlyoutOpen(false)}>
           <FaceSettingsPanel
             detectionConfig={detectionConfig}
             modelStatus={modelStatus}
@@ -302,23 +297,17 @@ export function EditorToolStrip(props: EditorToolStripProps) {
             onSensitivityChange={setDetectSensitivity}
             faceOffset={detectFaceOffset}
             onFaceOffsetChange={setDetectFaceOffset}
-            facesEnabled={autoDetect}
-            onFacesToggle={(v) => { setAutoDetect(v); setShowBoxes(v) }}
+            facesEnabled={detectionConfig.find((c) => c.type === 'face')?.enabled ?? true}
+            onFacesToggle={(v) => { setCategoryEnabled('face', v); setAutoDetect(v); setShowBoxes(v) }}
             showBoxes={showBoxes}
             onShowBoxesChange={setShowBoxes}
             compact
           />
-        </div>,
-        document.body
+        </ToolFlyout>
       )}
 
-      {adjFlyoutOpen && adjFlyoutAnchor && createPortal(
-        <div
-          className="ts-flyout-portal ts-flyout ts-flyout--wide"
-          style={{ position: 'fixed', top: adjFlyoutAnchor.top, left: adjFlyoutAnchor.left, zIndex: 9999 }}
-          onMouseDown={(e) => e.stopPropagation()}
-        >
-          <div className="ts-flyout-title">Adjust</div>
+      {adjFlyoutOpen && adjFlyoutAnchor && (
+        <ToolFlyout anchor={adjFlyoutAnchor} title="Adjust" wide onClose={() => setAdjFlyoutOpen(false)}>
           <AdjustToolPanel
             colorAdj={colorAdj}
             onChange={setColorAdj}
@@ -329,17 +318,11 @@ export function EditorToolStrip(props: EditorToolStripProps) {
             showApply
             applyDisabled={!activePhoto}
           />
-        </div>,
-        document.body
+        </ToolFlyout>
       )}
 
-      {transformFlyoutOpen && transformFlyoutAnchor && createPortal(
-        <div
-          className="ts-flyout-portal ts-flyout ts-flyout--wide"
-          style={{ position: 'fixed', top: transformFlyoutAnchor.top, left: transformFlyoutAnchor.left, zIndex: 9999 }}
-          onMouseDown={(e) => e.stopPropagation()}
-        >
-          <div className="ts-flyout-title">Distort</div>
+      {transformFlyoutOpen && transformFlyoutAnchor && (
+        <ToolFlyout anchor={transformFlyoutAnchor} title="Distort" wide onClose={() => setTransformFlyoutOpen(false)}>
           <DistortToolPanel
             enabledDistorts={enabledDistorts}
             toggleDistortEffect={toggleDistortEffect}
@@ -354,8 +337,7 @@ export function EditorToolStrip(props: EditorToolStripProps) {
             canApply={Boolean(activePhoto && enabledDistorts.length > 0)}
             multiExpand
           />
-        </div>,
-        document.body
+        </ToolFlyout>
       )}
 
       <div className="ts-sep" />
@@ -421,13 +403,8 @@ export function EditorToolStrip(props: EditorToolStripProps) {
         <span className="ts-tooltip">Transform</span>
       </div>
 
-      {effectFlyoutOpen && effectFlyoutAnchor && createPortal(
-        <div
-          className="ts-flyout-portal ts-flyout"
-          style={{ position: 'fixed', top: effectFlyoutAnchor.top, left: effectFlyoutAnchor.left, zIndex: 9999 }}
-          onMouseDown={(e) => e.stopPropagation()}
-        >
-          <div className="ts-flyout-title">Choose effect</div>
+      {effectFlyoutOpen && effectFlyoutAnchor && (
+        <ToolFlyout anchor={effectFlyoutAnchor} title="Choose effect" onClose={() => setEffectFlyoutOpen(false)}>
           <div className="ts-effect-grid">
             {EFFECTS.map((ef) => (
               <button
@@ -453,8 +430,7 @@ export function EditorToolStrip(props: EditorToolStripProps) {
               </button>
             ))}
           </div>
-        </div>,
-        document.body
+        </ToolFlyout>
       )}
 
       <div className="ts-sep" />
@@ -473,7 +449,7 @@ export function EditorToolStrip(props: EditorToolStripProps) {
           />
         </div>
         <div className="ts-slider-group">
-          <span className="ts-slider-label">{getMobileStrengthLabel(selectedEffect)}</span>
+          <span className="ts-slider-label">{isVideoMode ? getMobileStrengthLabel(selectedEffect) : 'BRUSH'}</span>
           <RangeWithThumb
             orientation="vertical"
             min={strengthMin}

@@ -5,7 +5,6 @@ import {
   fmtBytes,
   makeZipSafeName,
   MAX_FILE_SIZE,
-  MAX_VIDEO_FILE_SIZE,
 } from './media-files'
 
 const file = (name: string, type: string, size: number): File => {
@@ -25,9 +24,12 @@ describe('isMediaFile', () => {
   it('rejects images above MAX_FILE_SIZE', () => {
     expect(isMediaFile(file('a.png', 'image/png', MAX_FILE_SIZE + 1))).toBe(false)
   })
-  it('accepts videos up to MAX_VIDEO_FILE_SIZE', () => {
-    expect(isMediaFile(file('a.mp4', 'video/mp4', MAX_VIDEO_FILE_SIZE))).toBe(true)
-    expect(isMediaFile(file('a.mp4', 'video/mp4', MAX_VIDEO_FILE_SIZE + 1))).toBe(false)
+  it('accepts file-backed videos beyond the old 500 MiB input cap', () => {
+    expect(isMediaFile(file('a.mp4', 'video/mp4', 2 * 1024 ** 3))).toBe(true)
+    expect(isMediaFile(file('a.webm', '', 2 * 1024 ** 3))).toBe(true)
+  })
+  it('preserves the separate audio memory guard for audio-only WebM', () => {
+    expect(isMediaFile(file('a.webm', 'audio/webm', 200 * 1024 ** 2))).toBe(false)
   })
   it('rejects unknown extensions', () => {
     expect(isMediaFile(file('a.exe', '', 1000))).toBe(false)

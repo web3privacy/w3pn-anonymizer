@@ -64,10 +64,10 @@ async function testViewport(browser, vp) {
     const aboutBtn = page.locator('button:has-text("What is this app"), button:has-text("ABOUT"), .mobile-home-v2-about-link, .desktop-home-v2-about-link').first()
     if (await aboutBtn.count()) {
       await aboutBtn.click()
-      await page.waitForSelector('.mobile-about', { timeout: 5000 })
+      await page.getByRole('dialog', { name: 'What is this app', exact: true }).waitFor({ timeout: 5000 })
       pass(`${vp.name}: about opens`)
-      await page.locator('.mobile-about-close').click()
-      await page.waitForSelector('.mobile-about', { state: 'hidden', timeout: 5000 })
+      await page.getByRole('dialog', { name: 'What is this app', exact: true }).getByRole('button', { name: 'Close', exact: true }).click()
+      await page.getByRole('dialog', { name: 'What is this app', exact: true }).waitFor({ state: 'hidden', timeout: 5000 })
       pass(`${vp.name}: about closes`)
     } else {
       fail(`${vp.name}: about link not found`)
@@ -98,7 +98,7 @@ async function testViewport(browser, vp) {
     if (badLocal.length) fail(`${vp.name}: unexpected localStorage keys: ${badLocal.join(', ')}`)
     else pass(`${vp.name}: localStorage OK (${storage.local.join(', ') || 'empty'})`)
 
-    const externalHosts = [...new Set(requests)].filter((h) => !h.includes('127.0.0.1') && !h.includes('localhost'))
+    const externalHosts = [...new Set(requests)].filter((h) => h !== new URL(BASE).host)
     if (externalHosts.length) fail(`${vp.name}: external hosts: ${externalHosts.join(', ')}`)
     else pass(`${vp.name}: no external network hosts`)
 
@@ -142,6 +142,38 @@ async function testAssetsAndHeaders(browser) {
     fail(`assets/headers: ${err instanceof Error ? err.message : String(err)}`)
   } finally {
     await page.close()
+  }
+}
+
+async function testDemoFaceDetection(browser) {
+  console.log('\n[demo face detection]')
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } })
+  const page = await context.newPage()
+  const consoleErrors = []
+  page.on('console', (msg) => { if (msg.type() === 'error') consoleErrors.push(msg.text()) })
+
+  try {
+    await waitForAppReady(page)
+    await page.getByRole('button', { name: /LOAD DEMO/i }).click()
+    await page.locator('.photo-item').first().waitFor({ timeout: 30000 })
+    await page.waitForFunction(() => {
+      const count = document.querySelector('.ts-face-count-inline')?.textContent
+      return Number(count) > 0
+    }, undefined, { timeout: 120000 })
+
+    const firstFaces = Number(await page.locator('.ts-face-count-inline').textContent())
+    const visibleBoxes = await page.locator('.zone-overlay-hit').count()
+    if (firstFaces > 0 && visibleBoxes > 0) {
+      pass(`demo: automatic detection shows ${firstFaces} face(s) and ${visibleBoxes} box(es)`)
+    } else {
+      fail(`demo: expected visible automatic detections (faces=${firstFaces}, boxes=${visibleBoxes})`)
+    }
+    if (consoleErrors.length) fail(`demo: console errors: ${consoleErrors.slice(0, 3).join(' | ')}`)
+    else pass('demo: no console errors during detector initialization')
+  } catch (err) {
+    fail(`demo detection: ${err instanceof Error ? err.message : String(err)}`)
+  } finally {
+    await context.close()
   }
 }
 
@@ -379,6 +411,7 @@ async function main() {
   await testCustomImagePresetAssets(browser)
   await testLiveCamera(browser)
   await testAssetsAndHeaders(browser)
+  await testDemoFaceDetection(browser)
   await testProductionMetadata(browser)
   await browser.close()
 

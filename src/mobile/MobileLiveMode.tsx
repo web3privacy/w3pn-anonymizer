@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { Zone } from '../types'
 import { applyLiveTrackSettings, readLiveTrackCapabilities } from '../lib/live-camera-controls'
 import { captureLivePhotoBlob, startLiveCameraLoop, type LiveCameraOpts, type LiveZoneInfo } from '../lib/live-camera'
@@ -25,6 +25,7 @@ const LIVE_PREVIEW_PANELS: ReadonlySet<MobilePanel> = new Set([
 ])
 
 interface MobileLiveModeProps {
+  statusNotice?: ReactNode
   onOpenLibrary: () => void
   onExitToWorkspace: () => void
   onFallbackUpload: () => void
@@ -33,6 +34,7 @@ interface MobileLiveModeProps {
 }
 
 export function MobileLiveMode({
+  statusNotice,
   onOpenLibrary,
   onExitToWorkspace,
   onFallbackUpload,
@@ -423,8 +425,10 @@ export function MobileLiveMode({
 
   const topBar = (
     <MobileTopBar
+      statusNotice={statusNotice}
       variant="live"
       onAbout={handleAbout}
+      onFeedback={() => b.setFeedbackOpen(true)}
       showGalleryButton
       onOpenGallery={handleOpenLibrary}
       onClose={handleExit}

@@ -24,13 +24,13 @@
     "desktop:linux": "npm run build && electron-builder --linux",
     "native:sync": "npm run build && node scripts/sync-native-capacitor.mjs",
     "native:doctor": "node scripts/run-native-command.mjs doctor",
-    "ios:sync": "npm run native:sync",
+    "ios:sync": "npm run build && node scripts/sync-native-capacitor.mjs ios",
     "ios:build:sim": "npm run ios:sync && node scripts/run-native-command.mjs ios-simulator",
     "ios:build:device": "npm run ios:sync && node scripts/run-native-command.mjs ios-device",
     "ios:debug:ipa": "npm run ios:sync && node scripts/run-native-command.mjs ios-debug-ipa",
     "ios:open": "open ios/App/App.xcodeproj",
     "ios:run": "npm run ios:sync && open ios/App/App.xcodeproj",
-    "android:sync": "npm run native:sync",
+    "android:sync": "npm run build && node scripts/sync-native-capacitor.mjs android",
     "android:open": "open -a \"Android Studio\" android",
     "android:debug": "npm run android:sync && node scripts/run-native-command.mjs android-debug",
     "icons:download": "node scripts/download-preset-icons.mjs --count=100",
@@ -44,7 +44,8 @@
     "smoke:gl": "node scripts/gl-parity-e2e.mjs",
     "smoke:editor": "node scripts/editor-e2e.mjs",
     "smoke:visual": "node scripts/visual-e2e.mjs",
-    "release:check": "npm run lint && npm run build && npm run smoke && npm run release:audit"
+    "release:check": "npm run lint && npm run build && npm run smoke && npm run release:audit",
+    "test:privacy-browser": "node scripts/privacy-e2e.mjs"
   },
   "build": {
     "appId": "info.web3privacy.anonymizer",
@@ -54,10 +55,7 @@
     },
     "files": [
       "dist/**/*",
-      "electron/**/*",
-      "public/fonts/**/*",
-      "public/models/**/*",
-      "public/vendor/**/*"
+      "electron/**/*"
     ],
     "mac": {
       "category": "public.app-category.photography",
@@ -106,7 +104,7 @@
     "browser-image-compression": "^2.0.2",
     "file-saver": "^2.0.5",
     "imagetracerjs": "^1.2.6",
-    "jspdf": "^2.5.2",
+    "jspdf": "^4.2.1",
     "jszip": "^3.10.1",
     "mp4-muxer": "^5.2.2",
     "onnxruntime-web": "^1.25.1",
@@ -139,7 +137,7 @@
     "eslint-plugin-react-refresh": "^0.4.5",
     "fs-extra": "^11.3.5",
     "playwright": "^1.60.0",
-    "sharp": "^0.34.5",
+    "sharp": "^0.35.5",
     "typescript": "^5.2.2",
     "vite": "^8.0.16",
     "vitest": "^4.1.8"

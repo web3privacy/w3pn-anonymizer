@@ -14,8 +14,15 @@
  * Privacy: everything runs locally in the browser's GPU; nothing leaves it.
  */
 
-let glState: { canvas: HTMLCanvasElement; gl: WebGL2RenderingContext } | null | undefined
+interface GLState {
+  canvas: HTMLCanvasElement
+  gl: WebGL2RenderingContext
+  imageTex: WebGLTexture
+  lutTex: WebGLTexture
+}
+let glState: GLState | null | undefined
 const programCache = new Map<string, WebGLProgram>()
+const uniformCache = new Map<WebGLProgram, Map<string, WebGLUniformLocation | null>>()
 
 // Fullscreen quad covering clip space; uv set so texture row 0 maps to the
 // top of the output (we use UNPACK_FLIP_Y so the uploaded canvas isn't mirrored).
@@ -37,7 +44,7 @@ void main() {
   gl_Position = vec4(a_pos, 0.0, 1.0);
 }`
 
-function initGL(): { canvas: HTMLCanvasElement; gl: WebGL2RenderingContext } | null {
+function initGL(): GLState | null {
   if (glState !== undefined) return glState
   try {
     if (typeof document === 'undefined') { glState = null; return null }
@@ -59,7 +66,18 @@ function initGL(): { canvas: HTMLCanvasElement; gl: WebGL2RenderingContext } | n
     gl.bufferData(gl.ARRAY_BUFFER, QUAD_VERTS, gl.STATIC_DRAW)
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true)
 
-    glState = { canvas, gl }
+    const imageTex = gl.createTexture()
+    const lutTex = gl.createTexture()
+    if (!imageTex || !lutTex) { glState = null; return null }
+    for (const texture of [imageTex, lutTex]) {
+      gl.bindTexture(gl.TEXTURE_2D, texture)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+      const filter = texture === imageTex ? gl.LINEAR : gl.NEAREST
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter)
+    }
+    glState = { canvas, gl, imageTex, lutTex }
     return glState
   } catch {
     glState = null
@@ -113,6 +131,13 @@ export interface ShaderUniforms {
   ints?: Record<string, number>
 }
 
+function uniformLocation(gl: WebGL2RenderingContext, program: WebGLProgram, name: string): WebGLUniformLocation | null {
+  let locations = uniformCache.get(program)
+  if (!locations) { locations = new Map(); uniformCache.set(program, locations) }
+  if (!locations.has(name)) locations.set(name, gl.getUniformLocation(program, name))
+  return locations.get(name) ?? null
+}
+
 /**
  * Run a fragment shader over `source`, returning the shared GL canvas with the
  * result rendered into it (size = width×height). Returns null if WebGL is
@@ -150,56 +175,43 @@ export function runShader(
     gl.vertexAttribPointer(1, 2, gl.FLOAT, false, stride, 2 * Float32Array.BYTES_PER_ELEMENT)
 
     // Source image → texture unit 0
-    const imageTex = gl.createTexture()
     gl.activeTexture(gl.TEXTURE0)
-    gl.bindTexture(gl.TEXTURE_2D, imageTex)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    gl.bindTexture(gl.TEXTURE_2D, state.imageTex)
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source)
-    const uImage = gl.getUniformLocation(program, 'u_image')
+    const uImage = uniformLocation(gl, program, 'u_image')
     if (uImage) gl.uniform1i(uImage, 0)
 
     // Optional LUT → texture unit 1
-    let lutTex: WebGLTexture | null = null
     if (uniforms.lut) {
-      lutTex = gl.createTexture()
       gl.activeTexture(gl.TEXTURE1)
-      gl.bindTexture(gl.TEXTURE_2D, lutTex)
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
+      gl.bindTexture(gl.TEXTURE_2D, state.lutTex)
       gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false)
       gl.texImage2D(
         gl.TEXTURE_2D, 0, gl.RGBA, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE,
         new Uint8Array(uniforms.lut.buffer, uniforms.lut.byteOffset, uniforms.lut.byteLength),
       )
       gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true)
-      const uLut = gl.getUniformLocation(program, 'u_lut')
+      const uLut = uniformLocation(gl, program, 'u_lut')
       if (uLut) gl.uniform1i(uLut, 1)
     }
 
     if (uniforms.floats) {
       for (const [name, value] of Object.entries(uniforms.floats)) {
-        const loc = gl.getUniformLocation(program, name)
+        const loc = uniformLocation(gl, program, name)
         if (loc) gl.uniform1f(loc, value)
       }
     }
     if (uniforms.ints) {
       for (const [name, value] of Object.entries(uniforms.ints)) {
-        const loc = gl.getUniformLocation(program, name)
+        const loc = uniformLocation(gl, program, name)
         if (loc) gl.uniform1i(loc, value)
       }
     }
 
     gl.drawArrays(gl.TRIANGLES, 0, 6)
 
-    // Clean up per-call textures (the program/buffer stay cached).
-    gl.deleteTexture(imageTex)
-    if (lutTex) gl.deleteTexture(lutTex)
-
+    // The same two textures serve every face/effect; hundreds of tiny masks
+    // should not create and destroy hundreds of GPU resources per slider tick.
     return canvas
   } catch {
     return null
@@ -208,6 +220,12 @@ export function runShader(
 
 /** Test/inspection hook: reset cached state (used by unit tests). */
 export function __resetGLForTests(): void {
+  if (glState) {
+    glState.gl.deleteTexture(glState.imageTex)
+    glState.gl.deleteTexture(glState.lutTex)
+    for (const program of programCache.values()) glState.gl.deleteProgram(program)
+  }
   glState = undefined
   programCache.clear()
+  uniformCache.clear()
 }

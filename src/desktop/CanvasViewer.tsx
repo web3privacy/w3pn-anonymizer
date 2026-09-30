@@ -1,5 +1,6 @@
 import {
   type DragEvent,
+  type ReactNode,
   type MutableRefObject,
   type PointerEvent as ReactPointerEvent,
   type RefObject,
@@ -65,7 +66,6 @@ export interface CanvasViewerProps {
   isDetecting: boolean
   detectionStep: string
   detectionModelProgress: DetectionModelProgress | null
-  localProcessingMs: number | null
   videoProcessing: boolean
   videoProgress: VideoProgress | null
   previewRendering: boolean
@@ -131,6 +131,7 @@ export interface CanvasViewerProps {
   onRemoveVideoPreviewFaceZone: (zoneId: string) => void
   onRestoreVideoPreviewFaceZone: (rect: NormalizedFaceRect) => void
   onSetVideoMaskDrawActive: (updater: (cur: boolean) => boolean) => void
+  videoAnalysisControls: ReactNode
   onProcessActiveVideo: () => void
   onOpenCurrentVideoFrameAsSnapshot: () => void
   onToggleVideoPlayback: () => void
@@ -170,7 +171,6 @@ export function CanvasViewer(props: CanvasViewerProps) {
     isDetecting,
     detectionStep,
     detectionModelProgress,
-    localProcessingMs,
     videoProcessing,
     videoProgress,
     previewRendering,
@@ -237,6 +237,7 @@ export function CanvasViewer(props: CanvasViewerProps) {
     onRestoreVideoPreviewFaceZone,
     onSetVideoMaskDrawActive,
     onProcessActiveVideo,
+    videoAnalysisControls,
     onOpenCurrentVideoFrameAsSnapshot,
     onToggleVideoPlayback,
     onSeekActiveVideo,
@@ -363,13 +364,6 @@ export function CanvasViewer(props: CanvasViewerProps) {
         )
         return isMobile ? createPortal(overlay, document.body) : overlay
       })()}
-      {/* Local processing proof badge */}
-      {!isDetecting && localProcessingMs != null && (
-        <div className="local-proof-badge">
-          <Icon name="verified_user" size={11} /> Processed locally in {localProcessingMs} ms
-        </div>
-      )}
-
       {/* Video processing — inline progress under action row (mobile-style) */}
       {/* Video player — shown instead of canvas when a video is selected */}
       {activePhoto?.isVideo && activeVideoUrl && (
@@ -542,7 +536,7 @@ export function CanvasViewer(props: CanvasViewerProps) {
                           {activeVideoFrameLabel}
                         </div>
                       )}
-                      {!activePhoto.edited && (
+                      {(
                         <button
                           type="button"
                           className={`mobile-canvas-secondary-btn${videoMaskDrawActive ? ' active' : ''}`}
@@ -643,6 +637,7 @@ export function CanvasViewer(props: CanvasViewerProps) {
                 {activePhoto.videoDuration != null ? ` / ${formatVideoTime(activePhoto.videoDuration)}` : ''}
               </span>
             </div>
+            {videoAnalysisControls}
             </>
             )}
           </div>

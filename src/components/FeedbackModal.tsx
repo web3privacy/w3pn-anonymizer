@@ -1,5 +1,6 @@
 import { type FormEvent, useEffect, useRef, useState } from 'react'
 import { Icon } from './Icon'
+import { useDialogFocusTrap } from '../mobile/useDialogFocusTrap'
 
 interface FeedbackModalProps {
   subject: string
@@ -24,18 +25,16 @@ export function FeedbackModal({
   onSent,
 }: FeedbackModalProps) {
   const messageRef = useRef<HTMLTextAreaElement | null>(null)
+  const formRef = useRef<HTMLFormElement | null>(null)
   const requestRef = useRef<AbortController | null>(null)
   const closeTimerRef = useRef<number | null>(null)
   const [sendState, setSendState] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle')
   const [errorMessage, setErrorMessage] = useState('')
   const canSend = message.trim().length > 1 && sendState !== 'sending'
+  useDialogFocusTrap(true, formRef, { initialFocusRef: messageRef, onClose })
 
   useEffect(() => {
-    const frame = requestAnimationFrame(() => {
-      messageRef.current?.focus({ preventScroll: true })
-    })
     return () => {
-      cancelAnimationFrame(frame)
       requestRef.current?.abort()
       if (closeTimerRef.current !== null) window.clearTimeout(closeTimerRef.current)
     }
@@ -86,6 +85,8 @@ export function FeedbackModal({
   return (
     <div className="feedback-backdrop" onClick={onClose}>
       <form
+        ref={formRef}
+        data-dialog-focus-trap="true"
         className="feedback-modal"
         onClick={(e) => e.stopPropagation()}
         onSubmit={(e) => { void handleSubmit(e) }}

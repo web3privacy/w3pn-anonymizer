@@ -59,10 +59,10 @@ export function MobileDrawMaskPanel() {
           <input
             type="number"
             min={0.2}
-            max={30}
+            max={b.activePhoto?.videoDuration ?? 30}
             step={0.5}
             value={b.videoMaskRangeSec}
-            onChange={(e) => b.setVideoMaskRangeSec(Math.min(30, Math.max(0.2, Number(e.target.value) || 0.2)))}
+            onChange={(e) => b.setVideoMaskRangeSec(Math.min(b.activePhoto?.videoDuration ?? 30, Math.max(0.2, Number(e.target.value) || 0.2)))}
             disabled={b.videoProcessing || b.isBusy}
           />
           <span>s</span>

@@ -38,6 +38,7 @@ export function useHoldRepeat({ onStep, holdDelayMs = 1000, repeatMs = 50 }: Use
 
   return {
     onPointerDown,
+    onClick: (event: React.MouseEvent) => { if (event.detail === 0) stepRef.current() },
     onPointerUp: stop,
     onPointerLeave: stop,
     onPointerCancel: stop,

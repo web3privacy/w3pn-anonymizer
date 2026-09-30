@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Icon } from '../Icon'
-import { saveAs } from 'file-saver'
+import { exportBlob } from '../../lib/native-media-library'
 import type { PhotoItem } from '../../types'
 import type { ParsedDocument, PiiCategory, PiiSpan, RedactionEffect } from '../../lib/document/documentTypes'
 import {
@@ -138,17 +138,17 @@ export function DocumentMode({ activePhoto, onCommitAnonymized }: DocumentModePr
     try {
       if (kind === 'txt') {
         const blob = redactedTextBlob(parsed.text, spans, effect)
-        saveAs(blob, redactedFilename(activePhoto.name, '.txt'))
+        await exportBlob(blob, redactedFilename(activePhoto.name, '.txt'))
         // The redacted text is a faithful latest state — commit it to the library.
         onCommitAnonymized?.(blob, 'text/plain')
       } else if (kind === 'pdf') {
         const blob = await exportFlattenedPdf(parsed, spans, effect)
-        saveAs(blob, redactedFilename(activePhoto.name, '.pdf'))
+        await exportBlob(blob, redactedFilename(activePhoto.name, '.pdf'))
         onCommitAnonymized?.(blob, 'application/pdf')
       } else {
         // Pages ZIP is an image bundle, not a re-openable document — download only.
         const blob = await exportPagesZip(parsed, spans, effect, activePhoto.name)
-        saveAs(blob, redactedFilename(activePhoto.name, '-pages.zip'))
+        await exportBlob(blob, redactedFilename(activePhoto.name, '-pages.zip'))
       }
     } catch (err) {
       console.error('export failed', err)

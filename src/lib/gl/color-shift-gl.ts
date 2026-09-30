@@ -10,19 +10,31 @@ uniform float u_sat;
 in vec2 v_uv;
 out vec4 fragColor;
 
-vec3 rgb2hsv(vec3 c) {
-  vec4 K = vec4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
-  vec4 p = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));
-  vec4 q = mix(vec4(p.xyw, c.r), vec4(c.r, p.yzx), step(p.x, c.r));
-  float d = q.x - min(q.w, q.y);
-  float e = 1.0e-10;
-  return vec3(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);
+vec3 rgb2hsl(vec3 c) {
+  float hi = max(c.r, max(c.g, c.b));
+  float lo = min(c.r, min(c.g, c.b));
+  float d = hi - lo;
+  float l = (hi + lo) * 0.5;
+  if (d < 1.0e-7) return vec3(0.0, 0.0, l);
+  float h;
+  if (hi == c.r) h = (c.g - c.b) / d;
+  else if (hi == c.g) h = (c.b - c.r) / d + 2.0;
+  else h = (c.r - c.g) / d + 4.0;
+  return vec3(fract(h / 6.0), d / (1.0 - abs(2.0 * l - 1.0)), l);
 }
 
-vec3 hsv2rgb(vec3 c) {
-  vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
-  vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
-  return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+float hueChannel(float p, float q, float t) {
+  t = fract(t);
+  if (t < 1.0 / 6.0) return p + (q - p) * 6.0 * t;
+  if (t < 0.5) return q;
+  if (t < 2.0 / 3.0) return p + (q - p) * (2.0 / 3.0 - t) * 6.0;
+  return p;
+}
+
+vec3 hsl2rgb(vec3 c) {
+  float q = c.z < 0.5 ? c.z * (1.0 + c.y) : c.z + c.y - c.z * c.y;
+  float p = 2.0 * c.z - q;
+  return vec3(hueChannel(p, q, c.x + 1.0 / 3.0), hueChannel(p, q, c.x), hueChannel(p, q, c.x - 1.0 / 3.0));
 }
 
 void main() {
@@ -34,12 +46,14 @@ void main() {
   float a = texture(u_image, uv).a;
   vec3 rgb = vec3(r, g, b);
   if (abs(u_hue) > 0.001 || abs(u_sat) > 0.001) {
-    vec3 hsv = rgb2hsv(rgb / 255.0);
-    hsv.x = fract(hsv.x + u_hue / 360.0);
-    hsv.y = clamp(hsv.y + u_sat / 100.0, 0.0, 1.0);
-    rgb = hsv2rgb(hsv) * 255.0;
+    // Texture samples are already normalized. Match the CPU HSL path without
+    // dividing them by 255 again (which previously made the image nearly black).
+    vec3 hsl = rgb2hsl(rgb);
+    hsl.x = fract(hsl.x + u_hue / 360.0);
+    hsl.y = clamp(hsl.y + u_sat / 100.0, 0.0, 1.0);
+    rgb = hsl2rgb(hsl);
   }
-  fragColor = vec4(rgb / 255.0, a);
+  fragColor = vec4(rgb, a);
 }`
 
 export function glApplyColorShift(

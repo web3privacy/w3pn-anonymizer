@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from 'react'
-import { saveAs } from 'file-saver'
+import { exportBlob } from '../lib/native-media-library'
 import { canvasToSvg, canvasToSvgBlob, DEFAULT_VECTORIZE_PARAMS, type VectorizeParams } from '../lib/vectorize'
 import type { PhotoItem } from '../types'
 
@@ -157,7 +157,7 @@ export function useVectorize({
         : await canvasToSvgBlob(wc, vectorizeParams)
       const baseName = activePhoto.name.split('/').pop() ?? activePhoto.name
       const outName = baseName.replace(/\.[^.]+$/, '') + '-vector.svg'
-      saveAs(blob, outName)
+      await exportBlob(blob, outName)
       setNotice(`Exported SVG: ${outName} (${Math.round(blob.size / 1024)} KB)`)
     } catch { setNotice('SVG vectorization failed.') }
     finally { setIsBusy(false) }

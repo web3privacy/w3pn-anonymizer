@@ -6,6 +6,7 @@ export interface MobileBindingsSource {
   theme: AppMobileBindings['theme']
   setTheme: AppMobileBindings['setTheme']
   setAboutOpen: AppMobileBindings['setAboutOpen']
+  setFeedbackOpen: AppMobileBindings['setFeedbackOpen']
   loadDemoPhotos: AppMobileBindings['loadDemoPhotos']
   isBusy: boolean
   isDragOver: boolean

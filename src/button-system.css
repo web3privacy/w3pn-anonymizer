@@ -1,8 +1,8 @@
 /* Final button layer: shared typography and geometry across every app shell. */
 :root {
   --ui-button-radius: 8px;
-  --ui-button-font-size: 12px;
-  --ui-button-letter-spacing: 0.06em;
+  --ui-button-font-size: var(--ui-type-control, 11px);
+  --ui-button-letter-spacing: 0.035em;
 }
 
 button {

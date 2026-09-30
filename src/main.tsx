@@ -4,6 +4,8 @@ import App from './App.tsx'
 import '@fontsource-variable/archivo/wdth.css'
 import './index.css'
 import './button-system.css'
+import './ui-system.css'
+import './about-page.css'
 
 function syncViewportHeight() {
   const viewport = window.visualViewport

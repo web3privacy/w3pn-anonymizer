@@ -8,8 +8,7 @@ import {
   type RefObject,
   type SetStateAction,
 } from 'react'
-import JSZip from 'jszip'
-import { saveAs } from 'file-saver'
+import { exportBlob } from '../lib/native-media-library'
 import { bakePhotoToCanvas } from '../lib/bake-photo-export'
 import { DEMO_MEDIA, EMPTY_VIDEO_DISTORT_SETTINGS, type VideoDistortSettingsSnapshot } from '../lib/editor-constants'
 import { canvasToBlob, exportCanvasToBlob, stripMetadata, type PngDepth } from '../lib/export-canvas'
@@ -107,7 +106,6 @@ export interface UsePhotoLibraryOptions {
   setEffectFlyoutOpen: (value: boolean) => void
   setAdjFlyoutOpen: (value: boolean) => void
   setTransformFlyoutOpen: (value: boolean) => void
-  setLocalProcessingMs: Dispatch<SetStateAction<number | null>>
   setLastDetectFailed: (value: boolean) => void
   setZoneToolCustomized: (value: boolean) => void
   setEffectToolCustomized: (value: boolean) => void
@@ -240,7 +238,6 @@ export function usePhotoLibrary(options: UsePhotoLibraryOptions): PhotoLibraryAp
     setEffectFlyoutOpen,
     setAdjFlyoutOpen,
     setTransformFlyoutOpen,
-    setLocalProcessingMs,
     setLastDetectFailed,
     setZoneToolCustomized,
     setEffectToolCustomized,
@@ -296,7 +293,6 @@ export function usePhotoLibrary(options: UsePhotoLibraryOptions): PhotoLibraryAp
     setZonesAnonymized(false)
     previewBakedRef.current = false
     setEffectFlyoutOpen(false)
-    setLocalProcessingMs(null)
     setLastDetectFailed(false)
     setZoneToolCustomized(false)
     setEffectToolCustomized(false)
@@ -306,7 +302,7 @@ export function usePhotoLibrary(options: UsePhotoLibraryOptions): PhotoLibraryAp
   }, [
     isMobile, pointerSessionRef, previewBakedRef, resetMobileViewTransform, resetUndo,
     setAdjFlyoutOpen, setDraftZone, setEffectFlyoutOpen, setEffectToolCustomized,
-    setIsNormalizeCropPicking, setLastDetectFailed, setLocalProcessingMs, setNormalizeCropDraft,
+    setIsNormalizeCropPicking, setLastDetectFailed, setNormalizeCropDraft,
     setSelectedZoneId, setTransformFlyoutOpen, setZoneToolCustomized, setZonesAnonymized,
   ])
 
@@ -494,7 +490,6 @@ export function usePhotoLibrary(options: UsePhotoLibraryOptions): PhotoLibraryAp
 
   const selectPhoto = useCallback(async (photoId: string) => {
     if (photoId === activePhotoId) return
-    detectingRef.current = false
     setIsDetecting(false)
     setDetectionStep('')
     if (activePhotoId && (dirtyByPhoto[activePhotoId] ?? false)) {
@@ -622,7 +617,7 @@ export function usePhotoLibrary(options: UsePhotoLibraryOptions): PhotoLibraryAp
             ...p,
             blob: orig,
             previewUrl: nextUrl,
-            edited: false,
+            edited: false, privacyProcessed: false,
             mimeType: orig.type || p.mimeType,
             videoDuration: meta?.duration ?? p.videoDuration,
             videoWidth: meta?.width ?? poster?.width ?? p.videoWidth,
@@ -652,7 +647,7 @@ export function usePhotoLibrary(options: UsePhotoLibraryOptions): PhotoLibraryAp
       setPhotos((cur) => cur.map((p) => {
         if (p.id !== activePhoto.id) return p
         window.setTimeout(() => URL.revokeObjectURL(p.previewUrl), 0)
-        return { ...p, blob: orig, previewUrl: nextUrl, edited: false }
+        return { ...p, blob: orig, previewUrl: nextUrl, edited: false, privacyProcessed: false }
       }))
       setColorAdj(DEFAULT_COLOR_ADJUSTMENTS)
       setColorAdjByPhoto((cur) => { const next = { ...cur }; delete next[activePhoto.id]; return next })
@@ -680,7 +675,7 @@ export function usePhotoLibrary(options: UsePhotoLibraryOptions): PhotoLibraryAp
     try {
       const blob = await exportCanvasToBlob(workCanvas, exportFormat, exportQuality, exportPngDepth)
       const outName = buildAnonymizedExportName(activePhoto.name, exportFormat)
-      saveAs(blob, outName)
+      await exportBlob(blob, outName)
       setNotice(`Exported: ${outName}`)
     } catch { setNotice('Export failed.') }
     finally { setIsBusy(false) }
@@ -709,11 +704,10 @@ export function usePhotoLibrary(options: UsePhotoLibraryOptions): PhotoLibraryAp
     if (deletingActive) {
       setActivePhotoId(nextActivePhoto?.id ?? null)
       applyPhotoSwitchUiReset()
-      detectingRef.current = false
-      setIsDetecting(false)
+        setIsDetecting(false)
       setDetectionStep('')
       setActiveDirty(false)
-      if (videoAbortRef.current) { videoAbortRef.current.abort(); videoAbortRef.current = null }
+      if (videoAbortRef.current) { videoAbortRef.current.abort() }
       setVideoProcessing(false)
       if (nextActivePhoto) {
         const saved = colorAdjByPhoto[nextActivePhoto.id]
@@ -742,6 +736,7 @@ export function usePhotoLibrary(options: UsePhotoLibraryOptions): PhotoLibraryAp
   // exported using their current (already-anonymized when processed) blob.
   const exportItemToFile = useCallback(async (photo: PhotoItem): Promise<{ blob: Blob; name: string }> => {
     if (libraryItemKind(photo) !== 'image') {
+      if (!photo.privacyProcessed) throw new Error(`Process ${photo.name} in its editor before exporting it from the library.`)
       return { blob: photo.blob, name: buildMediaExportName(photo) }
     }
     const canvas = await bakePhotoToCanvas({
@@ -777,7 +772,7 @@ export function usePhotoLibrary(options: UsePhotoLibraryOptions): PhotoLibraryAp
     setIsExporting(true)
     setExportLibraryProgress({ done: 0, total: items.length })
     try {
-      const zip = new JSZip()
+      const zip = new (await import('jszip')).default()
       const usage = new Map<string, number>()
       let done = 0
       for (const photo of items) {
@@ -786,15 +781,15 @@ export function usePhotoLibrary(options: UsePhotoLibraryOptions): PhotoLibraryAp
           const { blob, name } = await exportItemToFile(photo)
           zip.file(makeZipSafeName(name, usage), blob)
         } catch (err) {
-          console.error('library export item failed', photo.name, err)
+          throw new Error(`${photo.name}: ${err instanceof Error ? err.message : String(err)}`)
         }
         done += 1
       }
       const zipBlob = await zip.generateAsync({ type: 'blob' })
-      saveAs(zipBlob, `anonymizer-library-${new Date().toISOString().slice(0, 10)}.zip`)
+      await exportBlob(zipBlob, `anonymizer-library-${new Date().toISOString().slice(0, 10)}.zip`)
       showMobileToast(`Downloaded ${items.length} item${items.length !== 1 ? 's' : ''} as ZIP`)
-    } catch {
-      showMobileToast('ZIP export failed.')
+    } catch (error) {
+      showMobileToast(error instanceof Error ? error.message : 'ZIP export failed.')
     } finally {
       setIsExporting(false)
       setExportLibraryProgress(null)
@@ -815,15 +810,15 @@ export function usePhotoLibrary(options: UsePhotoLibraryOptions): PhotoLibraryAp
         setExportLibraryProgress({ done, total: items.length })
         try {
           const { blob, name } = await exportItemToFile(photo)
-          saveAs(blob, name)
+          await exportBlob(blob, name)
         } catch (err) {
-          console.error('library export item failed', photo.name, err)
+          throw new Error(`${photo.name}: ${err instanceof Error ? err.message : String(err)}`)
         }
         done += 1
       }
       showMobileToast(`Downloaded ${items.length} file${items.length !== 1 ? 's' : ''}`)
-    } catch {
-      showMobileToast('Export failed.')
+    } catch (error) {
+      showMobileToast(error instanceof Error ? error.message : 'Export failed.')
     } finally {
       setIsExporting(false)
       setExportLibraryProgress(null)

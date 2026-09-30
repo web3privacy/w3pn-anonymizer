@@ -1,4 +1,6 @@
+import type { ReactNode } from 'react'
 import { Icon } from '../components/Icon'
+import { FeedbackButton } from '../components/FeedbackButton'
 
 interface DesktopTopBarProps {
   busy: boolean
@@ -7,10 +9,11 @@ interface DesktopTopBarProps {
   showDemo: boolean
   onLiveCamera: () => void
   onFeedback: () => void
+  statusNotice?: ReactNode
 }
 
 export function DesktopTopBar({
-  busy, onAbout, onLoadDemo, showDemo, onLiveCamera, onFeedback,
+  busy, onAbout, onLoadDemo, showDemo, onLiveCamera, onFeedback, statusNotice,
 }: DesktopTopBarProps) {
   return (
     <header className="topbar">
@@ -19,10 +22,10 @@ export function DesktopTopBar({
         <span className="brand-chevron"><Icon name="expand_more" size={14} /></span>
       </button>
 
-      <span className="topbar-tagline">
+      {statusNotice || <span className="topbar-tagline">
         <span>open source</span>
         {' · private · no data collected'}
-      </span>
+      </span>}
 
       <div className="topbar-gap" />
 
@@ -49,14 +52,7 @@ export function DesktopTopBar({
         Live mode
       </button>
 
-      <button
-        className="topbar-demo-btn"
-        type="button"
-        onClick={onFeedback}
-        title="Give feedback"
-      >
-        Give Feedback
-      </button>
+      <FeedbackButton onClick={onFeedback} />
 
       <a
         className="topbar-github-link"

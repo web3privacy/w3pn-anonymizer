@@ -17,12 +17,13 @@ export function MobileFaceDrawer({ b, liveMode = false }: MobileFaceDrawerProps)
   const open = b.mobilePanel === 'tool-face'
   const close = () => b.setMobilePanel(null)
   const detectorReady = b.detector.mode === 'yunet-wasm'
-  const facesEnabled = liveMode ? b.liveDetectEnabled : b.autoDetect
+  const facesEnabled = liveMode ? b.liveDetectEnabled : (b.detectionConfig.find((c) => c.type === 'face')?.enabled ?? true)
 
   const setFacesEnabled = (v: boolean) => {
     if (liveMode) {
       b.setLiveDetectEnabled(v)
     } else {
+      b.setCategoryEnabled('face', v)
       b.setAutoDetect(v)
       b.setShowBoxes(v)
     }

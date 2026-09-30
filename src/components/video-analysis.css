@@ -1,0 +1,17 @@
+.video-analysis-panel { width: 100%; box-sizing: border-box; padding: 8px 12px; border: 1px solid var(--border, #39423d); border-radius: 8px; font-size: 12px; background: var(--panel-bg, #141916); color: var(--text-primary, #e3eee7); text-align: left; }
+.video-analysis-panel summary { cursor: pointer; min-height: 28px; line-height: 28px; }
+.video-analysis-fields, .video-analysis-actions { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin: 8px 0; }
+.video-analysis-fields label { display: flex; flex-direction: column; gap: 5px; flex: 1; min-width: 110px; }
+.video-analysis-fields input, .video-analysis-fields select { width: 100%; box-sizing: border-box; min-height: 36px; padding: 4px 8px; background: transparent; color: inherit; border: 1px solid var(--border, #39423d); border-radius: 5px; }
+.video-analysis-fields option { background: var(--panel-bg, #141916); }
+.video-analysis-panel p { margin: 8px 0; line-height: 1.45; opacity: .8; }
+.video-review-track { display: flex; height: 30px; width: 100%; border-radius: 4px; overflow: hidden; background: #343a37; margin: 8px 0; }
+.video-review-track > * { flex: 1; min-width: 0; padding: 0; border: 0; }
+.video-review-track button { background: #d59d43; cursor: pointer; }
+.video-review-track button:focus-visible { outline: 2px solid white; outline-offset: -2px; }
+.video-analysis-panel .btn { min-height: 34px; white-space: normal; }
+.video-review-detail { border-top: 1px solid var(--border, #39423d); padding-top: 6px; }
+
+.video-analysis-panel[open] { max-height: min(42vh, 380px); overflow-y: auto; }
+
+.video-review-track button.reviewed { background: #778e7e; }

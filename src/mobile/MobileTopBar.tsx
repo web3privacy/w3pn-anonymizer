@@ -1,8 +1,10 @@
-import { memo } from 'react'
+import { memo, type ReactNode } from 'react'
 import { Icon } from '../components/Icon'
+import { FeedbackButton } from '../components/FeedbackButton'
 
 interface MobileTopBarProps {
   onAbout: () => void
+  onFeedback?: () => void
   onOpenGallery?: () => void
   showGalleryButton?: boolean
   showLiveButton?: boolean
@@ -10,10 +12,12 @@ interface MobileTopBarProps {
   variant?: 'workspace' | 'live' | 'about'
   onClose?: () => void
   pipelineMsRef?: React.Ref<HTMLSpanElement>
+  statusNotice?: ReactNode
 }
 
 export const MobileTopBar = memo(function MobileTopBar({
   onAbout,
+  onFeedback,
   onOpenGallery,
   showGalleryButton,
   showLiveButton,
@@ -21,12 +25,13 @@ export const MobileTopBar = memo(function MobileTopBar({
   variant = 'workspace',
   onClose,
   pipelineMsRef,
+  statusNotice,
 }: MobileTopBarProps) {
   const isLive = variant === 'live'
   const iconSize = 20
 
   return (
-    <header className={`mobile-topbar-v2${isLive ? ' mobile-topbar-v2--live' : ''}`}>
+    <header className={`mobile-topbar-v2${isLive ? ' mobile-topbar-v2--live' : ''}${statusNotice ? ' mobile-topbar-v2--notice' : ''}`}>
       <div className="mobile-topbar-v2-left">
         {showGalleryButton && onOpenGallery && (
           <>
@@ -55,12 +60,13 @@ export const MobileTopBar = memo(function MobileTopBar({
       </div>
 
       <div className="mobile-topbar-v2-center">
-        <button className="mobile-topbar-v2-brand" type="button" onClick={onAbout} title="About">
+        {statusNotice || <button className="mobile-topbar-v2-brand" type="button" onClick={onAbout} title="About">
           <img src="/brand/anonymizer-wordmark.png" alt="ANONYMIZER" />
-        </button>
+        </button>}
       </div>
 
       <div className="mobile-topbar-v2-right">
+        {onFeedback && <FeedbackButton onClick={onFeedback} />}
         {isLive && onClose && (
           <button className="mobile-topbar-v2-icon" type="button" onClick={onClose} aria-label="Close">
             <Icon name="close" size={iconSize} />

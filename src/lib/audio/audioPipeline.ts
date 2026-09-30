@@ -172,6 +172,7 @@ export async function renderProcessedAudioBuffer(
   settings: AudioEffectSettings,
 ): Promise<AudioBuffer> {
   if (settings.mode === 'keep_original') return sourceBuffer
+  if (settings.mode === 'remove_audio') return _ctx.createBuffer(sourceBuffer.numberOfChannels, sourceBuffer.length, sourceBuffer.sampleRate)
 
   const params = effectiveAudioSettings(settings)
   const rate = semitonesToPlaybackRate(params.pitchSemitones ?? 0)

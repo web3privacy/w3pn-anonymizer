@@ -53,6 +53,7 @@ export interface AppMobileBindings {
   theme: ThemeMode
   setTheme: (fn: (t: ThemeMode) => ThemeMode) => void
   setAboutOpen: (v: boolean) => void
+  setFeedbackOpen: (v: boolean) => void
   loadDemoPhotos: () => void
   isBusy: boolean
   isDragOver: boolean

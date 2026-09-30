@@ -6,6 +6,8 @@ For the shared iOS + Android sync flow, offline model packaging, and device-reso
 
 ## Local Device Test
 
+For the exact Czech account, signing and cable instructions on this Mac, see [first device setup](ios-startup-2026-09-30/DEVICE-SETUP.md).
+
 1. Install Xcode from the Mac App Store.
 2. If `xcodebuild` still points to Command Line Tools, run:
 
@@ -35,4 +37,5 @@ npm run ios:open
 - Camera, microphone, photo library, model loading, WebAssembly, and memory usage should be tested on real devices before any store submission.
 - Optional YOLO/OCR assets load only after their target is enabled; test these flows separately from the face-only startup path.
 - The iOS wrapper uses the same blackout document defaults, local feedback endpoint, button system, and responsive editor as the web build.
+- The wrapper adopts UIKit's scene lifecycle with a single `Main` storyboard scene and `SceneDelegate` in `AppDelegate.swift`. Removing this configuration causes an immediate runtime trap on iOS 27 builds. Scene URL/user-activity callbacks forward to Capacitor's application delegate proxy.
 - See [`DEPENDENCIES.md`](./DEPENDENCIES.md) for the full Capacitor and browser-runtime inventory.

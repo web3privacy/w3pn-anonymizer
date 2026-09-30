@@ -1,31 +1,18 @@
 import { cpSync, existsSync, mkdirSync, rmSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { resolve } from 'node:path'
+import { nativeEnvironment, inspectNativeEnvironment } from './native-environment.mjs'
 
 const root = resolve(import.meta.dirname, '..')
 
-const HOMEBREW_NODE_22 = '/opt/homebrew/opt/node@22/bin'
-const HOMEBREW_JDK_21 = '/opt/homebrew/opt/openjdk@21'
-const HOMEBREW_JAVA_HOME = `${HOMEBREW_JDK_21}/libexec/openjdk.jdk/Contents/Home`
-
-function withNativeEnv() {
-  const pathParts = []
-  if (existsSync(HOMEBREW_JDK_21)) pathParts.push(`${HOMEBREW_JDK_21}/bin`)
-  if (existsSync(HOMEBREW_NODE_22)) pathParts.push(HOMEBREW_NODE_22)
-  pathParts.push(process.env.PATH ?? '')
-
-  return {
-    ...process.env,
-    ...(existsSync(HOMEBREW_JAVA_HOME) ? { JAVA_HOME: HOMEBREW_JAVA_HOME } : {}),
-    PATH: pathParts.join(':'),
-  }
-}
+const withNativeEnv = () => nativeEnvironment()
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: options.cwd ?? root,
     env: withNativeEnv(),
     stdio: 'inherit',
+    ...(options.shell ? { shell: true } : {}),
   })
 
   if (result.error) {
@@ -42,22 +29,8 @@ function runOrExit(command, args, options = {}) {
   if (process.exitCode && process.exitCode !== 0) process.exit(process.exitCode)
 }
 
-function printCheck(label, command, args) {
-  console.log(`\n# ${label}`)
-  const result = spawnSync(command, args, {
-    cwd: root,
-    env: withNativeEnv(),
-    encoding: 'utf8',
-  })
-
-  const output = `${result.stdout ?? ''}${result.stderr ?? ''}`.trim()
-  if (output) console.log(output)
-  if (result.error) console.log(result.error.message)
-  if (result.status !== 0 && !result.error) console.log(`Exited with status ${result.status}`)
-}
-
 const task = process.argv[2]
-const iosDerivedDataPath = resolve(process.env.HOME ?? root, 'Library/Developer/Xcode/DerivedData/W3PNAnonymizerCodex')
+const iosDerivedDataPath = resolve(root, process.env.NATIVE_DERIVED_DATA_DIR || 'release/ios/DerivedData')
 const iosDeviceAppPath = resolve(iosDerivedDataPath, 'Build/Products/Debug-iphoneos/App.app')
 const iosReleaseDir = resolve(root, 'release/ios')
 const iosPayloadDir = resolve(iosReleaseDir, 'Payload')
@@ -116,7 +89,7 @@ function packageIosDebugIpa() {
 
 switch (task) {
   case 'android-debug':
-    run('./gradlew', ['assembleDebug'], { cwd: resolve(root, 'android') })
+    run(process.platform === 'win32' ? 'gradlew.bat' : './gradlew', ['assembleDebug'], { cwd: resolve(root, 'android'), ...(process.platform === 'win32' ? { shell: true } : {}) })
     break
   case 'ios-simulator':
     run('xcodebuild', [
@@ -130,6 +103,8 @@ switch (task) {
       'iphonesimulator',
       '-destination',
       'generic/platform=iOS Simulator',
+      '-derivedDataPath',
+      resolve(root, process.env.NATIVE_DERIVED_DATA_DIR || 'release/ios-simulator/DerivedData'),
       '-skipPackageUpdates',
       'CODE_SIGNING_ALLOWED=NO',
       'build',
@@ -142,12 +117,17 @@ switch (task) {
     buildIosDevice()
     packageIosDebugIpa()
     break
-  case 'doctor':
-    printCheck('Node', 'node', ['--version'])
-    printCheck('npm', 'npm', ['--version'])
-    printCheck('Java', 'java', ['-version'])
-    printCheck('Xcode', 'xcodebuild', ['-version'])
+  case 'doctor': {
+    const target = process.argv.slice(3).find(arg => ['all', 'ios', 'android'].includes(arg)) ?? 'all'
+    const report = inspectNativeEnvironment(target)
+    if (process.argv.includes('--json')) console.log(JSON.stringify(report, null, 2))
+    else {
+      for (const check of report.checks) console.log(`${check.ok ? 'OK' : 'MISSING'} ${check.name}\n${check.detail}\n`)
+      console.log(report.ready ? 'Native environment ready.' : 'Complete the missing tools before native builds.')
+    }
+    process.exitCode = report.ready ? 0 : 1
     break
+  }
   default:
     console.error('Usage: node scripts/run-native-command.mjs <doctor|ios-simulator|ios-device|ios-debug-ipa|android-debug>')
     process.exit(1)

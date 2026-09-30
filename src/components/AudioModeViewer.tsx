@@ -19,7 +19,7 @@ import {
   supportedAudioExportFormats,
   type AudioExportFormat,
 } from '../lib/audio/audioExport'
-import { saveAs } from 'file-saver'
+import { exportBlob } from '../lib/native-media-library'
 import { MobileToolDrawer } from '../mobile/MobileToolDrawer'
 
 const PRESETS: AudioEffectPreset[] = ['maximum_mask', 'heavy_scramble', 'broken_timing']
@@ -412,13 +412,11 @@ export function AudioModeViewer({
       if (formatId && formatId !== exportFormatId) setExportFormatId(formatId)
       const format = exportFormats.find((f) => f.id === id) ?? exportFormats[0]
       const buffer = origBufferRef.current ?? await decodeAudioBlob(sourceBlob)
-      const out = distort
-        ? await renderProcessedAudioBuffer(getAudioContext(), buffer, settings)
-        : buffer
+      const out = await renderProcessedAudioBuffer(getAudioContext(), buffer, settings)
       const blob = await encodeAudioBuffer(out, format)
-      saveAs(blob, anonymizedAudioFilename(activePhoto.name, format.ext))
+      await exportBlob(blob, anonymizedAudioFilename(activePhoto.name, format.ext))
       // Persist the anonymized result so the library reflects it (export + outline).
-      if (distort) onCommitAnonymized?.(blob, blob.type || 'audio/wav')
+      if (distort || settings.mode === 'remove_audio') onCommitAnonymized?.(blob, blob.type || 'audio/wav')
     } finally {
       setExporting(false)
     }

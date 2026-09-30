@@ -11,7 +11,7 @@ A free, open-source tool by [Web3Privacy Now](https://www.web3privacy.info) for 
 ## Features
 
 ### Anonymization
-- **10 effects** — blur, zoom blur, pixelate, blackout, emoji, custom image, ASCII art, glitch, animated Color Ball, and noise
+- **Anonymization effects** — blur, zoom blur, pixelate, blackout, emoji, custom image, ASCII art, glitch, Color Ball, noise, and source-derived Prism refraction
 - **Modular privacy detection** — faces (YuNet, on by default) plus optional YOLO targets: people, license plates, screens, documents, signs, tattoos
 - **Sensitive text on photos** — opt-in on-device OCR (Tesseract.js, EN + CS) finds emails, phone numbers, payment cards, IBANs, national IDs, crypto addresses, secrets/keys, and more, then boxes and redacts them
 - **Purposeful sensitivity defaults** — faces 25%, people 25%, plates 50%, documents/IDs and sensitive text 100%, vehicles and extra classes 10%
@@ -29,7 +29,8 @@ A free, open-source tool by [Web3Privacy Now](https://www.web3privacy.info) for 
 - **Snapshot system** — save intermediate versions as new images in the explorer
 
 ### Video anonymization
-- **Frame-by-frame processing** — masking, rendering, and encoding happen locally using Canvas API + MediaRecorder
+- **Selectable analysis** — check every frame or choose 0.25–120 checks/s (up to output FPS), with additional analysis passes and uncertain-interval markers for review
+- **Local video export** — masks apply to every output frame; WebCodecs and a MediaRecorder fallback use private temporary storage and bounded queues
 - **Supported formats** — MP4, WebM, MOV, AVI, MKV, M4V, OGV
 - **Video audio** — keep original track, remove audio on export, or apply voice-distortion presets (preview; mux export best-effort)
 - **Manual frame fixes** — capture the current timeline frame, retouch it as an image, then bake it back into the next video render
@@ -70,7 +71,7 @@ A free, open-source tool by [Web3Privacy Now](https://www.web3privacy.info) for 
 - **CSP + cross-origin isolation** — Content-Security-Policy and COOP/COEP/CORP headers in production
 
 ### Performance / loading
-- **Lean first load** — only face detection (YuNet) and live mode load on boot
+- **Lean first load** — reach the home screen before detector initialization; YuNet loads when photo detection or live mode needs it
 - **On-demand privacy models** — heavier YOLO/OCR assets start loading only after the user enables a target that needs them; one progress surface reports the complete model load and respects Save-Data / slow connections
 - **Hypnotic home screen** — a high-detail, dotted multi-layer GPU spiral illusion (WebGL fragment shader, pixel-by-pixel, high FPS) that reacts to pointer/touch and morphs from the logo, with a `prefers-reduced-motion` / no-WebGL SVG fallback
 
@@ -159,7 +160,8 @@ w3pn-anonymizer/
 │       ├── gl/                # WebGL renderers (hypno spiral)
 │       ├── asset-prefetch.ts  # Background model/OCR cache warming
 │       └── vectorize.ts       # SVG vectorization (imagetracer.js)
-├── server/                    # Optional FastAPI backend (OpenCV YuNet, localhost only)
+├── server/                    # Optional same-origin anonymous feedback service
+├── android/ · ios/            # Capacitor wrappers; native device tests are in progress
 ├── electron/                  # Electron main process
 ├── public/
 │   ├── models/                # YuNet + optional privacy YOLO ONNX (see public/models/privacy/README.md)
@@ -171,7 +173,7 @@ w3pn-anonymizer/
 │   └── demo/                  # Demo images, audio, video, and a sample document
 ├── scripts/                   # Build/release tooling + Playwright e2e smokes
 ├── index.html · package.json · vite.config.ts · tsconfig.json
-└── start.sh                   # One-command start script
+└── package-lock.json          # Locked JavaScript dependencies
 ```
 
 ---
@@ -185,7 +187,7 @@ npm run build
 
 The `dist/` folder is a static SPA deployable to nginx, Caddy, Apache, or another static host. Production currently serves it from nginx on the W3PN VPS.
 
-For the optional Python backend, keep it bound to `127.0.0.1:7865` and place it behind a same-host reverse proxy only if you fully trust the runtime environment.
+The optional feedback service is documented in [server/README.md](server/README.md). Media processing does not use a Python detection server.
 
 ---
 
@@ -197,19 +199,12 @@ For the optional Python backend, keep it bound to `127.0.0.1:7865` and place it 
 
 See [Dependencies and integrated runtimes](./docs/DEPENDENCIES.md) for the complete package, browser API, model, worker, desktop, native iOS/Android, and optional server inventory.
 
-### Python backend (optional)
-- **Python** ≥ 3.9 — [python.org](https://python.org)
+### Feedback service (optional)
+- **Python**, `fastapi`, and `uvicorn`; see [server/README.md](server/README.md).
+- The static application and all media processing work without this service.
 
-| Package | Purpose |
-|---------|---------|
-| `fastapi` | HTTP API server |
-| `uvicorn` | ASGI server |
-| `opencv-contrib-python` | YuNet face detection |
-| `pillow` | Image decode/encode |
-| `numpy` | Array operations |
-| `python-multipart` | File upload parsing |
-
-The YuNet ONNX model is downloaded automatically from [OpenCV Zoo](https://github.com/opencv/opencv_zoo) on first startup.
+### Mobile development
+See [native setup](docs/native-capacitor.md) and [device signing and USB instructions](docs/ios-startup-2026-09-30/DEVICE-SETUP.md). Android debug builds are available for testing; iOS uses automatic Xcode signing. Store/F-Droid releases still require real-device acceptance tests and completion of the third-party asset license inventory.
 
 ---
 
@@ -349,4 +344,4 @@ This project is part of [Web3Privacy Now](https://www.web3privacy.info) — buil
 
 ## License
 
-MIT
+Project source code: [MIT](LICENSE). Bundled third-party libraries, model weights, fonts and media retain their own licenses; see [asset licensing status](docs/MOBILE-RELEASE-PLAN-2026-09-30.md). The model/media provenance audit for store and F-Droid distribution is still in progress.

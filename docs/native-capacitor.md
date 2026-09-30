@@ -22,7 +22,22 @@ Before building native targets, you can check the local toolchain:
 
 ```bash
 npm run native:doctor
+npm run native:doctor -- android
+npm run native:doctor -- ios
+npm run native:doctor -- --json
 ```
+
+The check returns a nonzero exit code for missing or incompatible tools. It discovers the SDK from `ANDROID_SDK_ROOT`, `ANDROID_HOME`, `android/local.properties`, or the platform default. It uses `JAVA_HOME`, a user-installed macOS Temurin 21 at `~/Library/Java/JavaVirtualMachines/temurin-21.jdk`, Android Studio's bundled JDK on macOS/Windows, or the macOS Homebrew JDK 21 location. This project's Android modules require Java 21 source support; the pinned Gradle 8.11.1 runtime supports Java through 23, so the check accepts 21–23. Android Studio Quail 4 includes JBR 25: keep that for the IDE, but select Temurin 21 for Gradle. See [Android JDK configuration](https://developer.android.com/build/jdks) and [Gradle compatibility](https://docs.gradle.org/current/userguide/compatibility.html).
+
+The Android setup includes SDK platform 35, build-tools 35.0.0 and platform-tools. AGP 8.7.2 also installs its default build-tools 34.0.0 when building. Node 22 is the project baseline. Custom installations can set these environment variables explicitly. The Gradle distribution is pinned to its official SHA-256 in `android/gradle/wrapper/gradle-wrapper.properties`.
+
+The iOS check also requires an available simulator runtime. Device signing is a separate check in Xcode. This checkout uses Swift Package Manager with local Capacitor/Cordova frameworks; CocoaPods is not needed. Build intermediates go into `release/ios/DerivedData` or `release/ios-simulator/DerivedData`; `NATIVE_DERIVED_DATA_DIR` overrides that location.
+
+The deployment target is iOS 15, matching the minimum accepted by the installed Xcode 27. This does not establish support for every media feature on iOS 15; validate WebView capabilities on actual devices.
+
+The current mobile release plan, device matrix, toolchain blockers and F-Droid prerequisites are in [the mobile release plan](MOBILE-RELEASE-PLAN-2026-09-30.md). Asset synchronization does not confirm a native build or successful device execution.
+
+The tool installation and successful Android/iOS native build/start checks on this Mac are recorded in [the installation report](native-install-2026-09-30/README.md). In Xcode 27, graphical simulated devices are shown through Device Hub (`/Applications/Xcode.app/Contents/Applications/DeviceHub.app`).
 
 ## iPhone Test
 

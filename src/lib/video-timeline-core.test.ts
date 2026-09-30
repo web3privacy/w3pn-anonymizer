@@ -14,6 +14,14 @@ const baseZone = {
 }
 
 describe('getFrameZonesAtTime', () => {
+  it('covers movement after a sparse observation loses its tracking ID', () => {
+    const zones = getFrameZonesAtTime([
+      { timeSec: 0, zones: [{ ...baseZone, width: 0.1 }] },
+      { timeSec: 1, zones: [{ ...baseZone, id: 'new-track', x: 0.8, width: 0.1 }] },
+    ], [], 0.5)
+    expect(zones[0].x).toBe(0.1)
+    expect(zones[0].width).toBeCloseTo(0.8)
+  })
   it('returns timed zone when media time is in range', () => {
     const timeline: VideoTrackKeyframe[] = []
     const timed: VideoTimedZone[] = [{

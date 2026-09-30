@@ -79,7 +79,7 @@ export const MobileBottomToolbar = memo(function MobileBottomToolbar({
       {!b.videoProcessing && b.toolMode !== 'crop' ? (
       <div className="mobile-sliders-row">
         <div className="mobile-slider-group">
-          <span className="mobile-slider-label">{strLabel}</span>
+          <span className="mobile-slider-label">{!liveMode && !isVideoEditor ? 'BRUSH' : strLabel}</span>
           <MobileRangeWithThumb
             min={pixelateActive ? 4 : 1}
             max={pixelateActive ? 52 : 100}
@@ -90,7 +90,7 @@ export const MobileBottomToolbar = memo(function MobileBottomToolbar({
         </div>
         {!liveMode && !isVideoEditor && (
           <div className="mobile-slider-group">
-            <span className="mobile-slider-label">BRUSH</span>
+            <span className="mobile-slider-label">SIZE</span>
             <MobileRangeWithThumb
               min={0}
               max={99}

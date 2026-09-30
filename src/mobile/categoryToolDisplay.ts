@@ -1,6 +1,7 @@
 import type { AnonymizeEffectId } from '../types'
 import { EFFECTS } from '../lib/effects'
 import { DISTORT_EFFECT_META } from '../lib/distort-effects'
+import { EFFECT_ICONS } from '../lib/editor-constants'
 import type { AppMobileBindings } from './bindings'
 import type { MobileToolCategory } from './types'
 import {
@@ -17,19 +18,7 @@ import {
   zoneToolLabel,
 } from './toolRotation'
 
-export const EFFECT_ICONS: Record<AnonymizeEffectId, string> = {
-  blur: 'blur_on',
-  pixelate: 'grid_on',
-  'zoom-blur': 'motion_blur',
-  blackout: 'square',
-  emoji: 'mood',
-  noise: 'grain',
-  glitch: 'auto_fix_high',
-  contour: 'pentagon',
-  thermal: 'bubble_chart',
-  ascii: 'data_array',
-  'custom-image': 'image',
-}
+export { EFFECT_ICONS }
 
 const EFFECT_SHORT_LABELS = Object.fromEntries(
   EFFECTS.map((effect) => [effect.id, effect.label.toUpperCase().replace(/\s+/g, '').slice(0, 5)]),

@@ -2,6 +2,9 @@ import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, r
 import { execFileSync } from 'node:child_process'
 import { resolve } from 'node:path'
 
+const platform = process.argv[2] ?? 'all'
+if (!['all', 'ios', 'android'].includes(platform)) throw new Error('Expected ios, android, or all.')
+
 const root = resolve(import.meta.dirname, '..')
 const distDir = resolve(root, 'dist')
 const iosPublicDir = resolve(root, 'ios/App/App/public')
@@ -132,6 +135,7 @@ function sanitizeIosVendorFrameworks() {
   }
 }
 
+if (platform === 'all' || platform === 'ios') {
 syncPublicAssets(iosPublicDir)
 writeFileSync(iosConfigPath, `${JSON.stringify(nativeConfig, null, 2)}\n`)
 writeFileSync(
@@ -147,12 +151,15 @@ writeFileSync(
 `,
 )
 ensureIosSpmVendorFrameworks()
+console.log(`Synced ${distDir} -> ${iosPublicDir}`)
+}
 
+if (platform === 'all' || platform === 'android') {
 ensureAndroidCordovaModule()
 mkdirSync(androidAssetsDir, { recursive: true })
 syncPublicAssets(androidPublicDir)
 writeFileSync(androidConfigPath, `${JSON.stringify(nativeConfig, null, 2)}\n`)
 writeFileSync(androidPluginsPath, '[]\n')
 
-console.log(`Synced ${distDir} -> ${iosPublicDir}`)
 console.log(`Synced ${distDir} -> ${androidPublicDir}`)
+}

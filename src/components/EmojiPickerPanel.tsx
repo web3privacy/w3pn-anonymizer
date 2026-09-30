@@ -37,8 +37,8 @@ export function EmojiPickerPanel({
       {showHint && (
         <p className="mobile-emoji-hint">
           {emojiRandom
-            ? 'Each detected face gets a different emoji. Turn off random to pick one emoji for all.'
-            : 'Click an emoji to use it on every face.'}
+            ? 'Random compact emoji per face. Adjust the size to cover the face.'
+            : 'Choose one compact emoji for every face. Adjust its size to fit.'}
         </p>
       )}
       <div className="mobile-emoji-grid" role="listbox" aria-label="Choose emoji">
@@ -48,10 +48,11 @@ export function EmojiPickerPanel({
             type="button"
             role="option"
             aria-selected={!emojiRandom && selectedEmoji === emoji}
+            aria-label={emoji}
             className={`mobile-emoji-btn${!emojiRandom && selectedEmoji === emoji ? ' active' : ''}`}
             onClick={() => onPickEmoji(emoji)}
           >
-            {emoji}
+            <span className="emoji-glyph" aria-hidden="true">{emoji}</span>
           </button>
         ))}
       </div>

@@ -1,4 +1,4 @@
-import { useEffect, type RefObject } from 'react'
+import { useEffect, useRef, type RefObject } from 'react'
 
 const FOCUSABLE_SELECTOR = [
   'a[href]',
@@ -11,7 +11,7 @@ const FOCUSABLE_SELECTOR = [
 
 function getFocusable(container: HTMLElement) {
   return Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR))
-    .filter((el) => !el.hasAttribute('disabled') && !el.getAttribute('aria-hidden'))
+    .filter((el) => !el.hasAttribute('disabled') && el.getAttribute('aria-hidden') !== 'true')
 }
 
 function isVisibleDialog(el: HTMLElement) {
@@ -36,6 +36,8 @@ export function useDialogFocusTrap(
   dialogRef: RefObject<HTMLElement | null>,
   { initialFocusRef, onClose }: DialogFocusTrapOptions = {},
 ) {
+  const closeRef = useRef(onClose)
+  closeRef.current = onClose
   useEffect(() => {
     if (!open) return
     const dialog = dialogRef.current
@@ -51,9 +53,9 @@ export function useDialogFocusTrap(
     const onKeyDown = (e: KeyboardEvent) => {
       const currentDialog = dialogRef.current
       if (!currentDialog || !isTopmostDialog(currentDialog)) return
-      if (e.key === 'Escape' && onClose) {
+      if (e.key === 'Escape' && closeRef.current) {
         e.preventDefault()
-        onClose()
+        closeRef.current()
         return
       }
       if (e.key !== 'Tab') return
@@ -88,5 +90,5 @@ export function useDialogFocusTrap(
       window.removeEventListener('keydown', onKeyDown, true)
       if (previousActive?.isConnected) previousActive.focus({ preventScroll: true })
     }
-  }, [dialogRef, initialFocusRef, onClose, open])
+  }, [dialogRef, initialFocusRef, open])
 }

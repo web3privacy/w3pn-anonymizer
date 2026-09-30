@@ -63,10 +63,11 @@ export async function detectImagePrivacyDetections(
   let detections: PrivacyDetection[]
   let usedPipeline: boolean
 
-  if (usesExtendedPrivacyDetection(effectiveConfig, modelStatus, enabledClasses)) {
+  if (usesExtendedPrivacyDetection(effectiveConfig, modelStatus, enabledClasses) || effectiveConfig.some((c) => c.enabled && !['face', 'pii_text', 'manual_zone'].includes(c.type)) || (enabledClasses?.length ?? 0) > 0) {
     const result = await runPrivacyDetectionOnSource(
       canvas, effectiveConfig, undefined, runRobust, enabledClasses,
     )
+    if (result.warnings?.length) throw new Error(result.warnings.join(' '))
     detections = result.detections
     usedPipeline = true
   } else if (getCategoryConfig(effectiveConfig, 'face')?.enabled ?? true) {

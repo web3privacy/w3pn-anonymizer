@@ -46,7 +46,6 @@ const GROUP_CANDIDATES: Record<PrefetchGroup, PrefetchCandidate[]> = {
   'yolo-privacy-custom': [{ url: '/models/privacy/yolo-privacy-custom.onnx', label: 'Privacy model' }],
   ocr: [
     { url: '/tesseract/tesseract-core-simd-lstm.wasm.js', label: 'OCR engine' },
-    { url: '/tesseract/tesseract-core-simd-lstm.wasm', label: 'OCR engine' },
     { url: '/tesseract/lang/eng.traineddata', label: 'OCR · English' },
     { url: '/tesseract/lang/ces.traineddata', label: 'OCR · Czech' },
   ],
@@ -131,6 +130,7 @@ async function discoverAssets(
 
 async function fetchWithProgress(url: string, onChunk: (n: number) => void): Promise<void> {
   const res = await fetch(url, { cache: 'force-cache' })
+  if (!res.ok) throw new Error(`Asset download failed: ${res.status}`)
   if (!res.ok || !res.body) {
     // Consume anyway so it lands in cache, then bail.
     await res.arrayBuffer().catch(() => undefined)
@@ -152,7 +152,7 @@ async function drainQueue(): Promise<void> {
     const fresh = assets.filter((a) => !warmedUrls.has(a.url))
     if (fresh.length === 0) continue
     // Reserve the URLs up front so a concurrent call doesn't re-enqueue them.
-    for (const a of fresh) warmedUrls.add(a.url)
+    // Only completed downloads enter warmedUrls; failures remain retryable.
 
     const total = state.total + fresh.reduce((sum, a) => sum + a.bytes, 0)
     emit({ phase: 'running', total, count: state.count + fresh.length, label: 'Loading privacy models…' })
@@ -162,12 +162,14 @@ async function drainQueue(): Promise<void> {
       try {
         await fetchWithProgress(asset.url, (n) => emit({ loaded: state.loaded + n }))
       } catch {
-        /* ignore individual failures; keep warming the rest */
+        warmedUrls.delete(asset.url)
+        continue
       }
+      warmedUrls.add(asset.url)
       emit({ completed: state.completed + 1 })
     }
   }
-  emit({ phase: 'done', label: 'Privacy models ready', loaded: Math.max(state.loaded, state.total) })
+  emit({ phase: 'done', label: state.completed === state.count ? 'Model assets cached' : 'Some assets unavailable — detection will report details' })
 }
 
 /**

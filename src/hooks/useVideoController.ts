@@ -1,3 +1,5 @@
+import { releaseVideoFile } from '../lib/video-storage'
+import { DEFAULT_VIDEO_ANALYSIS, type VideoAnalysisSettings, type VideoAnalysisResult } from '../lib/video-analysis'
 import {
   useCallback,
   useEffect,
@@ -10,7 +12,7 @@ import {
   type SetStateAction,
 } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
-import { saveAs } from 'file-saver'
+import { exportBlob } from '../lib/native-media-library'
 import { detectFaces } from '../lib/detector'
 import { clamp } from '../lib/canvas-geometry'
 import { applyColorAdjustments, applyEffectRect, colorAdjExportKey, isColorAdjNoop, pickRandomEmoji, pickUniqueEmojis } from '../lib/effects'
@@ -144,6 +146,10 @@ export interface UseVideoControllerOptions {
 }
 
 export interface VideoControllerApi {
+  videoAnalysisSettings: VideoAnalysisSettings
+  setVideoAnalysisSettings: Dispatch<SetStateAction<VideoAnalysisSettings>>
+  activeVideoAnalysis: VideoAnalysisResult | undefined
+  runAdditionalVideoPass: () => Promise<Blob | null>
   videoProcessing: boolean
   setVideoProcessing: Dispatch<SetStateAction<boolean>>
   videoProgress: {
@@ -380,6 +386,16 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
   const [videoMaskDrawActive, setVideoMaskDrawActive] = useState(false)
   const [videoMaskShape, setVideoMaskShape] = useState<'rectangle' | 'circle' | 'path'>('rectangle')
   const [videoMaskRangeSec, setVideoMaskRangeSec] = useState(3)
+  const currentPhotosRef = useRef(photos)
+  currentPhotosRef.current = photos
+  const [videoAnalysisSettings, setVideoAnalysisSettings] = useState(DEFAULT_VIDEO_ANALYSIS)
+  const [videoAnalysisByPhoto, setVideoAnalysisByPhoto] = useState<Record<string, VideoAnalysisResult>>({})
+  const activeVideoAnalysis = activePhotoId ? videoAnalysisByPhoto[activePhotoId] : undefined
+  useEffect(() => {
+    const ids = new Set(photos.map((photo) => photo.id))
+    setVideoAnalysisByPhoto((current) => Object.keys(current).some((id) => !ids.has(id))
+      ? Object.fromEntries(Object.entries(current).filter(([id]) => ids.has(id))) : current)
+  }, [photos])
   const [activeVideoTime, setActiveVideoTime] = useState(0)
   const [activeVideoFrameLabel, setActiveVideoFrameLabel] = useState<string | null>(null)
   const [videoDraftZone, setVideoDraftZone] = useState<Zone | null>(null)
@@ -793,7 +809,7 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
     setVideoDistortPreviewVisible(false)
   }, [])
 
-  const processActiveVideo = useCallback(async () => {
+  const processActiveVideo = useCallback(async (additionalPass = false) => {
     if (!activePhoto?.isVideo) return null
     if (videoAbortRef.current) return null
     const exportEffect = selectedEffectRef.current
@@ -837,7 +853,12 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
           }
         : undefined
       const videoColorAdj = !isColorAdjNoop(exportColorAdj) ? exportColorAdj : undefined
+      let completedAnalysis: VideoAnalysisResult | undefined
       const resultBlob = await processVideo(sourceVideoBlob, {
+        analysisSettings: videoAnalysisSettings,
+        previousAnalysis: activeVideoAnalysis,
+        additionalAnalysisPass: additionalPass === true,
+        onAnalysis: (result) => { completedAnalysis = result },
         effect,
         strength: brushStrengthRef.current ?? strength,
         emoji: (!emojiRandomRef.current && selectedEmojiRef.current) ? selectedEmojiRef.current : pickRandomEmoji(),
@@ -855,9 +876,11 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
         colorAdj: videoColorAdj,
         distort: videoDistort,
         audioPrivacyMode: audioSettings.mode,
+        audioSettings,
         detectionConfig,
         modelStatus,
         enabledClasses,
+        faceOffsetPercent: detectFaceOffset,
         detectConfidence: 0.7 - (detectSensitivity / 100) * 0.4,
         onPhase: (phase) => setVideoProgress((prev) => ({
           current: prev?.current ?? 0,
@@ -886,6 +909,14 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
         extractPosterFrame(resultBlob).catch(() => null),
         getVideoMetadata(resultBlob).catch(() => null),
       ])
+      if (abort.signal.aborted || !currentPhotosRef.current.some((photo) => photo.id === activePhoto.id)) {
+        await releaseVideoFile(resultBlob)
+        throw new DOMException('Aborted', 'AbortError')
+      }
+      if (completedAnalysis) {
+        const analysis = completedAnalysis
+        setVideoAnalysisByPhoto((current) => ({ ...current, [activePhoto.id]: analysis }))
+      }
       const nextPreviewUrl = poster ? URL.createObjectURL(poster.blob) : null
       setPhotos((cur) => cur.map((p) => {
         if (p.id !== activePhoto.id) return p
@@ -895,6 +926,7 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
           blob: resultBlob,
           previewUrl: nextPreviewUrl ?? p.previewUrl,
           edited: true,
+          privacyProcessed: true,
           mimeType: resultBlob.type || selectedContainer.mimeType || p.mimeType,
           videoDuration: meta?.duration ?? p.videoDuration,
           videoWidth: meta?.width ?? poster?.width ?? p.videoWidth,
@@ -938,7 +970,7 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
       if (err instanceof DOMException && err.name === 'AbortError') {
         setNotice('Video processing cancelled.')
       } else {
-        setNotice('Video processing failed.')
+        setNotice(`Video processing failed: ${err instanceof Error ? err.message : String(err)}`)
         console.error('Video processing error:', err)
       }
       return null
@@ -954,7 +986,12 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
     adjTransformParams,
     clearVideoDistortPreview,
     colorAdj,
-    audioSettings.mode,
+    audioSettings,
+    detectionConfig,
+    modelStatus,
+    enabledClasses,
+    detectSensitivity,
+    detectFaceOffset,
     customImageAssetsRef,
     customImageRandomRef,
     customImageSource,
@@ -971,6 +1008,8 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
     setNotice,
     setPhotos,
     setShowBoxes,
+    videoAnalysisSettings,
+    activeVideoAnalysis,
     videoExportFormat,
     videoExportOptions,
     videoExportSize,
@@ -980,6 +1019,8 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
     videoTimedZonesByPhoto,
     brushStrengthRef,
   ])
+
+  const runAdditionalVideoPass = useCallback(() => processActiveVideo(true), [processActiveVideo])
 
   const cancelVideoProcessing = useCallback(() => {
     videoAbortRef.current?.abort()
@@ -1204,14 +1245,16 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
     workCtxRef,
   ])
 
-  const exportActiveVideo = useCallback(() => {
+  const exportActiveVideo = useCallback(async () => {
     if (!activePhoto?.isVideo) return
-    const ext = mimeTypeToVideoExtension(activePhoto.mimeType)
+    const blob = await processActiveVideo()
+    if (!blob) return
+    const ext = mimeTypeToVideoExtension(blob.type)
     const baseName = activePhoto.name.split('/').pop() ?? activePhoto.name
     const outName = baseName.replace(/\.[^.]+$/, '') + `-anon.${ext}`
-    saveAs(activePhoto.blob, outName)
+    await exportBlob(blob, outName)
     setNotice(`Exported: ${outName}`)
-  }, [activePhoto, setNotice])
+  }, [activePhoto, processActiveVideo, setNotice])
 
   useEffect(() => {
     if (!activePhoto?.isVideo) return
@@ -1451,7 +1494,7 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
       if (cancelled || video.paused || video.ended) return
       activeVideoTimeRef.current = metadata.mediaTime
       const now = performance.now()
-      if (now - playbackFaceDetectLastRef.current > 380) {
+      if (autoDetect && detectionConfig.find((c) => c.type === 'face')?.enabled && now - playbackFaceDetectLastRef.current > 380) {
         playbackFaceDetectLastRef.current = now
         const gen = ++videoFaceDetectGenRef.current
         void runVideoFaceDetectPass(0, metadata.mediaTime, gen)
@@ -1474,6 +1517,8 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
     }
   }, [
     videoPlaying,
+    autoDetect,
+    detectionConfig,
     activePhoto?.id,
     activePhoto?.isVideo,
     activePhoto?.edited,
@@ -1653,6 +1698,10 @@ export function useVideoController(options: UseVideoControllerOptions): VideoCon
     removeVideoTimedZoneFromCurrentFrame,
     clearVideoTimedZones,
     processActiveVideo,
+    videoAnalysisSettings,
+    setVideoAnalysisSettings,
+    activeVideoAnalysis,
+    runAdditionalVideoPass,
     cancelVideoProcessing,
     stepActiveVideoFrame,
     framePrevHold,

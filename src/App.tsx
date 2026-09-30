@@ -1,3 +1,7 @@
+import { VideoAnalysisPanel } from './components/VideoAnalysisPanel'
+import { releaseVideoFile } from './lib/video-storage'
+import { lazy, Suspense } from 'react'
+import { cropZones } from './lib/zone-geometry'
 import {
   type ChangeEvent,
   useCallback,
@@ -6,8 +10,7 @@ import {
   useRef,
   useState,
 } from 'react'
-import JSZip from 'jszip'
-import { saveAs } from 'file-saver'
+import { exportBlob } from './lib/native-media-library'
 import './App.css'
 import './mobile/mobile-redesign.css'
 import './desktop/desktop-v2.css'
@@ -19,9 +22,8 @@ import { EditorBatchPanel } from './desktop/EditorBatchPanel'
 import { EditorSidebar } from './desktop/EditorSidebar'
 import { EditorToolStrip } from './desktop/EditorToolStrip'
 import { EffectPickerDialog } from './components/EffectPickerDialog'
-import { AudioModeViewer } from './components/AudioModeViewer'
+const AudioModeViewer = lazy(() => import('./components/AudioModeViewer').then((module) => ({ default: module.AudioModeViewer })))
 import { decodeAudioBlob, getAudioContext } from './lib/audio/audioUtils'
-import { renderProcessedAudioBuffer } from './lib/audio/audioPipeline'
 import {
   encodeAudioBuffer,
   supportedAudioExportFormats,
@@ -29,7 +31,7 @@ import {
   type AudioExportFormatId,
 } from './lib/audio/audioExport'
 import { VideoTrackModeSelect } from './components/VideoTrackModeSelect'
-import { DocumentMode } from './components/document/DocumentMode'
+const DocumentMode = lazy(() => import('./components/document/DocumentMode').then((module) => ({ default: module.DocumentMode })))
 import { FeedbackModal } from './components/FeedbackModal'
 import { PickerChoiceDialog } from './components/PickerChoiceDialog'
 import { useUndoStack } from './hooks/useUndoStack'
@@ -59,7 +61,7 @@ import { usePhotoSwipeNav } from './mobile/usePhotoSwipeNav'
 import { useLockMobileViewport } from './mobile/useLockMobileViewport'
 import { useDialogFocusTrap } from './mobile/useDialogFocusTrap'
 import { MobileAbout } from './mobile/MobileAbout'
-import { MobileLiveMode } from './mobile/MobileLiveMode'
+const MobileLiveMode = lazy(() => import('./mobile/MobileLiveMode').then((module) => ({ default: module.MobileLiveMode })))
 import { MobileShell } from './mobile/MobileShell'
 import { MobileToast } from './mobile/MobileToast'
 import { MobileImageCanvasControls } from './mobile/MobileImageCanvasControls'
@@ -67,7 +69,7 @@ import type { AppMobileBindings, MobileBatchState } from './mobile/bindings'
 import { buildMobileBindings } from './mobile/buildMobileBindings'
 import { MobileBindingsProvider } from './mobile/MobileBindingsProvider'
 import { customImageFolderForSource } from './lib/custom-image-presets'
-import { canvasToBlob, exportCanvasToBlob, stripMetadata, type PngDepth } from './lib/export-canvas'
+import { canvasToBlob, exportCanvasToBlob, type PngDepth } from './lib/export-canvas'
 import { createId, pickCustomImageAssetId, brushStampSeed } from './lib/ids'
 import type { MobileMode, MobilePanel, MobileToolCategory } from './mobile/types'
 import { CROP_TOOLS, EFFECT_TOOL_ORDER, FACE_TOOLS, panelForCategory, ZONE_TOOLS } from './mobile/toolRotation'
@@ -86,6 +88,8 @@ import { probeAllYoloModels, runPrivacyDetectionOnSource } from './lib/privacyDe
 import type { PrivacyDetection } from './types'
 import { initializeDetector, resetDetectorStatus, setDetectionProgressCallback } from './lib/detector'
 import { ModelLoadStatus } from './components/ModelLoadStatus'
+import { Icon } from './components/Icon'
+import { ZoneEffectPreview } from './lib/zone-effect-preview'
 import { BackgroundAssetLoader } from './components/BackgroundAssetLoader'
 import {
   getPrefetchState,
@@ -116,7 +120,7 @@ import {
   getCropRectNormalized,
   suggestContentAwareCropFromBlob,
 } from './lib/normalize'
-import { mimeTypeToVideoExtension, resolveVideoExportSize, type VideoExportSize } from './lib/video'
+import { resolveVideoExportSize, type VideoExportSize } from './lib/video'
 import { extensionForMime } from './lib/native-media-library'
 import type {
   AnonymizeEffectId,
@@ -150,6 +154,12 @@ const effectPickerKindForEffect = (effect: AnonymizeEffectId): EffectPickerKind 
 function App() {
   const isMobile = useIsMobile()
   const [photos, setPhotos] = useState<PhotoItem[]>([])
+  const previousVideoFiles = useRef<Set<Blob>>(new Set())
+  useEffect(() => {
+    const current = new Set(photos.map((photo) => photo.blob))
+    for (const blob of previousVideoFiles.current) if (!current.has(blob)) void releaseVideoFile(blob).catch((error) => console.warn('Temporary video cleanup failed:', error))
+    previousVideoFiles.current = current
+  }, [photos])
   const [activePhotoId, setActivePhotoId] = useState<string | null>(null)
   const activePhotoIdRef = useRef<string | null>(null)
   const [zonesByPhoto, setZonesByPhoto] = useState<Record<string, Zone[]>>({})
@@ -214,7 +224,7 @@ function App() {
   const previewBakedRef = useRef(false)
   const detectingRef = useRef(false)
   const { theme, setTheme, effectiveTheme } = useThemeMode(isMobile)
-  const { detector, setDetector, detectorLoading, modelLoadProgress, refreshDetector } = useDetector()
+  const { detector, setDetector, detectorLoading, modelLoadProgress, refreshDetector } = useDetector(photos.some((photo) => !photo.isAudio && !photo.isDocument))
   const [autoDetect, setAutoDetect] = useState(true)   // auto-detect faces on photo open
   const [showBoxes, setShowBoxes] = useState(true)     // show/hide zone outlines
   const {
@@ -235,14 +245,16 @@ function App() {
   } = usePrivacyDetectionConfig()
 
   useEffect(() => {
+    const detectorWaitingForMedia =
+      detector.mode === 'unavailable' && detector.message === 'Loads when needed.'
     const yunetStatus: ModelAvailabilityStatus =
       detector.mode === 'yunet-wasm'
         ? 'ready'
-        : detectorLoading
+        : detectorLoading || detectorWaitingForMedia
           ? 'loading'
           : 'missing'
     setModelStatus((prev) => ({ ...prev, 'yunet-face': yunetStatus }))
-  }, [detector.mode, detectorLoading, setModelStatus])
+  }, [detector.message, detector.mode, detectorLoading, setModelStatus])
 
   const [detectSensitivity, setDetectSensitivity] = useState(25) // 0..100 — default face sensitivity
   const [videoAudioPanelOpen, setVideoAudioPanelOpen] = useState(false) // collapsible audio tools in the video editor
@@ -278,13 +290,17 @@ function App() {
   const [detectionStep, setDetectionStep] = useState('')
   const [assetPrefetchState, setAssetPrefetchState] = useState<PrefetchState>(() => getPrefetchState())
   const [isExporting, setIsExporting] = useState(false)
-  const [localProcessingMs, setLocalProcessingMs] = useState<number | null>(null)
   const [lastDetectFailed, setLastDetectFailed] = useState(false)
   const [zoneToolCustomized, setZoneToolCustomized] = useState(false)
   const [effectToolCustomized, setEffectToolCustomized] = useState(false)
   const [isNormalizing, setIsNormalizing] = useState(false)
   const [notice, setNotice] = useState('Load photos to get started.')
-  void notice // kept for setNotice side-effects (error messages, etc.) — not displayed in toolbar
+  useEffect(() => {
+    if (!notice) return
+    const timer = setTimeout(() => setNotice(''), 2000)
+    return () => clearTimeout(timer)
+  }, [notice])
+
   const [draftZone, setDraftZone] = useState<Zone | null>(null)
   const [normalizeSettings, setNormalizeSettings] = useState<NormalizeSettings>(DEFAULT_NORMALIZE_SETTINGS)
   const [normalizeResults, setNormalizeResults] = useState<Record<string, NormalizeResult>>({})
@@ -312,6 +328,9 @@ function App() {
   const [mobileMode, setMobileMode] = useState<MobileMode>('home')
   const [mobileEditorSlideIn, setMobileEditorSlideIn] = useState(false)
   const [desktopLiveOpen, setDesktopLiveOpen] = useState(false)
+  useEffect(() => {
+    if (desktopLiveOpen || mobileMode === 'live') void refreshDetector(false)
+  }, [desktopLiveOpen, mobileMode, refreshDetector])
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>(null)
   const [mobilePanelReturnTo, setMobilePanelReturnTo] = useState<MobilePanel>(null)
   const [mobileEditorReturnTo, setMobileEditorReturnTo] = useState<import('./mobile/types').MobileEditorReturnTo>(null)
@@ -481,6 +500,9 @@ function App() {
   const sidebarResizeStartWRef = useRef(220)
   const colorPreviewCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const qualityPreviewCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  // Async compression must never replace pixels edited since its snapshot.
+  const qualityPreviewGenerationRef = useRef(0)
+  const zoneEffectPreviewRef = useRef(new ZoneEffectPreview())
   const previewScaleCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const batchPreviewCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const batchPreviewDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -569,7 +591,7 @@ function App() {
   const anonymizedPhotoIds = useMemo(() => {
     const ids = new Set<string>()
     for (const p of photos) {
-      if (p.edited || appliedByPhoto[p.id]) ids.add(p.id)
+      if (p.privacyProcessed || appliedByPhoto[p.id]) ids.add(p.id)
     }
     return ids
   }, [photos, appliedByPhoto])
@@ -578,7 +600,7 @@ function App() {
   // gallery (green outline) and full-library export reflect the latest state.
   const commitAnonymizedToLibrary = useCallback((photoId: string, blob: Blob, mimeType?: string) => {
     setPhotos((cur) => cur.map((p) => (
-      p.id === photoId ? { ...p, blob, edited: true, mimeType: mimeType ?? blob.type ?? p.mimeType } : p
+      p.id === photoId ? { ...p, blob, edited: true, privacyProcessed: true, mimeType: mimeType ?? blob.type ?? p.mimeType } : p
     )))
   }, [setPhotos])
 
@@ -598,12 +620,10 @@ function App() {
       const sourceBlob = originalBlobByPhoto[activePhoto.id] ?? activePhoto.blob
       const buffer = await decodeAudioBlob(sourceBlob)
       const distort = audioSettings.mode !== 'remove_audio' && audioSettings.mode !== 'keep_original'
-      const out = distort
-        ? await renderProcessedAudioBuffer(getAudioContext(), buffer, audioSettings)
-        : buffer
+      const out = await (await import('./lib/audio/audioPipeline')).renderProcessedAudioBuffer(getAudioContext(), buffer, audioSettings)
       const blob = await encodeAudioBuffer(out, format)
-      saveAs(blob, anonymizedAudioFilename(activePhoto.name, format.ext))
-      if (distort) commitAnonymizedToLibrary(activePhoto.id, blob, blob.type || 'audio/wav')
+      await exportBlob(blob, anonymizedAudioFilename(activePhoto.name, format.ext))
+      if (distort || audioSettings.mode === 'remove_audio') commitAnonymizedToLibrary(activePhoto.id, blob, blob.type || 'audio/wav')
     } catch {
       setNotice('Audio export failed.')
     } finally {
@@ -637,20 +657,33 @@ function App() {
 
   const setActiveZones = useCallback((updater: (zones: Zone[]) => Zone[]) => {
     if (!activePhotoId) return
-    setZonesByPhoto((cur) => ({ ...cur, [activePhotoId]: updater(cur[activePhotoId] ?? []) }))
+    setZonesByPhoto((cur) => {
+      const before = cur[activePhotoId] ?? []
+      const after = updater(before).map((zone) => before.includes(zone) ? zone : { ...zone, userModified: true })
+      return { ...cur, [activePhotoId]: after }
+    })
     setZonesAnonymized(false)
   }, [activePhotoId])
 
   const updateActiveZoneFields = useCallback((updater: (zones: Zone[]) => Zone[]) => {
     if (!activePhotoId) return
-    setZonesByPhoto((cur) => ({ ...cur, [activePhotoId]: updater(cur[activePhotoId] ?? []) }))
+    setZonesByPhoto((cur) => {
+      const before = cur[activePhotoId] ?? []
+      const after = updater(before).map((zone) => before.includes(zone) ? zone : { ...zone, userModified: true })
+      return { ...cur, [activePhotoId]: after }
+    })
   }, [activePhotoId])
 
   const setActiveDirty = useCallback((isDirty: boolean) => {
     if (!activePhotoId) return
     setDirtyByPhoto((cur) => ({ ...cur, [activePhotoId]: isDirty }))
     // Clear quality preview so user sees actual edits
-    if (isDirty && qualityPreviewCanvasRef.current) { qualityPreviewCanvasRef.current.width = 0 }
+    if (isDirty) {
+      qualityPreviewGenerationRef.current += 1
+      zoneEffectPreviewRef.current.invalidate()
+      if (qualityPreviewCanvasRef.current) qualityPreviewCanvasRef.current.width = 0
+      setPreviewRendering(false)
+    }
   }, [activePhotoId])
 
   const customEffectOptions = useCallback((
@@ -1179,13 +1212,13 @@ function App() {
     removeVideoTimedZoneFromCurrentFrame,
     clearVideoTimedZones,
     processActiveVideo,
+    videoAnalysisSettings, setVideoAnalysisSettings, activeVideoAnalysis, runAdditionalVideoPass,
     cancelVideoProcessing,
     stepActiveVideoFrame,
     framePrevHold,
     frameNextHold,
     openCurrentVideoFrameAsSnapshot,
     stepEditFrameAdjacent,
-    exportActiveVideo,
     syncVideoContentLayout,
     runVideoFaceDetectPass,
     seekActiveVideo,
@@ -1339,7 +1372,6 @@ function App() {
     setEffectFlyoutOpen,
     setAdjFlyoutOpen,
     setTransformFlyoutOpen,
-    setLocalProcessingMs,
     setLastDetectFailed,
     setZoneToolCustomized,
     setEffectToolCustomized,
@@ -1366,6 +1398,16 @@ function App() {
     snapshotVideoDistortSettings,
     applyVideoDistortSettings,
   })
+
+  const loadDemoExperience = useCallback(async () => {
+    // The demo is a guided first-run experience. It must visibly demonstrate
+    // detection even if saved settings previously disabled faces or boxes.
+    setCategoryEnabled('face', true)
+    setAutoDetect(true)
+    setShowBoxes(true)
+    setDetectSensitivity((current) => Math.max(current, 70))
+    await loadDemoPhotos()
+  }, [loadDemoPhotos, setCategoryEnabled])
 
   const openFolderPicker = useCallback(async () => {
     setIsBusy(true)
@@ -1449,19 +1491,20 @@ function App() {
   }, [addRecords])
 
   const detectGenerationRef = useRef(0)
-  const detectFacesOnActiveImage = useCallback(async (robust = false) => {
+  const queuedDetectionRef = useRef(false)
+  const latestDetectionRef = useRef<((robust?: boolean) => Promise<void>) | null>(null)
+  const detectFacesOnActiveImage = useCallback(async (robust?: boolean) => {
     if (!activePhoto) return
     // Videos are detected frame-by-frame during processing, never on the (stale)
     // work canvas — otherwise the previous photo's faces leak onto the video.
     if (activePhoto.isVideo) return
-    if (detectingRef.current) return
+    if (detectingRef.current) { queuedDetectionRef.current = true; return }
     const photoId = activePhoto.id
     const workCanvas = workCanvasRef.current
     if (!workCanvas || workCanvas.width === 0) return
     const generation = ++detectGenerationRef.current
     detectingRef.current = true
     setIsDetecting(true)
-    setLocalProcessingMs(null)
     setDetectionStep('Preparing…')
     setNotice(robust ? 'Running thorough detection…' : 'Detecting…')
     setDetectionProgressCallback((step) => setDetectionStep(step))
@@ -1495,7 +1538,7 @@ function App() {
       const applyDetections = (detections: PrivacyDetection[]) => {
         if (generation !== detectGenerationRef.current || activePhotoIdRef.current !== photoId) return
         const zones = detectionsToZones(detections)
-        setZonesByPhoto((cur) => ({ ...cur, [photoId]: zones }))
+        setZonesByPhoto((cur) => ({ ...cur, [photoId]: [...(cur[photoId] ?? []).filter((zone) => !zone.sourceModel || zone.locked || zone.userModified), ...zones] }))
         setZonesAnonymized(false)
         previewBakedRef.current = false
         if (activePhotoId === photoId) setSelectedZoneId(zones[0]?.id ?? null)
@@ -1512,7 +1555,6 @@ function App() {
         const boxes = await detectFaces(workCanvas, runRobust, confidence)
         if (generation !== detectGenerationRef.current || activePhotoIdRef.current !== photoId) return
         detections = boxes.map((b) => faceBoxToPrivacyDetection(b, W, H))
-        if (detections.length > 0) applyDetections(detections)
       }
 
       // Phase 2 — optional YOLO targets + OCR (skip re-running YuNet).
@@ -1542,6 +1584,7 @@ function App() {
           const result = await runPrivacyDetectionOnSource(
             workCanvas, configNoFace, undefined, runRobust, detectClasses,
           )
+          if (result.warnings?.length) throw new Error(result.warnings.join(' '))
           void probeAllYoloModels().then((yolo) => {
             setModelStatus((prev) => ({ ...prev, ...yolo }))
           })
@@ -1561,14 +1604,13 @@ function App() {
       }
 
       const elapsed = Math.round(performance.now() - t0)
-      setLocalProcessingMs(elapsed)
       const counts: Partial<Record<string, number>> = {}
       for (const d of detections) counts[d.type] = (counts[d.type] ?? 0) + 1
       setLastDetectionCounts(counts)
 
       if (detections.length === 0) {
         setLastDetectFailed(false)
-        setZonesByPhoto((cur) => ({ ...cur, [photoId]: [] }))
+        setZonesByPhoto((cur) => ({ ...cur, [photoId]: (cur[photoId] ?? []).filter((zone) => !zone.sourceModel || zone.locked || zone.userModified) }))
         setSelectedZoneId(null)
         setNotice(formatDetectionSummary(counts, elapsed, usedPipeline))
         return
@@ -1577,6 +1619,7 @@ function App() {
       applyDetections(detections)
       setNotice(formatDetectionSummary(counts, elapsed, usedPipeline))
     } catch (err) {
+      if (generation !== detectGenerationRef.current) return
       const msg = err instanceof Error ? err.message : String(err)
       setNotice(`Detection error: ${msg}`)
       setDetectionStep(`Error: ${msg}`)
@@ -1587,11 +1630,18 @@ function App() {
       setDetectionStep('')
       setDetectionProgressCallback(null)
       renderCanvas()
+      if (queuedDetectionRef.current) {
+        queuedDetectionRef.current = false
+        queueMicrotask(() => { void latestDetectionRef.current?.() })
+      }
     }
   }, [activePhoto, activePhotoId, customImageAssets, modelStatus, renderCanvas, selectedEffect, setLastDetectionCounts])
 
+  latestDetectionRef.current = detectFacesOnActiveImage
+
   const cancelDetection = useCallback(() => {
-    detectingRef.current = false
+    queuedDetectionRef.current = false
+    // Keep the inference lock until the outstanding task actually finishes.
     detectGenerationRef.current += 1
     setIsDetecting(false)
     setDetectionStep('')
@@ -1610,7 +1660,9 @@ function App() {
     // Yield to let the browser paint the "processing" UI state before blocking
     // on heavy pixel work (noise/contour can take 200ms+ per zone on mobile).
     await new Promise(requestAnimationFrame)
+    let sliceStart = performance.now()
     for (const z of effectiveZones) {
+      if (activePhotoIdRef.current !== activePhotoId) return
       applyEffectRect(
         ctx,
         z.effect,
@@ -1622,9 +1674,14 @@ function App() {
         z.emoji,
         customEffectOptions(z),
       )
-      // Yield between zones so the UI thread can breathe on multi-face images.
-      if (effectiveZones.length > 2) await new Promise(requestAnimationFrame)
+      // A frame per face forces a 100-face image to take at least 1.7 seconds
+      // even when each effect takes microseconds. Yield by time spent instead.
+      if (performance.now() - sliceStart >= 8) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0))
+        sliceStart = performance.now()
+      }
     }
+    if (activePhotoIdRef.current !== activePhotoId) return
     previewBakedRef.current = true
     setActiveDirty(true)
     if (activePhotoId) setAppliedByPhoto((cur) => ({ ...cur, [activePhotoId]: true }))
@@ -1653,6 +1710,8 @@ function App() {
     const ph = Math.round(h * workCanvas.height)
     if (pw < 2 || ph < 2) return
     pushUndo()
+    const crop = { x: px / workCanvas.width, y: py / workCanvas.height, width: pw / workCanvas.width, height: ph / workCanvas.height }
+    setZonesByPhoto((cur) => ({ ...cur, [activePhoto.id]: cropZones(cur[activePhoto.id] ?? [], crop) }))
     const tmp = document.createElement('canvas')
     tmp.width = pw; tmp.height = ph
     const tc = tmp.getContext('2d')!
@@ -1834,45 +1893,17 @@ function App() {
     if (!activePhoto?.isVideo) return
     const selectedFormat = videoExportOptions.find((opt) => opt.id === videoExportFormat)
     const selectedExt = selectedFormat?.ext ?? videoExportFormat
-    const currentMime = activePhoto.mimeType || activePhoto.blob.type
-    const fileExt = activePhoto.name.split('.').pop()?.toLowerCase() ?? ''
-    const currentExt = currentMime ? mimeTypeToVideoExtension(currentMime) : fileExt
-    const needsProcessing = hasPendingVideoEdits || currentExt !== selectedExt
-    const blob = needsProcessing ? await processActiveVideo() : activePhoto.blob
+    const blob = await processActiveVideo()
     if (!blob) return
     const baseName = activePhoto.name.split('/').pop() ?? activePhoto.name
     const outName = baseName.replace(/\.[^.]+$/, '') + `-anon.${selectedExt}`
-    saveAs(blob, outName)
-    setNotice(`Exported: ${outName}`)
-  }, [activePhoto, hasPendingVideoEdits, processActiveVideo, setNotice, videoExportFormat, videoExportOptions])
-
-  const exportZip = useCallback(async () => {
-    if (photos.length === 0) return
-    const images = photos.filter((p) => !p.isVideo && !p.isVideoFrameEdit)
-    const skippedVideos = photos.length - images.length
-    if (images.length === 0) {
-      setNotice('No photos to export. Use video export for videos.')
-      return
-    }
-    setIsExporting(true)
     try {
-      const zip = new JSZip()
-      const usage = new Map<string, number>()
-      // Strip metadata from images. Videos use the dedicated video export path.
-      await Promise.all(images.map(async (p) => {
-        const clean = await stripMetadata(p.blob)
-        zip.file(makeZipSafeName(p.name, usage), clean)
-      }))
-      const blob = await zip.generateAsync({ type: 'blob' })
-      saveAs(blob, `anonymized-${new Date().toISOString().slice(0, 10)}.zip`)
-      setNotice(
-        skippedVideos > 0
-          ? `ZIP: ${images.length} photo${images.length === 1 ? '' : 's'} · ${skippedVideos} video${skippedVideos === 1 ? '' : 's'} skipped.`
-          : `ZIP: ${images.length} photo${images.length === 1 ? '' : 's'}.`,
-      )
-    } catch { setNotice('ZIP export failed.') }
-    finally { setIsExporting(false) }
-  }, [photos])
+      await exportBlob(blob, outName)
+      setNotice(`Exported: ${outName}`)
+    } catch (error) { setNotice(`Export failed: ${error instanceof Error ? error.message : String(error)}`) }
+  }, [activePhoto, processActiveVideo, setNotice, videoExportFormat, videoExportOptions])
+
+  const exportZip = useCallback(() => exportAllLibraryZip(photos.filter((photo) => !photo.isVideo && !photo.isAudio && !photo.isDocument).map((photo) => photo.id)), [exportAllLibraryZip, photos])
 
   const toggleBatchSelect = useCallback((photoId: string) => {
     setSelectedForBatch((cur) => {
@@ -1923,11 +1954,11 @@ function App() {
     if (Object.keys(normalizeResults).length === 0) { setNotice('Run batch first.'); return }
     setIsExporting(true)
     try {
-      const zip = new JSZip()
+      const zip = new (await import('jszip')).default()
       const usage = new Map<string, number>()
       Object.values(normalizeResults).forEach((r) => zip.file(makeZipSafeName(r.outputName, usage), r.blob))
       const blob = await zip.generateAsync({ type: 'blob' })
-      saveAs(blob, `normalized-${new Date().toISOString().slice(0, 10)}.zip`)
+      await exportBlob(blob, `normalized-${new Date().toISOString().slice(0, 10)}.zip`)
       setNotice(`ZIP: ${Object.keys(normalizeResults).length} normalized.`)
     } catch { setNotice('ZIP export failed.') }
     finally { setIsExporting(false) }
@@ -2053,12 +2084,17 @@ function App() {
   }, [adjFlyoutOpen, transformPanelOpen, mobilePanel, getActiveDistorts, distortStrengthByEffect, adjTransformParams, adjPixelShiftType, activePhoto?.id, isMobile])
 
   const computePreviewFileSize = useCallback(() => {
+    const generation = ++qualityPreviewGenerationRef.current
     const wc = workCanvasRef.current
     if (!wc || wc.width === 0 || !activePhoto || activePhoto.isVideo || activePhoto.isAudio || activePhoto.isDocument) {
       setPreviewFileSizeKb(null); setPreviewRendering(false)
       if (qualityPreviewCanvasRef.current) { qualityPreviewCanvasRef.current.width = 0 }
       return
     }
+    const photoId = activePhoto.id
+    const isCurrent = () => generation === qualityPreviewGenerationRef.current
+      && activePhotoIdRef.current === photoId
+    const finish = () => { if (isCurrent()) setPreviewRendering(false) }
     const draft = mobileExportDraftRef.current
     const fmt = draft?.format ?? exportFormat
     const qual = draft?.quality ?? exportQuality
@@ -2078,24 +2114,27 @@ function App() {
     setPreviewRendering(true)
     if (isLosslessFormat(fmt)) {
       exportCanvasToBlob(sourceCanvas, fmt, qual, exportPngDepth).then((blob) => {
+        if (!isCurrent()) return
         setPreviewFileSizeKb(Math.round(blob.size / 1024))
         if (qualityPreviewCanvasRef.current) { qualityPreviewCanvasRef.current.width = 0 }
         renderCanvasRef.current()
-      }).catch(() => {}).finally(() => setPreviewRendering(false))
+      }).catch(() => {}).finally(finish)
       return
     }
     const quality = qual / 100
     sourceCanvas.toBlob((blob) => {
-      if (!blob) { setPreviewRendering(false); return }
+      if (!isCurrent()) return
+      if (!blob) { finish(); return }
       setPreviewFileSizeKb(Math.round(blob.size / 1024))
       createImageBitmap(blob).then((bmp) => {
+        if (!isCurrent()) { bmp.close(); return }
         if (!qualityPreviewCanvasRef.current) qualityPreviewCanvasRef.current = document.createElement('canvas')
         const qc = qualityPreviewCanvasRef.current
         qc.width = bmp.width; qc.height = bmp.height
         qc.getContext('2d')!.drawImage(bmp, 0, 0)
         bmp.close()
         renderCanvasRef.current()
-      }).catch(() => {}).finally(() => setPreviewRendering(false))
+      }).catch(() => {}).finally(finish)
     }, fmt, quality)
   // renderCanvas intentionally not in deps — use renderCanvasRef to avoid infinite loop
    
@@ -2466,6 +2505,11 @@ function App() {
   // original, using the CURRENT face-offset + strength. Reads live values from
   // refs so the callback identity stays stable (no debounce-reset / stale-offset
   // loops). Returns true when it actually re-baked.
+  useEffect(() => {
+    const preview = zoneEffectPreviewRef.current
+    return () => preview.dispose()
+  }, [activePhoto?.id])
+
   const reapplyZoneEffectsPreview = useCallback(async (zonesOverride?: Zone[]): Promise<boolean> => {
     if (batchPanelOpenRef.current) return false
     const photo = activePhotoRef.current
@@ -2481,30 +2525,22 @@ function App() {
     const strength = brushStrengthRef.current
 
     try {
-      const bmp = await createImageBitmap(orig)
-      if (activePhotoIdRef.current !== photoId) { bmp.close(); return false }
-      if (wc.width !== bmp.width || wc.height !== bmp.height) {
-        wc.width = bmp.width; wc.height = bmp.height; workCtxRef.current = null
-      }
-      const ctx = getWorkCtx()
-      if (!ctx) { bmp.close(); return false }
-      ctx.clearRect(0, 0, wc.width, wc.height)
-      ctx.drawImage(bmp, 0, 0)
-      bmp.close()
       const expanded = zonesWithFaceOffset(baseZones, offset)
-      expanded.forEach((z) =>
-        applyEffectRect(
-          ctx,
-          z.effect,
-          z.x * wc.width,
-          z.y * wc.height,
-          z.width * wc.width,
-          z.height * wc.height,
-          strength,
-          z.emoji,
-          customEffectOptions(z),
-        ),
-      )
+      const baked = await zoneEffectPreviewRef.current.render(orig, expanded.length, (ctx, index) => {
+        const z = expanded[index]
+        applyEffectRect(ctx, z.effect, z.x * ctx.canvas.width, z.y * ctx.canvas.height,
+          z.width * ctx.canvas.width, z.height * ctx.canvas.height, strength, z.emoji, customEffectOptions(z))
+      }, (result) => {
+        if (activePhotoIdRef.current !== photoId) return
+        if (wc.width !== result.width || wc.height !== result.height) {
+          wc.width = result.width; wc.height = result.height; workCtxRef.current = null
+        }
+        const ctx = getWorkCtx()
+        if (ctx) { ctx.clearRect(0, 0, wc.width, wc.height); ctx.drawImage(result, 0, 0) }
+      })
+      if (!baked || activePhotoIdRef.current !== photoId) return false
+      qualityPreviewGenerationRef.current += 1
+      setPreviewRendering(false)
       previewBakedRef.current = true
       // Invalidate the cached quality/compression preview so renderCanvas draws
       // the freshly re-baked work canvas instead of a stale (old-size) preview.
@@ -2634,19 +2670,20 @@ function App() {
   )
   // Re-bake zone effects when face-offset / strength / zone geometry changes,
   // but only while a preview is actually baked on the canvas.
-  const zonePreviewDebounceRef = useRef<ReturnType<typeof setTimeout>>()
   useEffect(() => {
     if (!activePhoto || activePhoto.isVideo || activeZones.length === 0) return
     if (batchPanelOpen) return
     if (!previewBakedRef.current && !zonesAnonymized) return
     if (!originalBlobByPhoto[activePhoto.id]) return
-    if (zonePreviewDebounceRef.current) clearTimeout(zonePreviewDebounceRef.current)
-    zonePreviewDebounceRef.current = setTimeout(() => {
+    const frame = requestAnimationFrame(() => {
       void reapplyZoneEffectsPreview().then((baked) => {
         if (baked) setActiveDirty(true)
       })
-    }, isMobile && mobilePanel === 'tool-effects' ? 0 : isMobile ? 120 : 90)
-    return () => { if (zonePreviewDebounceRef.current) clearTimeout(zonePreviewDebounceRef.current) }
+    })
+    return () => {
+      cancelAnimationFrame(frame)
+      zoneEffectPreviewRef.current.invalidate()
+    }
    
   }, [brushStrength, detectFaceOffset, zoneBakeSignature, activePhoto?.id, zonesAnonymized, isMobile, mobilePanel, asciiCharset, asciiColor, customImageSource, customImageAssetsSignature, batchPanelOpen])
 
@@ -2711,12 +2748,12 @@ function App() {
           removeSelectedZone()
         }
       }
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'z') {
+      if (!isEditableTarget && (e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'z') {
         e.preventDefault()
         clearZones()
         return
       }
-      if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
+      if (!isEditableTarget && (e.metaKey || e.ctrlKey) && e.key === 'z') {
         e.preventDefault()
         undo()
       }
@@ -2777,6 +2814,8 @@ function App() {
 
   // Load active photo into work canvas; auto-detect if enabled
   useEffect(() => {
+    qualityPreviewGenerationRef.current += 1
+    if (qualityPreviewCanvasRef.current) qualityPreviewCanvasRef.current.width = 0
     if (!activePhoto) {
       const wc = workCanvasRef.current
       if (wc) { wc.width = 0; wc.height = 0 }
@@ -2834,7 +2873,11 @@ function App() {
       if (!wc || wc.width === 0) return
       const alreadyHasZones = (zonesByPhoto[activePhoto.id] ?? []).length > 0
       if (!alreadyHasZones) {
-        detectFacesOnActiveImage(false)
+        const isDemoPhoto = DEMO_MEDIA.some((url) => url.endsWith(`/${activePhoto.name}`))
+        // Demo crowd photos intentionally contain small and distant faces.
+        // Scan them in tiles so the first-run experience demonstrates real
+        // boxes instead of reporting a misleading zero-result fast pass.
+        detectFacesOnActiveImage(isDemoPhoto)
       }
     }, 300)
 
@@ -3108,9 +3151,13 @@ function App() {
 
   const selectToolCategory = useCallback((cat: MobileToolCategory) => {
     setActiveCategory(cat)
-    if (cat === 'crop') {
+    if (cat === 'zone') {
+      // The drawer already highlights the current brush/zone tool. Activate
+      // that tool on entry, rather than requiring a second selection to paint.
+      applyZoneTool(eraserActive ? 'eraser' : lastZoneTool)
+    } else if (cat === 'crop') {
       mobileCanvasEditRef.current = true
-    } else if (cat !== 'zone') {
+    } else {
       mobileCanvasEditRef.current = toolMode === 'brush' || toolMode === 'zone' || toolMode === 'crop'
     }
     if (cat === 'gallery') {
@@ -3120,7 +3167,7 @@ function App() {
     }
     const panel = panelForCategory(cat)
     if (panel) setMobilePanel(panel)
-  }, [toolMode])
+  }, [applyZoneTool, eraserActive, lastZoneTool, toolMode])
 
   const rotateCategoryTool = useCallback((cat: MobileToolCategory) => {
     selectToolCategory(cat)
@@ -3281,7 +3328,8 @@ function App() {
     theme,
     setTheme,
     setAboutOpen,
-    loadDemoPhotos,
+    setFeedbackOpen,
+    loadDemoPhotos: loadDemoExperience,
     isBusy,
     isDragOver,
     photos,
@@ -3314,7 +3362,7 @@ function App() {
     applyZones,
     zonesAnonymized,
     exportActivePhoto,
-    exportActiveVideo,
+    exportActiveVideo: downloadActiveVideo,
     videoProcessing,
     videoProgress,
     cancelVideoProcessing,
@@ -3528,10 +3576,10 @@ function App() {
     liveDetectEnabled, mobileViewZoom, lastDetectFailed, isDetecting, detector, detectorLoading,
     exportLibraryProgress, adjTransform, adjTransformStrength, adjTransformParams,
     adjPixelShiftType, enabledDistorts, distortStrengthByEffect, undoCount, zonesAnonymized,
-    setTheme, setAboutOpen, loadDemoPhotos, setSelectedForBatch, setMobileMode, setMobilePanel,
+    setTheme, setAboutOpen, loadDemoExperience, setSelectedForBatch, setMobileMode, setMobilePanel,
     setMobilePanelReturnTo, returnToLiveFromEditor, setGalleryBatchSelect, openUnifiedPicker,
     openVideoPicker, selectPhoto, deletePhoto, handleResetPhotoToOriginal, undo, applyZones,
-    exportActivePhoto, exportActiveVideo, exportAllLibraryZip, exportAllLibraryIndividual,
+    exportActivePhoto, downloadActiveVideo, exportAllLibraryZip, exportAllLibraryIndividual,
     cancelVideoProcessing, processActiveVideo, setVideoExportFormat, setVideoMaskDrawActive,
     setVideoMaskShape, setImageMaskDrawActive, setVideoMaskRangeSec, stepActiveVideoFrame,
     stepEditFrameAdjacent, openCurrentVideoFrameAsSnapshot, applySnapshotToSourceVideo,
@@ -3705,8 +3753,18 @@ function App() {
     maxZoom: 3,
   })
 
+  const statusNotice = notice && notice !== 'Load photos to get started.' ? (
+      <div className="app-status-notice app-status-notice--inline" role="status" aria-live="polite">
+        <Icon name={/error|fail|unavailable|denied/i.test(notice) ? 'info' : isDetecting ? 'frame_inspect' : 'check_circle'} size={15} />
+        <span title={notice}>{notice}</span>
+        <button type="button" onClick={() => setNotice('')} aria-label="Dismiss notification"><Icon name="close" size={14} /></button>
+      </div>
+  ) : null
+
   return (
     <MobileBindingsProvider value={mobileBindings}>
+    <Suspense fallback={<div role="status" className="app-status-notice"><Icon name="hourglass_top" size={15} /><span>Opening editor…</span></div>}>
+    {photos.length === 0 && mobileMode !== 'live' && <div className="app-status-fallback">{statusNotice}</div>}
     <div
       className={`app-shell${isMobile ? ' app-shell-mobile' : ' app-shell-desktop-v2'}${isMobile && mobileMode === 'live' ? ' app-shell-mobile--live' : ''}${isMobile && mobileMode === 'video' ? ' app-shell-mobile--video' : ''}${isMobile && mobileMode === 'audio' ? ' app-shell-mobile--audio' : ''}${isMobile && mobileMode === 'editor' ? ' app-shell-mobile--image' : ''}${mobileToolSheetOpen ? ' app-shell-mobile--tool-sheet-open' : ''}${!isMobile && activePhoto?.isVideo ? ' app-shell-desktop-v2--video' : ''}${!isMobile && activePhoto?.isAudio ? ' app-shell-desktop-v2--audio' : ''}${!isMobile && activePhoto?.isDocument ? ' app-shell-desktop-v2--document' : ''}${isMobile && activePhoto?.isDocument ? ' app-shell-mobile--document' : ''}`}
       translate="no"
@@ -3719,9 +3777,10 @@ function App() {
             own minimal header (W3PN logo + "WHAT IS THIS?"). ──────────────── */}
       {!isMobile && photos.length > 0 && (
         <DesktopTopBar
+          statusNotice={desktopLiveOpen ? null : statusNotice}
           busy={isBusy}
           onAbout={() => setAboutOpen(true)}
-          onLoadDemo={loadDemoPhotos}
+          onLoadDemo={loadDemoExperience}
           showDemo={!photos.some((photo) => DEMO_MEDIA.some((url) => url.endsWith(`/${photo.name}`)))}
           onLiveCamera={() => setDesktopLiveOpen(true)}
           onFeedback={() => setFeedbackOpen(true)}
@@ -3747,6 +3806,7 @@ function App() {
 
       {isMobile && (
         <MobileShell
+          statusNotice={statusNotice}
           fmtBytes={fmtBytes}
           setSidebarView={setSidebarView}
           sidebarView={sidebarView}
@@ -3796,7 +3856,7 @@ function App() {
             modelLoadProgress={modelLoadProgress}
             onAbout={() => setAboutOpen(true)}
             onSelectMedia={openUnifiedPicker}
-            onLoadDemo={loadDemoPhotos}
+            onLoadDemo={loadDemoExperience}
             onLiveCamera={() => setDesktopLiveOpen(true)}
           />
         )}
@@ -4081,7 +4141,6 @@ function App() {
                     : undefined,
                 }
               : null}
-            localProcessingMs={localProcessingMs}
             videoProcessing={videoProcessing}
             videoProgress={videoProgress}
             previewRendering={previewRendering}
@@ -4148,6 +4207,16 @@ function App() {
             onRestoreVideoPreviewFaceZone={restoreVideoPreviewFaceZone}
             onSetVideoMaskDrawActive={setVideoMaskDrawActive}
             onProcessActiveVideo={() => { void processActiveVideo() }}
+            videoAnalysisControls={<VideoAnalysisPanel key={activePhotoId}
+              settings={videoAnalysisSettings} onSettings={setVideoAnalysisSettings}
+              result={activeVideoAnalysis} disabled={videoProcessing || isBusy}
+              onAdditionalPass={() => { void runAdditionalVideoPass() }}
+              onSeek={seekActiveVideo}
+              onDrawRange={(range) => {
+                seekActiveVideo((range.startSec + range.endSec) / 2)
+                setVideoMaskRangeSec(Math.max(0.2, range.endSec - range.startSec))
+                setVideoMaskDrawActive(true)
+              }} /> }
             onOpenCurrentVideoFrameAsSnapshot={() => { void openCurrentVideoFrameAsSnapshot() }}
             onToggleVideoPlayback={toggleVideoPlayback}
             onSeekActiveVideo={seekActiveVideo}
@@ -4235,6 +4304,7 @@ function App() {
       {!isMobile && desktopLiveOpen && (
         <div className="desktop-live-overlay">
           <MobileLiveMode
+            statusNotice={statusNotice}
             onOpenLibrary={() => { setDesktopLiveOpen(false); openUnifiedPicker() }}
             onOpenCapturedPhoto={(id) => {
               setDesktopLiveOpen(false)
@@ -4264,6 +4334,7 @@ function App() {
         />
       )}
     </div>
+    </Suspense>
     </MobileBindingsProvider>
   )
 }

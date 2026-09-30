@@ -6,6 +6,7 @@ import { glApplyNoiseRect } from './gl/noise-gl'
 import { glApplyPixelateRect, mapPixelateBlockSize, pixelateStrengthForBlockSize } from './gl/pixelate-gl'
 import { glApplyPixelShift } from './gl/pixel-shift-gl'
 import { glApplyThermalRect } from './gl/thermal-gl'
+import { pixelatePixels } from './pixelate-pixels'
 
 // Module-level fallback for the ASCII glyph pool. Render paths that build their
 // own EffectRenderOptions (live camera, video export, batch) read this when no
@@ -19,17 +20,10 @@ export const setAsciiColorDefault = (color: string) => { asciiColorDefault = col
 export const getAsciiColorDefault = (): string => asciiColorDefault
 
 export const EMOJI_POOL = [
-  // Cats
-  '🐱','🐈','🐈‍⬛','😺','😸','😹','😻','😼','😽','🙀','😿','😾',
-  // Animals
-  '🐶','🐕','🦊','🐻','🐼','🐨','🐯','🦁','🐮','🐷','🐸','🐵',
-  '🐔','🐧','🐦','🦆','🦅','🦉','🦇','🐺','🐗','🐴','🦄','🐝',
-  '🐛','🦋','🐌','🐞','🐙','🦑','🐠','🐟','🐡','🐬','🐳','🦈',
-  // Faces & characters
-  '🙂','😶','🤖','😎','🙈','🫥','👾','🥸','🤡','👽','💀','🎃',
-  '😈','🤠','🥷','🦸','🧛','🧟','🧞','🧑‍🚀',
-  // Objects
-  '🛰️','🎭','🎪','🔮','🪬','🗿','🎯','🧩',
+  // Filled, compact heads only: no outlined faces, bodies, hats or tapered heads.
+  '😺','😸','😻','😼','😽','😿','😾',
+  '🐻','🐼','🐨','🐷','🐸',
+  '🙂','😊','😶','😐','😑','😁','😄','😉','😎','🤖','🤡','🎃','😈',
 ]
 
 export const EFFECTS: EffectDefinition[] = [
@@ -37,12 +31,13 @@ export const EFFECTS: EffectDefinition[] = [
   { id: 'pixelate',  label: 'Pixelate',    description: 'Mosaic (low-res) effect',               icon: 'grid_on',         strengthLabel: 'Block size',        mobileStrengthLabel: 'BLOCK' },
   { id: 'zoom-blur', label: 'Zoom Blur',   description: 'Radial zoom blur — destroys face shape', icon: 'motion_blur',   strengthLabel: 'Distortion',        mobileStrengthLabel: 'DIST' },
   { id: 'blackout',  label: 'Blackout',    description: 'Solid black fill',                       icon: 'square',          strengthLabel: 'Edge softness',     mobileStrengthLabel: 'EDGE' },
-  { id: 'emoji',     label: 'Emoji',       description: 'Replace with random emoji',              icon: 'mood',            strengthLabel: 'Size',              mobileStrengthLabel: 'SIZE' },
+  { id: 'emoji',     label: 'Emoji',       description: 'Cover faces with compact emoji',        icon: 'mood',            strengthLabel: 'Emoji size',        mobileStrengthLabel: 'EMOJI' },
   { id: 'noise',     label: 'Noise',       description: 'Noise anonymization',                    icon: 'grain',           strengthLabel: 'Density',           mobileStrengthLabel: 'DENSITY' },
   { id: 'glitch',    label: 'Glitch',      description: 'RGB chroma-shift',                       icon: 'auto_fix_high',   strengthLabel: 'Shift amount',      mobileStrengthLabel: 'SHIFT' },
   { id: 'thermal',   label: 'Color Ball',  description: 'Abstract color blobs for face masking',   icon: 'bubble_chart',    strengthLabel: 'Color flow',        mobileStrengthLabel: 'COLOR' },
   { id: 'ascii',     label: 'ASCII',       description: 'ASCII-art character mosaic',             icon: 'data_array',      strengthLabel: 'Cell size',         mobileStrengthLabel: 'CELL' },
   { id: 'custom-image', label: 'Custom Image', description: 'Replace with uploaded image patches', icon: 'image',          strengthLabel: 'Opacity',           mobileStrengthLabel: 'OPACITY' },
+  { id: 'prism', label: 'Prism', description: 'Refract image fragments into scrambled triangular facets', icon: 'diamond', strengthLabel: 'Refraction', mobileStrengthLabel: 'REFRA' },
 ]
 
 export function getMobileStrengthLabel(effectId: AnonymizeEffectId): string {
@@ -57,6 +52,7 @@ export const getDefaultEffectStrength = (effectId: AnonymizeEffectId): number =>
   if (effectId === 'noise') return 0.88
   if (effectId === 'ascii') return 0.18
   if (effectId === 'custom-image') return 1
+  if (effectId === 'prism') return 0.4
   return 0.48
 }
 
@@ -120,6 +116,155 @@ const seededRandom = (seed: string | number | undefined) => {
 
 const effectSeed = (effect: AnonymizeEffectId, x: number, y: number, width: number, height: number, options?: EffectRenderOptions) =>
   options?.seed ?? `${effect}:${options?.zoneId ?? ''}:${options?.customImageAssetId ?? ''}:${Math.round(x)}:${Math.round(y)}:${Math.round(width)}:${Math.round(height)}`
+
+// Cache geometry only. Source pixels are refreshed on every call, including video.
+// Two reused canvases keep the working memory independent of the number of faces.
+interface PrismFacet {
+  points: number[][]
+  left: number
+  top: number
+  width: number
+  height: number
+  sampleX: number
+  sampleY: number
+  sampleSize: number
+  flipX: boolean
+  flipY: boolean
+}
+const PRISM_RASTER_SIZE = 64
+// 32 coordinate maps × 64² × 2 floats = 1 MiB; no source media in the cache.
+const prismMeshes = new Map<string, Float32Array>()
+const prismSource = document.createElement('canvas')
+const prismOutput = document.createElement('canvas')
+const prismMesh = (strength: number, seed: string | number, size: number) => {
+  const density = 7 - Math.round(strength * 4)
+  const key = `${size}:${density}:${hashSeed(seed) % 16}`
+  const cached = prismMeshes.get(key)
+  if (cached) { prismMeshes.delete(key); prismMeshes.set(key, cached); return cached }
+  const rng = seededRandom(`prism:${density}:${hashSeed(seed) % 16}`)
+  const points = Array.from({ length: density + 1 }, (_, y) => Array.from({ length: density + 1 }, (_, x) => [
+    x / density + (x > 0 && x < density ? (rng() - 0.5) * 0.65 / density : 0),
+    y / density + (y > 0 && y < density ? (rng() - 0.5) * 0.65 / density : 0),
+  ]))
+  const facets: PrismFacet[] = []
+  const triangle = (a: number[], b: number[], c: number[]) => {
+    const left = Math.min(a[0], b[0], c[0]), top = Math.min(a[1], b[1], c[1])
+    const sampleSize = 0.35 + rng() * 0.35
+    facets.push({ points: [a, b, c], left, top,
+      width: Math.max(a[0], b[0], c[0]) - left, height: Math.max(a[1], b[1], c[1]) - top,
+      sampleX: rng() * (1 - sampleSize), sampleY: rng() * (1 - sampleSize), sampleSize,
+      flipX: rng() > 0.5, flipY: rng() > 0.5 })
+  }
+  for (let y = 0; y < density; y++) for (let x = 0; x < density; x++) {
+    const a = points[y][x], b = points[y][x + 1], c = points[y + 1][x], d = points[y + 1][x + 1]
+    if (rng() > 0.5) { triangle(a, b, d); triangle(a, d, c) }
+    else { triangle(a, b, c); triangle(b, d, c) }
+  }
+  const map = new Float32Array(size * size * 2)
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+    const i = (y * size + x) * 2
+    map[i] = (x + 0.5) / size; map[i + 1] = (y + 0.5) / size
+  }
+  for (const f of facets) {
+    const [a, b, c] = f.points
+    const den = (b[1] - c[1]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[1] - c[1])
+    for (let y = Math.floor(f.top * size); y < Math.min(size, Math.ceil((f.top + f.height) * size)); y++) {
+      for (let x = Math.floor(f.left * size); x < Math.min(size, Math.ceil((f.left + f.width) * size)); x++) {
+        const px = (x + 0.5) / size, py = (y + 0.5) / size
+        const wa = ((b[1] - c[1]) * (px - c[0]) + (c[0] - b[0]) * (py - c[1])) / den
+        const wb = ((c[1] - a[1]) * (px - c[0]) + (a[0] - c[0]) * (py - c[1])) / den
+        if (wa < -1e-7 || wb < -1e-7 || wa + wb > 1 + 1e-7) continue
+        const u = (px - f.left) / f.width, v = (py - f.top) / f.height
+        const i = (y * size + x) * 2
+        map[i] = f.sampleX + (f.flipX ? 1 - u : u) * f.sampleSize
+        map[i + 1] = f.sampleY + (f.flipY ? 1 - v : v) * f.sampleSize
+      }
+    }
+  }
+  if (prismMeshes.size >= 32) prismMeshes.delete(prismMeshes.keys().next().value!)
+  prismMeshes.set(key, map)
+  return map
+}
+
+const applyPrismRect = (ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, strength: number, options?: EffectRenderOptions) => {
+  const rect = normalizeRect(x, y, width, height, ctx.canvas.width, ctx.canvas.height)
+  const s = clamp(Number.isFinite(strength) ? strength : 0.4, 0, 1)
+  // Coarse image sampling destroys fine detail before fragments are refracted.
+  // Stronger settings use larger facets and fewer source samples; never blend
+  // the unprocessed image back into the protected core.
+  const samples = 12 - Math.round(s * 8)
+  if (prismSource.width !== samples) prismSource.width = prismSource.height = samples
+  const sourceCtx = getContext2d(prismSource)
+  let source: ImageData
+  if (rect.width * rect.height <= 65_536) {
+    // Small face boxes: read only their patch, avoiding a whole-canvas snapshot
+    // for each drawImage from the same changing work canvas in a crowd.
+    const patch = ctx.getImageData(rect.x, rect.y, rect.width, rect.height)
+    source = sourceCtx.createImageData(samples, samples)
+    for (let sy = 0; sy < samples; sy++) for (let sx = 0; sx < samples; sx++) {
+      const x0 = Math.floor(sx * rect.width / samples), y0 = Math.floor(sy * rect.height / samples)
+      const x1 = Math.min(rect.width, Math.max(x0 + 1, Math.floor((sx + 1) * rect.width / samples)))
+      const y1 = Math.min(rect.height, Math.max(y0 + 1, Math.floor((sy + 1) * rect.height / samples)))
+      let red = 0, green = 0, blue = 0, count = 0
+      for (let py = y0; py < y1; py++) for (let px = x0; px < x1; px++) {
+        const i = (py * rect.width + px) * 4, alpha = patch.data[i + 3] / 255
+        red += patch.data[i] * alpha + 17 * (1 - alpha)
+        green += patch.data[i + 1] * alpha + 24 * (1 - alpha)
+        blue += patch.data[i + 2] * alpha + 23 * (1 - alpha)
+        count++
+      }
+      const i = (sy * samples + sx) * 4
+      source.data[i] = red / count; source.data[i + 1] = green / count
+      source.data[i + 2] = blue / count; source.data[i + 3] = 255
+    }
+    patch.data.fill(0)
+  } else {
+    // Large brush/zone: downsample directly into the tiny scratch buffer;
+    // never allocate a full-resolution copy of an arbitrarily large selection.
+    sourceCtx.fillStyle = '#111817'
+    sourceCtx.fillRect(0, 0, samples, samples)
+    sourceCtx.imageSmoothingEnabled = true
+    sourceCtx.imageSmoothingQuality = 'high'
+    sourceCtx.drawImage(ctx.canvas, rect.x, rect.y, rect.width, rect.height, 0, 0, samples, samples)
+    source = sourceCtx.getImageData(0, 0, samples, samples)
+  }
+
+  const longEdge = Math.max(rect.width, rect.height)
+  const size = longEdge <= 32 ? 16 : longEdge <= 96 ? 32 : PRISM_RASTER_SIZE
+  if (prismOutput.width !== size) prismOutput.width = prismOutput.height = size
+  const out = getContext2d(prismOutput)
+  const seed = options?.seed ?? options?.zoneId ?? 'prism'
+  const map = prismMesh(s, seed, size)
+  const raster = out.createImageData(size, size)
+  // Bilinear sampling of precomputed fragment coordinates avoids thousands of
+  // per-face Canvas clips/draws and never depends on the original pixel count.
+  for (let i = 0; i < size * size; i++) {
+    const sx = clamp(map[i * 2] * samples - 0.5, 0, samples - 1)
+    const sy = clamp(map[i * 2 + 1] * samples - 0.5, 0, samples - 1)
+    const x0 = Math.floor(sx), y0 = Math.floor(sy)
+    const x1 = Math.min(x0 + 1, samples - 1), y1 = Math.min(y0 + 1, samples - 1)
+    const fx = sx - x0, fy = sy - y0
+    const p00 = (y0 * samples + x0) * 4, p10 = (y0 * samples + x1) * 4
+    const p01 = (y1 * samples + x0) * 4, p11 = (y1 * samples + x1) * 4
+    for (let channel = 0; channel < 3; channel++) {
+      const top = source.data[p00 + channel] * (1 - fx) + source.data[p10 + channel] * fx
+      const bottom = source.data[p01 + channel] * (1 - fx) + source.data[p11 + channel] * fx
+      raster.data[i * 4 + channel] = top * (1 - fy) + bottom * fy
+    }
+    raster.data[i * 4 + 3] = 255
+  }
+  out.putImageData(raster, 0, 0)
+  ctx.save()
+  ctx.globalAlpha = 1
+  ctx.globalCompositeOperation = 'source-over'
+  ctx.imageSmoothingEnabled = true
+  ctx.drawImage(prismOutput, rect.x, rect.y, rect.width, rect.height)
+  ctx.restore()
+  // The tiny source raster and preview are scratch buffers, not a media cache.
+  sourceCtx.clearRect(0, 0, samples, samples)
+  out.clearRect(0, 0, size, size)
+  source.data.fill(0); raster.data.fill(0)
+}
 
 const featherCoreFor = (strength: number) => clamp(0.32 + strength * 0.54, 0.32, 0.9)
 
@@ -355,6 +500,18 @@ const applyPixelateRect = (
   )
 
   const blockSize = mapPixelateBlockSize(strength)
+  if (rw * rh <= 65536) {
+    // Upload/readback dominates a GPU shader for tiny face masks. Sample the
+    // exact same block centers directly, keeping the image and mask geometry.
+    const pixels = ctx.getImageData(rx, ry, rw, rh)
+    pixels.data.set(pixelatePixels(pixels.data, rw, rh, blockSize))
+    scratchB.width = rw; scratchB.height = rh
+    getContext2d(scratchB).putImageData(pixels, 0, 0)
+    // drawImage respects circular clipping, alpha and compositing; putImageData
+    // directly onto the destination would silently ignore those masks.
+    ctx.drawImage(scratchB, rx, ry)
+    return
+  }
   scratchB.width = rw
   scratchB.height = rh
   const sctx = getContext2d(scratchB)
@@ -662,6 +819,18 @@ const applyZoneGlitchRect = (
   ctx.putImageData(shifted, rx, ry)
 }
 
+/** Center the visible glyph rather than the font's baseline box. No backing. */
+const drawCenteredEmoji = (ctx: CanvasRenderingContext2D, emoji: string, cx: number, cy: number, diameter: number, strength: number) => {
+  const s = Number.isFinite(strength) ? clamp(strength, 0, 1) : 0.5
+  ctx.font = `${Math.max(16, Math.round(diameter * (0.9 + s * 0.45)))}px system-ui, sans-serif`
+  ctx.fillStyle = '#fff'
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'alphabetic'
+  const m = ctx.measureText(emoji)
+  ctx.fillText(emoji, cx + (m.actualBoundingBoxLeft - m.actualBoundingBoxRight) / 2,
+    cy + (m.actualBoundingBoxAscent - m.actualBoundingBoxDescent) / 2)
+}
+
 const drawEmojiBlock = (
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -680,17 +849,11 @@ const drawEmojiBlock = (
     ctx.canvas.height,
   )
 
-  // Strength scales the emoji: low ≈ 55% of face box, high ≈ 145% (overflows for coverage).
-  const s = Number.isFinite(strength) ? clamp(strength, 0.05, 1) : 0.5
-  const size = Math.round(Math.max(rw, rh) * (0.55 + s * 0.9))
-  const cx = rx + rw / 2
-  const cy = ry + rh / 2
-
   ctx.save()
-  ctx.font = `${size}px system-ui, sans-serif`
-  ctx.textBaseline = 'middle'
-  ctx.textAlign = 'center'
-  ctx.fillText(emoji, cx, cy)
+  ctx.globalAlpha = 1
+  ctx.globalCompositeOperation = 'source-over'
+  ctx.beginPath(); ctx.rect(rx, ry, rw, rh); ctx.clip()
+  drawCenteredEmoji(ctx, emoji, rx + rw / 2, ry + rh / 2, Math.max(rw, rh), strength)
   ctx.restore()
 }
 
@@ -1116,6 +1279,9 @@ export const applyEffectRect = (
     case 'custom-image':
       applyCustomImageRect(ctx, x, y, width, height, strength, options)
       return
+    case 'prism':
+      applyPrismRect(ctx, x, y, width, height, strength, options)
+      return
     default:
       return
   }
@@ -1186,11 +1352,7 @@ export const applyEffectBrush = (
     bdCtx.arc(lcx, lcy, r, 0, Math.PI * 2)
     bdCtx.fill()
   } else if (effect === 'emoji') {
-    const size = Math.max(16, r * (0.85 + strength * 0.95))
-    bdCtx.font = `${Math.round(size)}px system-ui, sans-serif`
-    bdCtx.textAlign = 'center'
-    bdCtx.textBaseline = 'middle'
-    bdCtx.fillText(emoji, lcx, lcy)
+    drawCenteredEmoji(bdCtx, emoji, lcx, lcy, r * 2, strength)
   } else if (effect === 'custom-image') {
     const image = resolveCustomImage(options)
     if (image) {
@@ -1205,7 +1367,7 @@ export const applyEffectBrush = (
   }
 
   // ── 3. Feathered circle mask on brushDst (destination-in) ─────
-  const innerR = r * (effect === 'blackout' || effect === 'ascii' || effect === 'custom-image' ? featherCoreFor(strength) : FEATHER_CORE)
+  const innerR = effect === 'prism' || effect === 'emoji' ? Math.max(0, r - 0.5) : r * (effect === 'blackout' || effect === 'ascii' || effect === 'custom-image' ? featherCoreFor(strength) : FEATHER_CORE)
   const grad = bdCtx.createRadialGradient(lcx, lcy, innerR, lcx, lcy, r)
   grad.addColorStop(0, 'rgba(0,0,0,1)')
   grad.addColorStop(1, 'rgba(0,0,0,0)')
@@ -1344,10 +1506,7 @@ export const previewEffectBrush = (
   if (effect === 'blackout') {
     tCtx.fillStyle = '#000'; tCtx.beginPath(); tCtx.arc(lcx, lcy, r, 0, Math.PI * 2); tCtx.fill()
   } else if (effect === 'emoji') {
-    const size = Math.max(16, r * (0.85 + strength * 0.95))
-    tCtx.font = `${Math.round(size)}px system-ui, sans-serif`
-    tCtx.textAlign = 'center'; tCtx.textBaseline = 'middle'
-    tCtx.fillText(emoji, lcx, lcy)
+    drawCenteredEmoji(tCtx, emoji, lcx, lcy, r * 2, strength)
   } else if (effect === 'custom-image') {
     const image = resolveCustomImage(options)
     if (image) {
@@ -1361,7 +1520,7 @@ export const previewEffectBrush = (
   }
 
   // Feather mask
-  const innerR = r * (effect === 'blackout' || effect === 'ascii' || effect === 'custom-image' ? featherCoreFor(strength) : FEATHER_CORE)
+  const innerR = effect === 'prism' || effect === 'emoji' ? Math.max(0, r - 0.5) : r * (effect === 'blackout' || effect === 'ascii' || effect === 'custom-image' ? featherCoreFor(strength) : FEATHER_CORE)
   const grad = tCtx.createRadialGradient(lcx, lcy, innerR, lcx, lcy, r)
   grad.addColorStop(0, 'rgba(0,0,0,1)'); grad.addColorStop(1, 'rgba(0,0,0,0)')
   tCtx.globalCompositeOperation = 'destination-in'

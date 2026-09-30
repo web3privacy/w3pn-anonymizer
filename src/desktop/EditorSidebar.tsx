@@ -1,3 +1,5 @@
+import { MediaPlaceholder } from '../components/MediaPlaceholder'
+import { SelectionMark } from '../components/SelectionMark'
 import type { Dispatch, SetStateAction } from 'react'
 import { Icon } from '../components/Icon'
 import { isBatchProcessablePhoto } from '../lib/batch-normalize'
@@ -153,7 +155,7 @@ export function EditorSidebar(props: EditorSidebarProps) {
         <span className="sidebar-head-label">
           {batchPanelOpen
             ? `${selectedProcessableCount}/${processablePhotos.length} photos`
-            : `${photos.length} photo${photos.length === 1 ? '' : 's'}`}
+            : `${visiblePhotos.length} ${visiblePhotos.some((photo) => photo.isVideo || photo.isAudio || photo.isDocument) ? 'files' : `photo${visiblePhotos.length === 1 ? '' : 's'}`}`}
         </span>
         <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
           {batchPanelOpen && photos.length > 0 && (
@@ -198,13 +200,18 @@ export function EditorSidebar(props: EditorSidebarProps) {
               onKeyDown={(e) => e.key === 'Enter' && selectPhoto(photo.id)}
             >
               {batchPanelOpen && (
-                <div
+                <button
+                  type="button"
                   className={`batch-checkbox${canBatchProcess ? '' : ' disabled'}`}
                   onClick={(e) => { e.stopPropagation(); if (canBatchProcess) toggleBatchSelect(photo.id) }}
+                  onKeyDown={(e) => e.stopPropagation()}
+                  disabled={!canBatchProcess}
+                  aria-pressed={canBatchProcess && selectedForBatch.has(photo.id)}
+                  aria-label={`${selectedForBatch.has(photo.id) ? 'Remove from batch' : 'Add to batch'}: ${photo.name}`}
                   title={canBatchProcess ? (selectedForBatch.has(photo.id) ? 'Remove from batch' : 'Add to batch') : 'Batch supports photos only'}
                 >
-                  {canBatchProcess ? (selectedForBatch.has(photo.id) ? '☑' : '☐') : '-'}
-                </div>
+                  <SelectionMark checked={canBatchProcess && selectedForBatch.has(photo.id)} />
+                </button>
               )}
               {isEdited && (
                 <div className="photo-edited-badge" title="Edited">✓</div>
@@ -214,9 +221,10 @@ export function EditorSidebar(props: EditorSidebarProps) {
                   <div className="photo-video-badge" title={photo.isVideo ? 'Video' : photo.isAudio ? 'Audio' : 'Document'}>{mediaBadge}</div>
                 )}
                 {photo.isDocument || photo.isAudio ? (
-                  <div className={`photo-item-media-placeholder${sidebarView === 'grid' ? '' : ' photo-item-thumb'}`}>
-                    <Icon name={photo.isDocument ? 'description' : 'graphic_eq'} size={sidebarView === 'grid' ? 30 : 20} />
-                  </div>
+                  <MediaPlaceholder
+                    kind={photo.isAudio ? 'audio' : photo.documentKind === 'pdf' ? 'pdf' : 'txt'}
+                    className={`photo-item-media-placeholder${sidebarView === 'grid' ? '' : ' photo-item-thumb'}`}
+                  />
                 ) : sidebarView === 'grid' ? (
                   <div className="photo-item-grid-thumb">
                     <img src={photo.previewUrl} alt={photo.name} loading="lazy" />

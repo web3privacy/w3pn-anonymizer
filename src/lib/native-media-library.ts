@@ -1,14 +1,13 @@
 import { Capacitor, registerPlugin } from '@capacitor/core'
+import { retainVideoFile } from './video-storage'
 
 export type NativeMediaType = 'photo' | 'video'
 
 interface NativeMediaLibraryPlugin {
-  saveMedia(options: {
-    data: string
-    fileName: string
-    mimeType: string
-    mediaType: NativeMediaType
-  }): Promise<{ uri?: string }>
+  beginExport(options: { fileName: string; mimeType: string; mediaType: string }): Promise<{ id: string }>
+  appendExport(options: { id: string; data: string }): Promise<void>
+  finishExport(options: { id: string }): Promise<{ uri?: string }>
+  cancelExport(options: { id: string }): Promise<void>
 }
 
 const NativeMediaLibrary = registerPlugin<NativeMediaLibraryPlugin>('NativeMediaLibrary')
@@ -51,8 +50,7 @@ export async function saveBlobToNativeMediaLibrary(
   if (!isNativePlatform()) return false
   const mimeType = blob.type || FALLBACK_MIME[mediaType]
   const safeName = sanitizeFileName(fileName, extensionForMime(mimeType, mediaType))
-  const data = await blobToBase64(blob)
-  await NativeMediaLibrary.saveMedia({ data, fileName: safeName, mimeType, mediaType })
+  await writeNativeExport(blob, safeName, mimeType, mediaType)
   return true
 }
 
@@ -72,8 +70,40 @@ function sanitizeFileName(fileName: string, fallbackExt: string): string {
   const base = fileName
     .split('/')
     .pop()
-    ?.replace(/[^\w.\-]+/g, '-')
+    ?.replace(/[^\w.-]+/g, '-')
     .replace(/^-+|-+$/g, '')
     || `w3pn-capture.${fallbackExt}`
   return /\.[a-z0-9]{2,5}$/i.test(base) ? base : `${base}.${fallbackExt}`
+}
+
+/** One bounded bridge message at a time; the native side owns a temporary file. */
+async function writeNativeExport(blob: Blob, fileName: string, mimeType: string, mediaType: string): Promise<void> {
+  const release = retainVideoFile(blob)
+  try {
+    const { id } = await NativeMediaLibrary.beginExport({ fileName, mimeType, mediaType })
+    try {
+      for (let offset = 0; offset < blob.size; offset += 256 * 1024) {
+        const data = await blobToBase64(blob.slice(offset, offset + 256 * 1024))
+        await NativeMediaLibrary.appendExport({ id, data })
+      }
+      await NativeMediaLibrary.finishExport({ id })
+    } finally {
+      await NativeMediaLibrary.cancelExport({ id }).catch(() => undefined)
+    }
+  } finally { await release?.() }
+}
+
+/** Export all media kinds through the OS share/save sheet on native platforms. */
+export async function exportBlob(blob: Blob, fileName: string): Promise<void> {
+  if (isNativePlatform()) {
+    await writeNativeExport(blob, sanitizeFileName(fileName, 'bin'), blob.type || 'application/octet-stream', 'file')
+  } else {
+    const release = retainVideoFile(blob)
+    try {
+      const { saveAs } = await import('file-saver')
+      saveAs(blob, fileName)
+      // Match FileSaver's object URL lifetime while the browser accepts the download.
+      if (release) setTimeout(() => { void release().catch((error) => console.warn('Temporary video cleanup failed:', error)) }, 40_000)
+    } catch (error) { await release?.(); throw error }
+  }
 }

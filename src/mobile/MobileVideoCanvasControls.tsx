@@ -28,7 +28,7 @@ export const MobileVideoCanvasControls = memo(function MobileVideoCanvasControls
   const drawActive = b.videoMaskDrawActive
   const busy = b.isBusy || b.videoProcessing
   const processLabel = b.autoDetect ? 'ANONYMIZE' : 'PROCESS'
-  const showFaceTools = !b.activePhoto.edited
+  const showFaceTools = true
   const zoomStep = (dir: 1 | -1) => b.stepMobileViewZoom(dir)
 
   const toggleDrawMask = () => b.setVideoMaskDrawActive(!b.videoMaskDrawActive)

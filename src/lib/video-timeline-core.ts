@@ -10,8 +10,24 @@ function clamp(v: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, v))
 }
 
+function coverBothZones(a: Zone, b: Zone): Zone {
+  const x = Math.min(a.x, b.x)
+  const y = Math.min(a.y, b.y)
+  return { ...a, x, y, width: Math.max(a.x + a.width, b.x + b.width) - x,
+    height: Math.max(a.y + a.height, b.y + b.height) - y }
+}
+
 function cloneZone(zone: Zone): Zone {
   return { ...zone }
+}
+
+function coverTrackedMovement(zone: Zone, nextZones: Zone[]): Zone {
+  const sameTrack = nextZones.find((next) => next.id === zone.id)
+  if (sameTrack) return coverBothZones(zone, sameTrack)
+  // A fast target can lose its track ID at sparse sampling rates. Cover possible
+  // movement of the same category rather than leaving only disconnected end boxes.
+  const candidates = nextZones.filter((next) => next.detectionType === zone.detectionType && next.objectClass === zone.objectClass)
+  return candidates.reduce(coverBothZones, cloneZone(zone))
 }
 
 function interpolateZone(a: Zone, b: Zone, t: number): Zone {
@@ -64,17 +80,10 @@ export function zonesAtTime(timeline: VideoTrackKeyframe[], mediaTime: number): 
   }
   if (!next) return prev.zones.map(cloneZone)
 
-  const span = Math.max(0.001, next.timeSec - prev.timeSec)
-  const t = clamp((mediaTime - prev.timeSec) / span, 0, 1)
-  const nextById = new Map(next.zones.map((zone) => [zone.id, zone]))
-
-  const zones = prev.zones.map((zone) => {
-    const matchingNext = nextById.get(zone.id)
-    return matchingNext ? interpolateZone(zone, matchingNext, t) : cloneZone(zone)
-  })
+  const zones = prev.zones.map((zone) => coverTrackedMovement(zone, next.zones))
 
   next.zones.forEach((zone) => {
-    if (!prev.zones.some((prevZone) => prevZone.id === zone.id) && t > 0.66) zones.push(cloneZone(zone))
+    if (!prev.zones.some((prevZone) => prevZone.id === zone.id)) zones.push(cloneZone(zone))
   })
   return zones
 }
@@ -87,17 +96,10 @@ export function zonesBetweenKeyframes(
   if (mediaTime <= prev.timeSec) return prev.zones.map(cloneZone)
   if (mediaTime >= next.timeSec) return next.zones.map(cloneZone)
 
-  const span = Math.max(0.001, next.timeSec - prev.timeSec)
-  const t = clamp((mediaTime - prev.timeSec) / span, 0, 1)
-  const nextById = new Map(next.zones.map((zone) => [zone.id, zone]))
-
-  const zones = prev.zones.map((zone) => {
-    const matchingNext = nextById.get(zone.id)
-    return matchingNext ? interpolateZone(zone, matchingNext, t) : cloneZone(zone)
-  })
+  const zones = prev.zones.map((zone) => coverTrackedMovement(zone, next.zones))
 
   next.zones.forEach((zone) => {
-    if (!prev.zones.some((prevZone) => prevZone.id === zone.id) && t > 0.66) zones.push(cloneZone(zone))
+    if (!prev.zones.some((prevZone) => prevZone.id === zone.id)) zones.push(cloneZone(zone))
   })
   return zones
 }
@@ -112,10 +114,14 @@ export function getFrameZonesAtTime(
     if (timeline.length <= 1 || mediaTime <= timeline[0].timeSec || mediaTime >= timeline[timeline.length - 1].timeSec) {
       zones = zonesAtTime(timeline, mediaTime)
     } else {
-      let keyframeIndex = 0
-      while (keyframeIndex < timeline.length - 2 && timeline[keyframeIndex + 1].timeSec < mediaTime) {
-        keyframeIndex += 1
+      let lo = 0
+      let hi = timeline.length - 1
+      while (lo + 1 < hi) {
+        const mid = (lo + hi) >>> 1
+        if (timeline[mid].timeSec < mediaTime) lo = mid
+        else hi = mid
       }
+      const keyframeIndex = lo
       zones = zonesBetweenKeyframes(timeline[keyframeIndex], timeline[keyframeIndex + 1], mediaTime)
     }
   }

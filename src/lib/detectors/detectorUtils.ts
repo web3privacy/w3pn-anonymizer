@@ -1,5 +1,11 @@
 import type { BoundingBox, FaceBox, PrivacyDetection } from '../../types'
 
+function unionBox(a: BoundingBox, b: BoundingBox): BoundingBox {
+  const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y)
+  return { x, y, width: Math.max(a.x + a.width, b.x + b.width) - x,
+    height: Math.max(a.y + a.height, b.y + b.height) - y }
+}
+
 export function iouBox(a: BoundingBox, b: BoundingBox): number {
   const x1 = Math.max(a.x, b.x)
   const y1 = Math.max(a.y, b.y)
@@ -42,7 +48,7 @@ export function nmsPixelBoxes(boxes: FaceBox[], iouThreshold = 0.35): FaceBox[] 
 
 export function nmsPrivacyDetections(detections: PrivacyDetection[], iouThreshold = 0.4): PrivacyDetection[] {
   if (detections.length <= 1) return detections
-  const sorted = [...detections].sort((a, b) => b.confidence - a.confidence)
+  const sorted = detections.map((d) => ({ ...d, bbox: { ...d.bbox } })).sort((a, b) => b.confidence - a.confidence)
   const kept: PrivacyDetection[] = []
   const suppressed = new Set<number>()
   for (let i = 0; i < sorted.length; i++) {
@@ -51,6 +57,7 @@ export function nmsPrivacyDetections(detections: PrivacyDetection[], iouThreshol
     for (let j = i + 1; j < sorted.length; j++) {
       if (suppressed.has(j)) continue
       if (sorted[i].type === sorted[j].type && iouBox(sorted[i].bbox, sorted[j].bbox) > iouThreshold) {
+        sorted[i].bbox = unionBox(sorted[i].bbox, sorted[j].bbox)
         suppressed.add(j)
       }
     }
@@ -113,7 +120,7 @@ export function dedupeOverlappingDetections(
   if (detections.length <= 1) return detections
   const rank = (d: PrivacyDetection) =>
     (DETECTION_TYPE_PRIORITY[d.type] ?? 0) * 1000 + d.confidence
-  const sorted = [...detections].sort((a, b) => rank(b) - rank(a))
+  const sorted = detections.map((d) => ({ ...d, bbox: { ...d.bbox } })).sort((a, b) => rank(b) - rank(a))
   const kept: PrivacyDetection[] = []
   const suppressed = new Set<number>()
   for (let i = 0; i < sorted.length; i++) {
@@ -123,7 +130,7 @@ export function dedupeOverlappingDetections(
       if (suppressed.has(j)) continue
       const a = sorted[i]
       const b = sorted[j]
-      if (iouBox(a.bbox, b.bbox) > iouThreshold) { suppressed.add(j); continue }
+      if (iouBox(a.bbox, b.bbox) > iouThreshold) { a.bbox = unionBox(a.bbox, b.bbox); suppressed.add(j); continue }
       // Drop a redundant generic object box that is mostly covered by the
       // higher-priority featured detection (keeps a single effect over it).
       if (
@@ -131,6 +138,7 @@ export function dedupeOverlappingDetections(
         a.type !== 'object' &&
         containmentRatio(b.bbox, a.bbox) > containmentThreshold
       ) {
+        sorted[i].bbox = unionBox(sorted[i].bbox, sorted[j].bbox)
         suppressed.add(j)
       }
     }
